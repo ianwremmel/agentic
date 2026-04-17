@@ -1,32 +1,27 @@
 # pull-requests
 
-Claude Code plugin for creating and monitoring pull requests.
+> Claude Code plugin for creating and monitoring pull requests end-to-end.
 
-## Scope
+Covers drafting PRs from a working branch, pushing and publishing, CI triage, responding to review comments, and merging. Skills, agents, and hooks are being migrated from a prior repo — this directory is scaffolding for now.
 
-- Drafting PRs from a working branch
-- Pushing, publishing, and updating PR metadata (title, body, labels, reviewers)
-- Monitoring CI status and surfacing actionable failures
-- Responding to review comments and iterating
-- Merging, rebasing, and cleaning up branches
+## Install
 
-## Layout
+From inside Claude Code, after adding the `agentic` marketplace:
 
-```
-pull-requests/
-├── .claude-plugin/
-│   └── plugin.json      # Plugin manifest
-├── skills/              # Model-invoked skills (e.g. skills/open-pr/SKILL.md)
-├── agents/              # Custom subagent definitions
-├── commands/            # Optional flat-file slash commands
-└── hooks/               # Event hooks (hooks.json)
+```shell
+/plugin install pull-requests@agentic
 ```
 
-Skills, agents, and hooks will be migrated in from elsewhere — this directory
-currently contains only the scaffolding.
+See the [root README](../../README.md#install) for marketplace setup.
 
-## Local development
+## Usage
 
-```bash
-claude --plugin-dir ./plugins/pull-requests
-```
+Once installed, the plugin's skills appear under the `pull-requests:` namespace. Run `/help` from inside Claude Code to list them.
+
+## Contributing
+
+See the [root README](../../README.md#contributing) for branch and commit conventions.
+
+## License
+
+[MIT](../../LICENSE) © Ian Remmel

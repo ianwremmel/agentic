@@ -5,57 +5,15 @@ on:
   pull_request:
 
 jobs:
-  json-syntax:
-    name: JSON syntax
+  validate:
+    name: claude plugin validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate JSON files
-        run: |
-          set -e
-          failed=0
-          while IFS= read -r -d '' file; do
-            echo "Checking $file"
-            if ! python3 -m json.tool "$file" >/dev/null; then
-              echo "::error file=$file::Invalid JSON"
-              failed=1
-            fi
-          done < <(find .claude-plugin plugins -type f -name '*.json' -print0)
-          exit $failed
-
-  marketplace-shape:
-    name: Marketplace manifest shape
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Assert marketplace.json exposes expected plugins
-        run: |
-          python3 - <<'PY'
-          import json, sys
-          with open('.claude-plugin/marketplace.json') as f:
-              mp = json.load(f)
-          names = {p['name'] for p in mp.get('plugins', [])}
-          expected = {'pull-requests', 'linear'}
-          missing = expected - names
-          if missing:
-              print(f"::error::marketplace.json missing plugins: {sorted(missing)}")
-              sys.exit(1)
-          PY
-
-  plugin-manifests:
-    name: Plugin manifests present
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check each plugin has a manifest
-        run: |
-          set -e
-          failed=0
-          for plugin_dir in plugins/*/; do
-            manifest="${plugin_dir}.claude-plugin/plugin.json"
-            if [ ! -f "$manifest" ]; then
-              echo "::error::Missing $manifest"
-              failed=1
-            fi
-          done
-          exit $failed
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Validate marketplace and plugins
+        run: claude plugin validate .

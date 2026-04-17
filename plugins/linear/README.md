@@ -1,31 +1,27 @@
 # linear
 
-Claude Code plugin for orchestrating projects via [Linear.app](https://linear.app).
+> Claude Code plugin for orchestrating projects via [Linear.app](https://linear.app).
 
-## Scope
+Covers issue triage, project planning and breakdown, status updates, standups, and keeping Linear issues in sync with GitHub PRs. Skills, agents, and hooks are being migrated from a prior repo — this directory is scaffolding for now.
 
-- Triaging incoming issues
-- Planning and breaking down projects into actionable Linear issues
-- Status updates, standups, and cross-team sync
-- Keeping Linear issues and GitHub PRs in sync
+## Install
 
-## Layout
+From inside Claude Code, after adding the `agentic` marketplace:
 
-```
-linear/
-├── .claude-plugin/
-│   └── plugin.json      # Plugin manifest
-├── skills/              # Model-invoked skills (e.g. skills/triage/SKILL.md)
-├── agents/              # Custom subagent definitions
-├── commands/            # Optional flat-file slash commands
-└── hooks/               # Event hooks (hooks.json)
+```shell
+/plugin install linear@agentic
 ```
 
-Skills, agents, and hooks will be migrated in from elsewhere — this directory
-currently contains only the scaffolding.
+See the [root README](../../README.md#install) for marketplace setup.
 
-## Local development
+## Usage
 
-```bash
-claude --plugin-dir ./plugins/linear
-```
+Once installed, the plugin's skills appear under the `linear:` namespace. Run `/help` from inside Claude Code to list them.
+
+## Contributing
+
+See the [root README](../../README.md#contributing) for branch and commit conventions.
+
+## License
+
+[MIT](../../LICENSE) © Ian Remmel

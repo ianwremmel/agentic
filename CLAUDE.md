@@ -31,16 +31,6 @@ subdirectories exist as scaffolding only.
 - **Versioning.** Bump `version` in the individual plugin's `plugin.json`
   whenever its behavior changes. Semantic versioning.
 
-## Commit hygiene (enforced by CI)
-
-- No `fixup!` commits on pushed branches — squash them first. Enforced by
-  [`ianwremmel/prevent-fixup-commits`](https://github.com/ianwremmel/prevent-fixup-commits).
-- No commits whose message starts with `#no-push` or `#nopush`. Enforced by
-  [`ianwremmel/prevent-nopush-commits`](https://github.com/ianwremmel/prevent-nopush-commits).
-
-If you find one of these in a branch, rebase it out before pushing rather
-than bypassing the hook.
-
 ## Adding a new plugin
 
 1. `mkdir -p plugins/<name>/.claude-plugin`
@@ -60,7 +50,6 @@ than bypassing the hook.
 
 ## Do not
 
-- Do not push directly to `main`. Use a feature branch and open a PR.
 - Do not add secrets, tokens, or `.env` files to the repo.
 - Do not reference files outside a plugin's directory via `../` — plugins are
   copied into a cache on install and relative paths outside the plugin root

@@ -1,0 +1,24 @@
+name: Validate Commits
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  prevent-fixup-commits:
+    name: prevent-fixup-commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ianwremmel/prevent-fixup-commits@master
+
+  prevent-nopush-commits:
+    name: prevent-nopush-commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ianwremmel/prevent-nopush-commits@v1.0.1

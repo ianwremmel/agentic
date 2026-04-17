@@ -1,0 +1,12 @@
+{
+  "name": "pull-requests",
+  "description": "Create and monitor pull requests end-to-end: drafting, review, CI triage, and merge.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ian Remmel"
+  },
+  "homepage": "https://github.com/ianwremmel/agentic",
+  "repository": "https://github.com/ianwremmel/agentic",
+  "license": "MIT",
+  "keywords": ["github", "pull-requests", "ci", "code-review"]
+}

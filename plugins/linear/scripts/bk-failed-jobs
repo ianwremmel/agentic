@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Lists failed and broken jobs from a Buildkite build.
+# Replaces mcp__claude_ai_Buildkite_MCP_Remote__get_build with job_state filter.
+# Usage: scripts/bk-failed-jobs <build_number>
+
+source "$(dirname "${BASH_SOURCE[0]}")/_retry"
+
+# Fetches failed and broken jobs from a Buildkite build
+# Arguments:
+#   $1 - build_number: The Buildkite build number
+# Returns:
+#   Outputs compact JSON array of failed/broken jobs to stdout
+#   Each job has: name, state, id, retried fields
+get_failed_jobs() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: get_failed_jobs requires exactly 1 argument" >&2
+    echo "Usage: get_failed_jobs <build_number>" >&2
+    return 2
+  fi
+
+  local build_number="$1"
+
+  retry 3 5 bk build view "$build_number" \
+    -p ianremmelllc/apps \
+    --json \
+    | jq '[.jobs[] | select(.state == "failed" or .state == "broken") | {name: .name, state: .state, id: .id, retried: .retried}]'
+}
+
+main() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/bk-failed-jobs <build_number>" >&2
+    return 1
+  fi
+
+  local build_number="$1"
+  local result
+
+  result=$(get_failed_jobs "$build_number")
+  echo "$result"
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

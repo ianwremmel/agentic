@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
-  source "./scripts/bk-failed-jobs"
+  source "./scripts/buildkite/bk-failed-jobs"
 
   # Mock retry after sourcing so it overrides the real _retry implementation
   retry() {
@@ -14,11 +14,11 @@ setup() {
 # --- Script structure tests ---
 
 @test "bk-failed-jobs script exists and is executable" {
-  [[ -x "./scripts/bk-failed-jobs" ]]
+  [[ -x "./scripts/buildkite/bk-failed-jobs" ]]
 }
 
 @test "bk-failed-jobs uses set -euo pipefail" {
-  run grep -q 'set -euo pipefail' ./scripts/bk-failed-jobs
+  run grep -q 'set -euo pipefail' ./scripts/buildkite/bk-failed-jobs
 
   [[ $status -eq 0 ]]
 }

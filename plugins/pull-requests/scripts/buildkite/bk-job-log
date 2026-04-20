@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Fetches the last N lines of a Buildkite job log.
 # Replaces mcp__claude_ai_Buildkite_MCP_Remote__read_logs.
-# Usage: scripts/bk-job-log <build_number> <job_id> [--tail N]
+# Usage: scripts/buildkite/bk-job-log <build_number> <job_id> [--tail N]
 
-source "$(dirname "${BASH_SOURCE[0]}")/_retry"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry"
 
 # Fetches log output for a specific Buildkite job
 # Arguments:

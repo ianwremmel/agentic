@@ -1,0 +1,33 @@
+# subcommands/ready - Mark a draft PR as ready for review.
+# Sourced by ../orchestrate; defines functions for the `ready` subcommand.
+
+SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+source "$SCRIPTS_DIR/lib/_retry"
+
+# Marks a PR as ready for review
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   0 on success
+mark_ready() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: mark_ready requires exactly 1 argument" >&2
+    echo "Usage: mark_ready <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  retry 3 5 gh pr ready "$pr_number"
+}
+
+# ready subcommand main
+cmd_ready() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate ready <pr_number>" >&2
+    return 1
+  fi
+
+  mark_ready "$1"
+  echo "PR #${1} marked as ready for review"
+}

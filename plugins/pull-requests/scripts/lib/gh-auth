@@ -1,0 +1,69 @@
+# lib/gh-auth - GitHub auth introspection: who is the agent acting as, and how should we mark its writes?
+# Sourced; no shebang, no `set -euo pipefail` (the caller provides those).
+
+[[ -n "${__LIB_GH_AUTH_LOADED:-}" ]] && return 0
+__LIB_GH_AUTH_LOADED=1
+
+SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+source "$SCRIPTS_DIR/lib/_retry"
+
+# Returns the login of the currently authenticated gh user
+# Arguments: none
+# Returns:
+#   Outputs the login to stdout
+#   Exit code 0 on success, non-zero if not authenticated
+get_gh_user() {
+  if [[ $# -ne 0 ]]; then
+    echo "Error: get_gh_user takes no arguments" >&2
+    return 2
+  fi
+
+  gh api user --jq '.login'
+}
+
+# Fetches the login of the currently authenticated GitHub user
+# Returns:
+#   The login string to stdout
+get_authenticated_user() {
+  if [[ $# -ne 0 ]]; then
+    echo "Usage: get_authenticated_user" >&2
+    return 1
+  fi
+  retry 3 5 gh api user --jq '.login'
+}
+
+# Returns 0 if the current gh auth is a human user account, 1 otherwise.
+# Humans are: GitHub user type == "User" AND login does not match a known
+# agent-name pattern (copilot, codex, claude, ai-agent — case-insensitive).
+# When unauthenticated or detection fails, returns 1 (assume not human).
+is_human_auth() {
+  local result type login
+  result=$(gh api user --jq '"\(.type)|\(.login | ascii_downcase)"' 2>/dev/null) || return 1
+  [[ -n $result && $result == *"|"* ]] || return 1
+  type="${result%%|*}"
+  login="${result#*|}"
+  [[ $type == "User" ]] || return 1
+  case "$login" in
+    *copilot*|*codex*|*claude*|*ai-agent*) return 1 ;;
+  esac
+  return 0
+}
+
+# Wraps an agent-authored comment body for posting.
+# Always prefixes with the <!-- agent-reply --> HTML marker so the
+# poll loop can skip the agent's own posts. When the current gh auth
+# belongs to a human user, also wraps the body in a visible sparkle
+# block so readers can tell the agent spoke through the human's
+# account.
+# Arguments:
+#   $1 - body: The raw comment body to wrap
+# Returns:
+#   Outputs the wrapped body to stdout
+wrap_agent_body() {
+  local body="$1"
+  if is_human_auth; then
+    printf '<!-- agent-reply -->\n\xe2\x9c\xa8\n\n%s\n\n\xe2\x9c\xa8\n' "$body"
+  else
+    printf '<!-- agent-reply -->\n%s\n' "$body"
+  fi
+}

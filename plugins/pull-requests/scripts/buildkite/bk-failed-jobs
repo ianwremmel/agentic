@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Lists failed and broken jobs from a Buildkite build.
 # Replaces mcp__claude_ai_Buildkite_MCP_Remote__get_build with job_state filter.
-# Usage: scripts/bk-failed-jobs <build_number>
+# Usage: scripts/buildkite/bk-failed-jobs <build_number>
 
-source "$(dirname "${BASH_SOURCE[0]}")/_retry"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry"
 
 # Fetches failed and broken jobs from a Buildkite build
 # Arguments:

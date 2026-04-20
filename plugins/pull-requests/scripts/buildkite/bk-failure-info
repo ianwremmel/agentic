@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Fetches build annotations and JUnit artifact paths for failure analysis.
 # Combines annotation and artifact listing in a single script call.
-# Usage: scripts/bk-failure-info <build_number>
+# Usage: scripts/buildkite/bk-failure-info <build_number>
 
-source "$(dirname "${BASH_SOURCE[0]}")/_retry"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry"
 
 # Fetches build annotations from Buildkite
 # Arguments:

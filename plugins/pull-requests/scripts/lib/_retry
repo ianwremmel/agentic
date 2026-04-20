@@ -1,5 +1,8 @@
-# _retry - Shared retry library for sourcing
-# No shebang or set -euo pipefail - the calling script provides those
+# lib/_retry - Retry-with-exponential-backoff helper.
+# Sourced; no shebang, no `set -euo pipefail` (the caller provides those).
+
+[[ -n "${__LIB_RETRY_LOADED:-}" ]] && return 0
+__LIB_RETRY_LOADED=1
 
 # Retries a command with exponential backoff
 # Arguments:

@@ -19,7 +19,7 @@ they're invoked directly by skills, agents, or other scripts.
 ## Conventions
 
 - Each script `set -euo pipefail` at the top.
-- Each script sources `../lib/_retry` and wraps every `bk` call in
+- Each script sources `../lib/_retry.bash` and wraps every `bk` call in
   `retry 3 5 ...` so transient API failures don't kill the agent.
 - Output is JSON when there's structured data, raw text for log tails.
 - Pipeline / org are currently hard-coded to `ianremmelllc/apps`; lift

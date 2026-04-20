@@ -5,7 +5,7 @@
 __LIB_GH_AUTH_LOADED=1
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Returns the login of the currently authenticated gh user
 # Arguments: none

@@ -14,25 +14,25 @@ set -euo pipefail
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Shared helpers (idempotent via load guards).
-source "$SCRIPTS_DIR/lib/_retry"
-source "$SCRIPTS_DIR/lib/gh-auth"
-source "$SCRIPTS_DIR/lib/pr-state"
-source "$SCRIPTS_DIR/lib/comments"
-source "$SCRIPTS_DIR/lib/reviews"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+source "$SCRIPTS_DIR/lib/gh-auth.bash"
+source "$SCRIPTS_DIR/lib/pr-state.bash"
+source "$SCRIPTS_DIR/lib/comments.bash"
+source "$SCRIPTS_DIR/lib/reviews.bash"
 
 # Subcommand implementations.
-source "$SCRIPTS_DIR/subcommands/ready"
-source "$SCRIPTS_DIR/subcommands/reply"
-source "$SCRIPTS_DIR/subcommands/progress"
-source "$SCRIPTS_DIR/subcommands/setup"
-source "$SCRIPTS_DIR/subcommands/find-worktree"
-source "$SCRIPTS_DIR/subcommands/react"
-source "$SCRIPTS_DIR/subcommands/label"
-source "$SCRIPTS_DIR/subcommands/start-pr"
-source "$SCRIPTS_DIR/subcommands/poll"
-source "$SCRIPTS_DIR/subcommands/review"
-source "$SCRIPTS_DIR/subcommands/check-status"
-source "$SCRIPTS_DIR/subcommands/debug"
+source "$SCRIPTS_DIR/subcommands/ready.bash"
+source "$SCRIPTS_DIR/subcommands/reply.bash"
+source "$SCRIPTS_DIR/subcommands/progress.bash"
+source "$SCRIPTS_DIR/subcommands/setup.bash"
+source "$SCRIPTS_DIR/subcommands/find-worktree.bash"
+source "$SCRIPTS_DIR/subcommands/react.bash"
+source "$SCRIPTS_DIR/subcommands/label.bash"
+source "$SCRIPTS_DIR/subcommands/start-pr.bash"
+source "$SCRIPTS_DIR/subcommands/poll.bash"
+source "$SCRIPTS_DIR/subcommands/review.bash"
+source "$SCRIPTS_DIR/subcommands/check-status.bash"
+source "$SCRIPTS_DIR/subcommands/debug.bash"
 
 main() {
   if [[ $# -lt 1 ]]; then

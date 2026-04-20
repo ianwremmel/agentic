@@ -2,7 +2,7 @@
 # Sourced by ../orchestrate; defines functions for the `ready` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Marks a PR as ready for review
 # Arguments:

@@ -5,7 +5,7 @@
 __LIB_PR_STATE_LOADED=1
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Fetches the full PR body
 # Arguments:

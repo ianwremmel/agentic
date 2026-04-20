@@ -2,7 +2,7 @@
 # Sourced by ../orchestrate; defines functions for the `find-worktree` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 WORKTREE_BASE="${WORKTREE_BASE:-${HOME}/projects/worktrees/apps}"
 

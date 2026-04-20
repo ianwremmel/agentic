@@ -5,7 +5,7 @@
 __LIB_REVIEWS_LOADED=1
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Fetches ALL reviews for a PR (no watermark filtering)
 # Arguments:

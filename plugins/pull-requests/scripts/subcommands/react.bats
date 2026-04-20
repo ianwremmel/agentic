@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
-  source "./scripts/subcommands/react"
+  source "./scripts/subcommands/react.bash"
   source "./scripts/test-helpers.bash"
   unset GH_TOKEN
   unset GH_REVIEW_REQUEST_TOKEN

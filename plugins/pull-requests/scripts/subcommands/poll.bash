@@ -2,11 +2,11 @@
 # Sourced by ../orchestrate; defines functions for the `poll` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
-source "$SCRIPTS_DIR/lib/gh-auth"
-source "$SCRIPTS_DIR/lib/pr-state"
-source "$SCRIPTS_DIR/lib/comments"
-source "$SCRIPTS_DIR/lib/reviews"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+source "$SCRIPTS_DIR/lib/gh-auth.bash"
+source "$SCRIPTS_DIR/lib/pr-state.bash"
+source "$SCRIPTS_DIR/lib/comments.bash"
+source "$SCRIPTS_DIR/lib/reviews.bash"
 
 # poll subcommand main
 cmd_poll() {

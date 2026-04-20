@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
-  source "./scripts/subcommands/progress"
+  source "./scripts/subcommands/progress.bash"
   source "./scripts/test-helpers.bash"
   unset GH_TOKEN
   unset GH_REVIEW_REQUEST_TOKEN

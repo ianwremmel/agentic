@@ -26,7 +26,7 @@ re-source).
 ## Tests
 
 Each subcommand has a sibling `<name>.bats` file. The bats `setup()`
-sources `./scripts/subcommands/<name>` (which transitively loads its
+sources `./scripts/subcommands/<name>.bash` (which transitively loads its
 `lib/` deps) and `./scripts/test-helpers.bash` (which provides the
 `retry` override and `_apply_jq_from_args` helper). Tests exercise
 `cmd_<name>` directly and any subcommand-local helpers.

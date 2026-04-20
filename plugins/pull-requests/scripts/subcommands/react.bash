@@ -2,7 +2,7 @@
 # Sourced by ../orchestrate; defines functions for the `react` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Applies an emoji reaction to a comment via GitHub API
 # Arguments:

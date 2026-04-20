@@ -1,17 +1,17 @@
 #!/usr/bin/env bats
 
 setup() {
-  source "./scripts/lib/_retry"
+  source "./scripts/lib/_retry.bash"
 }
 
 # --- Script structure tests ---
 
 @test "_retry library file exists" {
-  [[ -f "./scripts/lib/_retry" ]]
+  [[ -f "./scripts/lib/_retry.bash" ]]
 }
 
 @test "_retry library file is not executable" {
-  [[ ! -x "./scripts/lib/_retry" ]]
+  [[ ! -x "./scripts/lib/_retry.bash" ]]
 }
 
 # --- Argument validation tests ---
@@ -96,7 +96,7 @@ setup() {
 # --- Direct execution guard ---
 
 @test "direct execution prints usage error" {
-  run bash "./scripts/lib/_retry"
+  run bash "./scripts/lib/_retry.bash"
 
   [[ $status -eq 1 ]]
   [[ $output == *"This is a library file"* ]]

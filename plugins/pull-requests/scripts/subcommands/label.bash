@@ -2,7 +2,7 @@
 # Sourced by ../orchestrate; defines functions for the `label` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Predefined label colors and descriptions
 label_color() {

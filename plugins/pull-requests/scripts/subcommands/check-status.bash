@@ -2,7 +2,7 @@
 # Sourced by ../orchestrate; defines functions for the `check-status` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Fetches compact PR status for polling (~4+ API calls; paginated)
 # Arguments:

@@ -2,8 +2,8 @@
 # Sourced by ../orchestrate; defines functions for the `progress` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
-source "$SCRIPTS_DIR/lib/pr-state"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+source "$SCRIPTS_DIR/lib/pr-state.bash"
 
 # progress subcommand main
 cmd_progress() {

@@ -2,8 +2,8 @@
 # Sourced by ../orchestrate; defines functions for the `reply` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
-source "$SCRIPTS_DIR/lib/gh-auth"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+source "$SCRIPTS_DIR/lib/gh-auth.bash"
 
 # Replies to an inline review comment
 # Arguments:

@@ -2,7 +2,7 @@
 # Sourced by ../orchestrate; defines functions for the `setup` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 # Prepares a worktree by fetching origin/main and rebasing
 # Arguments:

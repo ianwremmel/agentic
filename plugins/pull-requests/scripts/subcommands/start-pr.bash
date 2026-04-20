@@ -2,7 +2,7 @@
 # Sourced by ../orchestrate; defines functions for the `start-pr` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
+source "$SCRIPTS_DIR/lib/_retry.bash"
 
 ACTIVE_PRS_DIR="${ACTIVE_PRS_DIR:-/tmp/claude/project-state}"
 ACTIVE_PRS_FILE="${ACTIVE_PRS_FILE:-${ACTIVE_PRS_DIR}/active-prs.json}"

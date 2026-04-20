@@ -5,7 +5,7 @@ set -euo pipefail
 # Combines annotation and artifact listing in a single script call.
 # Usage: scripts/buildkite/bk-failure-info <build_number>
 
-source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry.bash"
 
 # Fetches build annotations from Buildkite
 # Arguments:

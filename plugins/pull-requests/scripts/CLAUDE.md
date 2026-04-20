@@ -27,13 +27,16 @@ Single entry point for everything PR-related. Run `scripts/orchestrate
   `set -euo pipefail`, and a load guard at the top so re-sourcing is a
   no-op. The caller (orchestrate, a subcommand, or a bats test) provides
   the strict-mode flags.
-- `subcommands/*` files source the `lib/*` modules they need (transitively
+- Sourced files end in `.bash` so editors give them bash syntax
+  highlighting; executed scripts (`orchestrate`, `buildkite/bk-*`) have
+  shebangs and no extension.
+- `subcommands/*.bash` files source the `lib/*.bash` modules they need (transitively
   via the load guards) and define one or more `cmd_<name>` functions.
 - `orchestrate` sources every lib + subcommand once at startup, then runs
   the dispatcher. The bottom-of-file guard
   (`if [[ ${BASH_SOURCE[0]} == "${0}" ]]`) means sourcing orchestrate from
   a test does not auto-run `main`.
-- `buildkite/*` scripts are standalone CLIs that source `../lib/_retry`
+- `buildkite/*` scripts are standalone CLIs that source `../lib/_retry.bash`
   for the retry helper and otherwise stand alone. They are not wired into
   orchestrate's dispatcher.
 
@@ -69,9 +72,9 @@ bats scripts/orchestrate.bats \
 
 ## Adding a new subcommand
 
-1. Create `subcommands/<name>` defining `cmd_<name>` (and any helpers).
-   Source the `lib/*` modules it needs.
-2. Add `source "$SCRIPTS_DIR/subcommands/<name>"` to `orchestrate`.
+1. Create `subcommands/<name>.bash` defining `cmd_<name>` (and any helpers).
+   Source the `lib/*.bash` modules it needs.
+2. Add `source "$SCRIPTS_DIR/subcommands/<name>.bash"` to `orchestrate`.
 3. Add the dispatch case to `orchestrate`'s `main()`.
 4. Create `subcommands/<name>.bats` with a `setup()` that sources the
    new subcommand file and `test-helpers.bash`. Cover `cmd_<name>` and

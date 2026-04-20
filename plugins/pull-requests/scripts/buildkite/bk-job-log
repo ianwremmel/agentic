@@ -5,7 +5,7 @@ set -euo pipefail
 # Replaces mcp__claude_ai_Buildkite_MCP_Remote__read_logs.
 # Usage: scripts/buildkite/bk-job-log <build_number> <job_id> [--tail N]
 
-source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry.bash"
 
 # Fetches log output for a specific Buildkite job
 # Arguments:

@@ -2,9 +2,9 @@
 # Sourced by ../orchestrate; defines functions for the `review` subcommand.
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-source "$SCRIPTS_DIR/lib/_retry"
-source "$SCRIPTS_DIR/lib/gh-auth"
-source "$SCRIPTS_DIR/lib/reviews"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+source "$SCRIPTS_DIR/lib/gh-auth.bash"
+source "$SCRIPTS_DIR/lib/reviews.bash"
 
 # review copilot subcommand main
 cmd_review_copilot() {

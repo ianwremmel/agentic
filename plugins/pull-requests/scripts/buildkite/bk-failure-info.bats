@@ -2,13 +2,7 @@
 
 setup() {
   source "./scripts/buildkite/bk-failure-info"
-
-  # Mock retry after sourcing so it overrides the real _retry implementation
-  retry() {
-    shift 2
-    "$@"
-  }
-  export -f retry
+  source "./scripts/test-helpers.bash"
 }
 
 # --- Script structure tests ---
@@ -25,18 +19,33 @@ setup() {
 
 # --- get_annotations tests ---
 
-@test "get_annotations requires exactly 1 argument" {
+@test "get_annotations requires exactly 3 arguments" {
   run get_annotations
 
   [[ $status -eq 2 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "get_annotations rejects extra arguments" {
-  run get_annotations "123" "extra"
+  run get_annotations "org" "pipe" "123" "extra"
 
   [[ $status -eq 2 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
+}
+
+@test "get_annotations calls API with org and pipeline path" {
+  local args_file="$BATS_TEST_TMPDIR/bk-args"
+  bk() {
+    echo "$*" > "$args_file"
+    echo '[]'
+  }
+  export -f bk
+  export args_file
+
+  run get_annotations "myorg" "mypipe" "42"
+
+  [[ $status -eq 0 ]]
+  [[ $(cat "$args_file") == *"/organizations/myorg/pipelines/mypipe/builds/42/annotations"* ]]
 }
 
 @test "get_annotations returns annotation data" {
@@ -45,7 +54,7 @@ setup() {
   }
   export -f bk
 
-  run get_annotations "123"
+  run get_annotations "org" "pipe" "123"
 
   [[ $status -eq 0 ]]
   echo "$output" | jq -e 'length == 2'
@@ -56,18 +65,18 @@ setup() {
 
 # --- get_junit_artifacts tests ---
 
-@test "get_junit_artifacts requires exactly 1 argument" {
+@test "get_junit_artifacts requires exactly 3 arguments" {
   run get_junit_artifacts
 
   [[ $status -eq 2 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "get_junit_artifacts rejects extra arguments" {
-  run get_junit_artifacts "123" "extra"
+  run get_junit_artifacts "org" "pipe" "123" "extra"
 
   [[ $status -eq 2 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "get_junit_artifacts filters XML files" {
@@ -76,7 +85,7 @@ setup() {
   }
   export -f bk
 
-  run get_junit_artifacts "123"
+  run get_junit_artifacts "org" "pipe" "123"
 
   [[ $status -eq 0 ]]
   echo "$output" | jq -e 'length == 2'
@@ -87,18 +96,18 @@ setup() {
 
 # --- main tests ---
 
-@test "main requires exactly 1 argument" {
+@test "main requires exactly 3 arguments" {
   run main
 
   [[ $status -eq 1 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "main rejects extra arguments" {
-  run main "123" "extra"
+  run main "org" "pipe" "123" "extra"
 
   [[ $status -eq 1 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "main combines annotations and artifacts" {
@@ -111,7 +120,7 @@ setup() {
   }
   export -f bk
 
-  run main "123"
+  run main "org" "pipe" "123"
 
   [[ $status -eq 0 ]]
   echo "$output" | jq -e '.annotations | length == 1'

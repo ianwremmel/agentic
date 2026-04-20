@@ -2,44 +2,42 @@
 set -euo pipefail
 
 # Lists failed and broken jobs from a Buildkite build.
-# Replaces mcp__claude_ai_Buildkite_MCP_Remote__get_build with job_state filter.
-# Usage: scripts/buildkite/bk-failed-jobs <build_number>
+# Usage: scripts/buildkite/bk-failed-jobs <org> <pipeline> <build_number>
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry.bash"
 
-# Fetches failed and broken jobs from a Buildkite build
+# Fetches failed and broken jobs from a Buildkite build.
 # Arguments:
-#   $1 - build_number: The Buildkite build number
+#   $1 - org: Buildkite organization slug
+#   $2 - pipeline: Buildkite pipeline slug
+#   $3 - build_number: The Buildkite build number
 # Returns:
-#   Outputs compact JSON array of failed/broken jobs to stdout
-#   Each job has: name, state, id, retried fields
+#   JSON array of {name, state, id, retried} to stdout
 get_failed_jobs() {
-  if [[ $# -ne 1 ]]; then
-    echo "Error: get_failed_jobs requires exactly 1 argument" >&2
-    echo "Usage: get_failed_jobs <build_number>" >&2
+  if [[ $# -ne 3 ]]; then
+    echo "Error: get_failed_jobs requires exactly 3 arguments" >&2
+    echo "Usage: get_failed_jobs <org> <pipeline> <build_number>" >&2
     return 2
   fi
 
-  local build_number="$1"
+  local org="$1"
+  local pipeline="$2"
+  local build_number="$3"
 
   retry 3 5 bk build view "$build_number" \
-    -p ianremmelllc/apps \
+    -p "${org}/${pipeline}" \
     --json \
     | jq '[.jobs[] | select(.state == "failed" or .state == "broken") | {name: .name, state: .state, id: .id, retried: .retried}]'
 }
 
 main() {
-  if [[ $# -ne 1 ]]; then
-    echo "Error: requires exactly 1 argument" >&2
-    echo "Usage: scripts/bk-failed-jobs <build_number>" >&2
+  if [[ $# -ne 3 ]]; then
+    echo "Error: requires exactly 3 arguments" >&2
+    echo "Usage: scripts/buildkite/bk-failed-jobs <org> <pipeline> <build_number>" >&2
     return 1
   fi
 
-  local build_number="$1"
-  local result
-
-  result=$(get_failed_jobs "$build_number")
-  echo "$result"
+  get_failed_jobs "$@"
 }
 
 if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then

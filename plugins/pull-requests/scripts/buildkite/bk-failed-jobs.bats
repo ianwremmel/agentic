@@ -2,13 +2,7 @@
 
 setup() {
   source "./scripts/buildkite/bk-failed-jobs"
-
-  # Mock retry after sourcing so it overrides the real _retry implementation
-  retry() {
-    shift 2
-    "$@"
-  }
-  export -f retry
+  source "./scripts/test-helpers.bash"
 }
 
 # --- Script structure tests ---
@@ -25,18 +19,42 @@ setup() {
 
 # --- get_failed_jobs tests ---
 
-@test "get_failed_jobs requires exactly 1 argument" {
+@test "get_failed_jobs requires exactly 3 arguments" {
   run get_failed_jobs
 
   [[ $status -eq 2 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
+}
+
+@test "get_failed_jobs rejects too few arguments" {
+  run get_failed_jobs "org" "pipeline"
+
+  [[ $status -eq 2 ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "get_failed_jobs rejects extra arguments" {
-  run get_failed_jobs "123" "extra"
+  run get_failed_jobs "org" "pipeline" "123" "extra"
 
   [[ $status -eq 2 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
+}
+
+@test "get_failed_jobs passes org/pipeline to bk CLI" {
+  # Capture bk's args via a file since the jq pipeline swallows stdout.
+  local args_file="$BATS_TEST_TMPDIR/bk-args"
+  bk() {
+    echo "$*" > "$args_file"
+    echo '{"jobs":[]}'
+  }
+  export -f bk
+  export args_file
+
+  run get_failed_jobs "myorg" "mypipe" "123"
+
+  [[ $status -eq 0 ]]
+  [[ $(cat "$args_file") == *"-p myorg/mypipe"* ]]
+  [[ $(cat "$args_file") == *"build view 123"* ]]
 }
 
 @test "get_failed_jobs filters failed and broken jobs" {
@@ -45,7 +63,7 @@ setup() {
   }
   export -f bk
 
-  run get_failed_jobs "123"
+  run get_failed_jobs "org" "pipe" "123"
 
   [[ $status -eq 0 ]]
   echo "$output" | jq -e 'length == 2'
@@ -61,7 +79,7 @@ setup() {
   }
   export -f bk
 
-  run get_failed_jobs "123"
+  run get_failed_jobs "org" "pipe" "123"
 
   [[ $status -eq 0 ]]
   echo "$output" | jq -e 'length == 0'
@@ -69,18 +87,18 @@ setup() {
 
 # --- main tests ---
 
-@test "main requires exactly 1 argument" {
+@test "main requires exactly 3 arguments" {
   run main
 
   [[ $status -eq 1 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "main rejects extra arguments" {
-  run main "123" "extra"
+  run main "org" "pipe" "123" "extra"
 
   [[ $status -eq 1 ]]
-  [[ $output == *"requires exactly 1 argument"* ]]
+  [[ $output == *"requires exactly 3 arguments"* ]]
 }
 
 @test "main outputs JSON array" {
@@ -89,7 +107,7 @@ setup() {
   }
   export -f bk
 
-  run main "123"
+  run main "org" "pipe" "123"
 
   [[ $status -eq 0 ]]
   echo "$output" | jq -e 'type == "array"'

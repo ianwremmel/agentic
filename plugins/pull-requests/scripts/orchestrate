@@ -1,0 +1,2286 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Unified entry point for PR automation scripts.
+# Dispatches to subcommands: ready, reply, progress, poll, review, setup, find-worktree, react, label, start-pr, check-status, debug.
+# Usage: scripts/orchestrate <subcommand> [args...]
+
+source "$(dirname "${BASH_SOURCE[0]}")/_retry"
+
+# ============================================================================
+# ready subcommand functions
+# ============================================================================
+
+# Marks a PR as ready for review
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   0 on success
+mark_ready() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: mark_ready requires exactly 1 argument" >&2
+    echo "Usage: mark_ready <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  retry 3 5 gh pr ready "$pr_number"
+}
+
+# ready subcommand main
+cmd_ready() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate ready <pr_number>" >&2
+    return 1
+  fi
+
+  mark_ready "$1"
+  echo "PR #${1} marked as ready for review"
+}
+
+# ============================================================================
+# reply subcommand functions
+# ============================================================================
+
+# Returns 0 if the current gh auth is a human user account, 1 otherwise.
+# Humans are: GitHub user type == "User" AND login does not match a known
+# agent-name pattern (copilot, codex, claude, ai-agent — case-insensitive).
+# When unauthenticated or detection fails, returns 1 (assume not human).
+is_human_auth() {
+  local result type login
+  result=$(gh api user --jq '"\(.type)|\(.login | ascii_downcase)"' 2>/dev/null) || return 1
+  [[ -n $result && $result == *"|"* ]] || return 1
+  type="${result%%|*}"
+  login="${result#*|}"
+  [[ $type == "User" ]] || return 1
+  case "$login" in
+    *copilot*|*codex*|*claude*|*ai-agent*) return 1 ;;
+  esac
+  return 0
+}
+
+# Wraps an agent-authored comment body for posting.
+# Always prefixes with the <!-- agent-reply --> HTML marker so the
+# poll loop can skip the agent's own posts. When the current gh auth
+# belongs to a human user, also wraps the body in a visible sparkle
+# block so readers can tell the agent spoke through the human's
+# account.
+# Arguments:
+#   $1 - body: The raw comment body to wrap
+# Returns:
+#   Outputs the wrapped body to stdout
+wrap_agent_body() {
+  local body="$1"
+  if is_human_auth; then
+    printf '<!-- agent-reply -->\n\xe2\x9c\xa8\n\n%s\n\n\xe2\x9c\xa8\n' "$body"
+  else
+    printf '<!-- agent-reply -->\n%s\n' "$body"
+  fi
+}
+
+# Replies to an inline review comment
+# Arguments:
+#   $1 - pr_number
+#   $2 - comment_id: The review comment ID to reply to
+#   $3 - body: Reply body text
+# Returns:
+#   0 on success
+reply_inline() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: reply_inline requires exactly 3 arguments" >&2
+    echo "Usage: reply_inline <pr_number> <comment_id> <body>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local comment_id="$2"
+  local body
+  body=$(wrap_agent_body "$3")
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments/${comment_id}/replies" \
+    -f "body=${body}" \
+    --silent
+}
+
+# Posts an issue comment on the PR
+# Arguments:
+#   $1 - pr_number
+#   $2 - body: Comment body text
+# Returns:
+#   0 on success
+reply_issue() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: reply_issue requires exactly 2 arguments" >&2
+    echo "Usage: reply_issue <pr_number> <body>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local body
+  body=$(wrap_agent_body "$2")
+
+  retry 3 5 gh pr comment "$pr_number" --body "$body"
+}
+
+# reply subcommand main
+cmd_reply() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: requires at least 1 argument" >&2
+    echo "Usage: scripts/orchestrate reply --inline <pr_number> <comment_id> <body>" >&2
+    echo "       scripts/orchestrate reply --issue <pr_number> <body>" >&2
+    return 1
+  fi
+
+  local mode="$1"
+  shift
+
+  case $mode in
+    --inline)
+      if [[ $# -ne 3 ]]; then
+        echo "Error: --inline requires 3 arguments" >&2
+        echo "Usage: scripts/orchestrate reply --inline <pr_number> <comment_id> <body>" >&2
+        return 1
+      fi
+      reply_inline "$@"
+      ;;
+    --issue)
+      if [[ $# -ne 2 ]]; then
+        echo "Error: --issue requires 2 arguments" >&2
+        echo "Usage: scripts/orchestrate reply --issue <pr_number> <body>" >&2
+        return 1
+      fi
+      reply_issue "$@"
+      ;;
+    *)
+      echo "Error: unknown mode '${mode}', expected --inline or --issue" >&2
+      return 1
+      ;;
+  esac
+}
+
+# ============================================================================
+# progress subcommand functions
+# ============================================================================
+
+# Fetches the full PR body
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   PR body text to stdout
+get_pr_body() {
+  local pr_number="$1"
+  retry 3 5 gh pr view "$pr_number" --json body --jq '.body'
+}
+
+# Extracts the clc-progress YAML from a PR body
+# Arguments:
+#   $1 - body: The PR body text (via stdin or argument)
+# Returns:
+#   The YAML content between progress markers to stdout
+#   Empty string if no progress block found
+extract_progress() {
+  local body
+  if [[ $# -ge 1 ]]; then
+    body="$1"
+  else
+    body=$(cat)
+  fi
+
+  printf '%s\n' "$body" | sed -n '/<!-- clc-progress/,/-->/p' | sed '1d;$d'
+}
+
+# Reads the progress block from a PR
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   YAML content to stdout
+read_progress() {
+  local pr_number="$1"
+  local body
+  body=$(get_pr_body "$pr_number")
+  extract_progress "$body"
+}
+
+# Updates specific fields in the progress block
+# Arguments:
+#   $1 - pr_number
+#   $@ - field=value pairs (e.g., phase=ci_monitoring ci_fix_attempts=1)
+# Returns:
+#   0 on success
+write_progress() {
+  if [[ $# -lt 2 ]]; then
+    echo "Error: write_progress requires pr_number and at least one field=value" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  shift
+
+  for pair in "$@"; do
+    if [[ ! $pair =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]]; then
+      echo "Error: invalid field=value pair: '$pair'" >&2
+      echo "Usage: write_progress <pr_number> field=value ..." >&2
+      return 2
+    fi
+  done
+
+  local body
+  body=$(get_pr_body "$pr_number")
+
+  local yaml
+  yaml=$(extract_progress "$body")
+
+  # Update fields in the YAML
+  local new_yaml="$yaml"
+  for pair in "$@"; do
+    local key="${pair%%=*}"
+    local value="${pair#*=}"
+    # Escape sed replacement metacharacters in value
+    local escaped_value
+    escaped_value=$(printf '%s\n' "$value" | sed 's/[&/\\]/\\&/g')
+    if echo "$new_yaml" | grep -q "^${key}:"; then
+      new_yaml=$(echo "$new_yaml" | sed "s/^${key}:.*/${key}: ${escaped_value}/")
+    else
+      new_yaml="${new_yaml}
+${key}: ${value}"
+    fi
+  done
+
+  # Always update last_updated
+  local timestamp
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  if echo "$new_yaml" | grep -q "^last_updated:"; then
+    new_yaml=$(echo "$new_yaml" | sed "s/^last_updated:.*/last_updated: ${timestamp}/")
+  else
+    new_yaml="${new_yaml}
+last_updated: ${timestamp}"
+  fi
+
+  # Replace the progress block in the body
+  local new_block
+  new_block="<!-- clc-progress
+${new_yaml}
+-->"
+
+  local new_body
+  if echo "$body" | grep -q '<!-- clc-progress'; then
+    # Replace existing block - use awk with ENVIRON to handle newlines
+    local block_file
+    block_file=$(mktemp)
+    echo "$new_block" > "$block_file"
+    new_body=$(echo "$body" | awk -v blockfile="$block_file" '
+      /<!-- clc-progress/{found=1; while ((getline line < blockfile) > 0) print line; close(blockfile); next}
+      found && /-->/{found=0; next}
+      !found{print}
+    ')
+    rm -f "$block_file"
+  else
+    # Append new block
+    new_body="${body}
+
+${new_block}"
+  fi
+
+  # Write back via temp file
+  local tmpfile
+  tmpfile=$(mktemp)
+  echo "$new_body" > "$tmpfile"
+  retry 3 5 gh pr edit "$pr_number" --body-file "$tmpfile"
+  rm -f "$tmpfile"
+}
+
+# Updates a checklist item in the Progress section
+# Arguments:
+#   $1 - pr_number
+#   $2 - item_pattern: Text to match in the checklist item (partial match)
+#   $3 - state: "checked" or "unchecked"
+# Returns:
+#   0 on success
+update_checklist() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: update_checklist requires exactly 3 arguments" >&2
+    echo "Usage: update_checklist <pr_number> <item_pattern> <checked|unchecked>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local item_pattern="$2"
+  local state="$3"
+
+  if [[ $state != "checked" && $state != "unchecked" ]]; then
+    echo "Error: state must be 'checked' or 'unchecked', got '$state'" >&2
+    return 2
+  fi
+
+  local body
+  body=$(get_pr_body "$pr_number")
+
+  local checkbox
+  if [[ $state == "checked" ]]; then
+    checkbox="[x]"
+  else
+    checkbox="[ ]"
+  fi
+
+  # Replace the checkbox for the matching item using awk for literal string matching
+  local new_body
+  new_body=$(printf '%s\n' "$body" | awk -v pattern="$item_pattern" -v checkbox="$checkbox" '
+    index($0, pattern) > 0 && /^- \[[ x]\]/ {
+      sub(/- \[[ x]\]/, "- " checkbox)
+    }
+    { print }
+  ')
+
+  local tmpfile
+  tmpfile=$(mktemp)
+  echo "$new_body" > "$tmpfile"
+  retry 3 5 gh pr edit "$pr_number" --body-file "$tmpfile"
+  rm -f "$tmpfile"
+}
+
+# progress subcommand main
+cmd_progress() {
+  if [[ $# -lt 2 ]]; then
+    echo "Error: requires at least 2 arguments" >&2
+    echo "Usage: scripts/orchestrate progress read <pr_number>" >&2
+    echo "       scripts/orchestrate progress write <pr_number> [field=value ...]" >&2
+    echo "       scripts/orchestrate progress checklist <pr_number> <item> <checked|unchecked>" >&2
+    return 1
+  fi
+
+  local command="$1"
+  shift
+
+  case $command in
+    read)
+      if [[ $# -ne 1 ]]; then
+        echo "Error: read requires exactly 1 argument" >&2
+        return 1
+      fi
+      read_progress "$1"
+      ;;
+    write)
+      write_progress "$@"
+      ;;
+    checklist)
+      update_checklist "$@"
+      ;;
+    *)
+      echo "Error: unknown command '$command'" >&2
+      echo "Usage: scripts/orchestrate progress read|write|checklist ..." >&2
+      return 1
+      ;;
+  esac
+}
+
+# ============================================================================
+# setup subcommand functions
+# ============================================================================
+
+# Prepares a worktree by fetching origin/main and rebasing
+# Arguments:
+#   $1 - worktree_dir: Path to the worktree
+#   $2 - (optional) --abort: Abort an in-progress rebase instead
+# Returns:
+#   Exit 0 on success
+#   Exit 2 on rebase conflict with JSON output
+cmd_setup() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: requires at least 1 argument" >&2
+    echo "Usage: scripts/orchestrate setup <worktree_dir> [--abort]" >&2
+    return 1
+  fi
+
+  local worktree_dir="$1"
+  shift
+
+  if [[ ! -d $worktree_dir ]]; then
+    echo "Error: directory does not exist: $worktree_dir" >&2
+    return 1
+  fi
+
+  # Handle --abort flag
+  if [[ ${1:-} == "--abort" ]]; then
+    if [[ -d "${worktree_dir}/.git/rebase-merge" ]] || [[ -d "${worktree_dir}/.git/rebase-apply" ]]; then
+      git -C "$worktree_dir" rebase --abort >&2
+      echo '{"status":"aborted"}'
+    else
+      echo '{"status":"no_rebase_in_progress"}'
+    fi
+    return 0
+  fi
+
+  # Abort stale mid-rebase state if present
+  if [[ -d "${worktree_dir}/.git/rebase-merge" ]] || [[ -d "${worktree_dir}/.git/rebase-apply" ]]; then
+    echo "Aborting stale rebase state..." >&2
+    git -C "$worktree_dir" rebase --abort >&2
+  fi
+
+  # Fetch latest main
+  git -C "$worktree_dir" fetch origin main >&2
+
+  # Attempt rebase with explicit error trapping (not relying on set -e)
+  local rebase_output
+  local rebase_exit=0
+  rebase_output=$(git -C "$worktree_dir" rebase origin/main 2>&1) || rebase_exit=$?
+
+  if [[ $rebase_exit -eq 0 ]]; then
+    echo '{"status":"ok"}'
+    return 0
+  fi
+
+  # Rebase failed -- check for conflicts
+  local conflict_files
+  conflict_files=$(git -C "$worktree_dir" diff --name-only --diff-filter=U 2>/dev/null)
+
+  if [[ -n $conflict_files ]]; then
+    # Build JSON safely using jq to handle special characters in file paths
+    local files_json
+    files_json=$(printf '%s\n' "$conflict_files" | jq -R . | jq -s '.')
+
+    jq -cn --argjson files "$files_json" '{"status":"conflict","files":$files}'
+    return 2
+  fi
+
+  # Non-conflict rebase failure
+  echo "Error: rebase failed: ${rebase_output}" >&2
+  return 1
+}
+
+# ============================================================================
+# find-worktree subcommand functions
+# ============================================================================
+
+readonly WORKTREE_BASE="${HOME}/projects/worktrees/apps"
+
+# Auto-detects identifier type and finds or creates a worktree
+# Arguments:
+#   $1 - identifier: PR number, ticket ID, or branch name
+# Returns:
+#   JSON: {worktree_dir, branch_name, found, created}
+cmd_find_worktree() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate find-worktree <identifier>" >&2
+    return 1
+  fi
+
+  local identifier="$1"
+  local branch_name=""
+
+  # Auto-detect identifier type
+  if [[ $identifier =~ ^[0-9]+$ ]]; then
+    # PR number -- look up branch via gh
+    branch_name=$(gh pr view "$identifier" --json headRefName --jq '.headRefName' 2>/dev/null) || {
+      echo '{"worktree_dir":"","branch_name":"","found":false,"created":false}'
+      return 0
+    }
+  elif [[ $identifier =~ ^[A-Z]+-[0-9]+$ ]]; then
+    # Ticket ID -- search worktree list for matching branch
+    local worktree_list
+    worktree_list=$(git worktree list --porcelain 2>/dev/null)
+    branch_name=$(printf '%s\n' "$worktree_list" \
+      | grep "^branch " \
+      | sed 's|^branch refs/heads/||' \
+      | grep -i "$identifier" \
+      | head -n 1)
+
+    if [[ -z $branch_name ]]; then
+      # Check remote branches
+      branch_name=$(git branch -r \
+        | sed 's|^ *origin/||' \
+        | grep -i "$identifier" \
+        | head -n 1 \
+        | tr -d ' ')
+    fi
+
+    if [[ -z $branch_name ]]; then
+      echo '{"worktree_dir":"","branch_name":"","found":false,"created":false}'
+      return 0
+    fi
+  else
+    # Treat as branch name
+    branch_name="$identifier"
+  fi
+
+  # Sanitize branch name for directory path (replace / with _)
+  local dir_name="${branch_name//\//_}"
+  local worktree_dir="${WORKTREE_BASE}/${dir_name}"
+
+  # Check if worktree already exists
+  local worktree_list
+  worktree_list=$(git worktree list --porcelain 2>/dev/null)
+  if printf '%s\n' "$worktree_list" | grep -q "^branch refs/heads/${branch_name}$"; then
+    # Found existing worktree -- get its path
+    local existing_path
+    existing_path=$(printf '%s\n' "$worktree_list" \
+      | awk -v branch="branch refs/heads/${branch_name}" '
+        /^worktree / { path = substr($0, 10) }
+        $0 == branch { print path; exit }
+      ')
+    if [[ -n $existing_path ]]; then
+      worktree_dir="$existing_path"
+    fi
+    jq -cn --arg dir "$worktree_dir" --arg branch "$branch_name" \
+      '{"worktree_dir":$dir,"branch_name":$branch,"found":true,"created":false}'
+    return 0
+  fi
+
+  # Check if remote branch exists
+  if git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1; then
+    # Create worktree from remote branch
+    mkdir -p "$WORKTREE_BASE"
+    git fetch origin "$branch_name" >&2
+    git worktree add "$worktree_dir" "origin/${branch_name}" >&2
+    # Create local tracking branch
+    git -C "$worktree_dir" checkout -B "$branch_name" "origin/${branch_name}" >&2
+    jq -cn --arg dir "$worktree_dir" --arg branch "$branch_name" \
+      '{"worktree_dir":$dir,"branch_name":$branch,"found":false,"created":true}'
+    return 0
+  fi
+
+  # Neither local nor remote -- return the would-be path for reference
+  jq -cn --arg dir "$worktree_dir" --arg branch "$branch_name" \
+    '{"worktree_dir":$dir,"branch_name":$branch,"found":false,"created":false}'
+  return 0
+}
+
+# ============================================================================
+# react subcommand functions
+# ============================================================================
+
+# Applies an emoji reaction to a comment via GitHub API
+# Arguments:
+#   $1 - comment_id
+#   $2 - reaction: +1, -1, eyes, rocket, confused, hooray
+#   --type inline|issue
+# Returns:
+#   0 on success
+cmd_react() {
+  if [[ $# -lt 3 ]]; then
+    echo "Error: requires at least 3 arguments" >&2
+    echo "Usage: scripts/orchestrate react <comment_id> <reaction> --type inline|issue" >&2
+    return 1
+  fi
+
+  local comment_id="$1"
+  local reaction="$2"
+  shift 2
+
+  local comment_type=""
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --type)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --type requires a value" >&2
+          return 1
+        fi
+        comment_type="$2"
+        shift 2
+        ;;
+      *)
+        echo "Error: unknown option '$1'" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ -z $comment_type ]]; then
+    echo "Error: --type is required" >&2
+    return 1
+  fi
+
+  if [[ $comment_type != "inline" && $comment_type != "issue" ]]; then
+    echo "Error: --type must be 'inline' or 'issue', got '$comment_type'" >&2
+    return 1
+  fi
+
+  # Validate reaction
+  case $reaction in
+    +1|-1|eyes|rocket|confused|hooray|laugh|heart) ;;
+    *)
+      echo "Error: unsupported reaction '${reaction}'" >&2
+      return 1
+      ;;
+  esac
+
+  local repo
+  repo=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  local api_path
+  if [[ $comment_type == "inline" ]]; then
+    api_path="repos/${repo}/pulls/comments/${comment_id}/reactions"
+  else
+    api_path="repos/${repo}/issues/comments/${comment_id}/reactions"
+  fi
+
+  retry 3 5 gh api "$api_path" -f "content=${reaction}" --silent
+}
+
+# ============================================================================
+# label subcommand functions
+# ============================================================================
+
+# Predefined label colors and descriptions
+label_color() {
+  case $1 in
+    agent-working) echo "1d76db" ;;
+    needs-followup) echo "e4e669" ;;
+    *) echo "ededed" ;;
+  esac
+}
+
+label_description() {
+  case $1 in
+    agent-working) echo "Agent is actively working on this PR" ;;
+    needs-followup) echo "PR has deferred work requiring post-merge review" ;;
+    *) echo "" ;;
+  esac
+}
+
+# Adds or removes a label on a PR with auto-creation on 404
+# Arguments:
+#   $1 - action: add|remove
+#   $2 - pr_number
+#   $3 - label_name
+# Returns:
+#   0 on success (label ops are non-blocking -- warnings on failure)
+cmd_label() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: requires exactly 3 arguments" >&2
+    echo "Usage: scripts/orchestrate label add|remove <pr_number> <label>" >&2
+    return 1
+  fi
+
+  local action="$1"
+  local pr_number="$2"
+  local label_name="$3"
+
+  if [[ $action != "add" && $action != "remove" ]]; then
+    echo "Error: action must be 'add' or 'remove', got '$action'" >&2
+    return 1
+  fi
+
+  if [[ $action == "add" ]]; then
+    local add_stderr
+    add_stderr=$(mktemp)
+    if gh pr edit "$pr_number" --add-label "$label_name" 2>"$add_stderr"; then
+      rm -f "$add_stderr"
+      return 0
+    fi
+
+    local stderr_content
+    stderr_content=$(cat "$add_stderr")
+    rm -f "$add_stderr"
+
+    # Check if label not found (needs creation)
+    if [[ $stderr_content == *"not found"* ]] || [[ $stderr_content == *"404"* ]]; then
+      local color
+      color=$(label_color "$label_name")
+      local description
+      description=$(label_description "$label_name")
+
+      if gh label create "$label_name" --color "$color" --description "$description" 2>/dev/null; then
+        # Retry the add
+        if gh pr edit "$pr_number" --add-label "$label_name" 2>/dev/null; then
+          return 0
+        fi
+      fi
+    fi
+
+    # Non-blocking failure
+    echo "Warning: failed to add label '${label_name}' to PR #${pr_number}" >&2
+    return 0
+  fi
+
+  # Remove
+  if ! gh pr edit "$pr_number" --remove-label "$label_name" 2>/dev/null; then
+    echo "Warning: failed to remove label '${label_name}' from PR #${pr_number}" >&2
+  fi
+  return 0
+}
+
+# ============================================================================
+# start-pr subcommand functions
+# ============================================================================
+
+ACTIVE_PRS_DIR="${ACTIVE_PRS_DIR:-/tmp/claude/project-state}"
+ACTIVE_PRS_FILE="${ACTIVE_PRS_FILE:-${ACTIVE_PRS_DIR}/active-prs.json}"
+
+# Derives a PR title from a branch name
+# Strips date suffixes and ticket ID prefixes, converts hyphens to spaces
+# Arguments:
+#   $1 - branch_name
+#   $2 - ticket_id (optional): If provided, prefix title with ticket ID
+# Returns:
+#   PR title string to stdout
+derive_pr_title() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: derive_pr_title requires at least 1 argument" >&2
+    return 2
+  fi
+
+  local branch_name="$1"
+  local ticket_id="${2:-}"
+  local slug="$branch_name"
+
+  # Strip date suffix (e.g., -2026-03-17T021549)
+  slug=$(printf '%s\n' "$slug" | sed 's/-[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{6\}$//')
+
+  # Strip ticket ID prefix (e.g., clc-539-)
+  if [[ -n $ticket_id ]]; then
+    local lower_ticket
+    lower_ticket=$(printf '%s\n' "$ticket_id" | tr '[:upper:]' '[:lower:]')
+    slug="${slug#"${lower_ticket}-"}"
+  fi
+
+  # Convert hyphens to spaces for readability
+  slug="${slug//-/ }"
+
+  # Capitalize first letter
+  slug="$(printf '%s' "${slug:0:1}" | tr '[:lower:]' '[:upper:]')${slug:1}"
+
+  if [[ -n $ticket_id ]]; then
+    echo "${ticket_id}: ${slug}"
+  else
+    echo "$slug"
+  fi
+}
+
+# Generates the initial PR body with progress block
+# Arguments:
+#   $1 - ticket_id (optional, pass "" for none)
+#   $2 - ticket_url (optional, pass "" for none)
+# Returns:
+#   PR body text to stdout
+generate_pr_body() {
+  local ticket_id="${1:-}"
+  local ticket_url="${2:-}"
+  local body=""
+
+  body+="## Summary"$'\n'
+  body+="_Draft PR — implementation pending._"$'\n'
+  body+=$'\n'
+
+  if [[ -n $ticket_id && -n $ticket_url ]]; then
+    body+="Resolves [${ticket_id}](${ticket_url})"$'\n'
+    body+=$'\n'
+  fi
+
+  body+="## Progress"$'\n'
+  body+="- [ ] Implementation"$'\n'
+  body+="- [ ] CI passing (attempt 0/3)"$'\n'
+  body+="- [ ] Code review requested"$'\n'
+  body+="- [ ] Review feedback addressed (cycle 0/5)"$'\n'
+  body+="- [ ] Merged"$'\n'
+  body+=$'\n'
+
+  body+="## Decisions"$'\n'
+  body+="_No decisions recorded yet._"$'\n'
+  body+=$'\n'
+
+  body+="## Test plan"$'\n'
+  body+="- [ ] Unit tests pass"$'\n'
+  body+="- [ ] Lint passes"$'\n'
+  body+="- [ ] Build succeeds"$'\n'
+  body+=$'\n'
+
+  local timestamp
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  local commit_scope="unknown"
+
+  body+="<!-- clc-progress"$'\n'
+  body+="phase: implementation"$'\n'
+  body+="ci_fix_attempts: 0"$'\n'
+  body+="review_cycles: 0"$'\n'
+  body+="implementation_complete: false"$'\n'
+  body+="commit_scope: ${commit_scope}"$'\n'
+  body+="last_updated: ${timestamp}"$'\n'
+  body+="watermark_review_id: 0"$'\n'
+  body+="watermark_comment_id: 0"$'\n'
+  body+="watermark_issue_comment_id: 0"$'\n'
+  body+="-->"
+
+  printf '%s\n' "$body"
+}
+
+# Appends a PR entry to active-prs.json atomically
+# Arguments:
+#   $1 - pr_number
+#   $2 - branch_name
+#   $3 - worktree_dir
+#   $4 - ticket_id (optional, pass "" for none)
+#   $5 - ticket_url (optional, pass "" for none)
+# Returns:
+#   0 on success
+append_active_pr() {
+  if [[ $# -lt 3 ]]; then
+    echo "Error: append_active_pr requires at least 3 arguments" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local branch_name="$2"
+  local worktree_dir="$3"
+  local ticket_id="${4:-}"
+  local ticket_url="${5:-}"
+
+  mkdir -p "$ACTIVE_PRS_DIR"
+
+  local existing="[]"
+  if [[ -f $ACTIVE_PRS_FILE ]]; then
+    existing=$(cat "$ACTIVE_PRS_FILE")
+  fi
+
+  local new_entry
+  new_entry=$(jq -cn \
+    --argjson pr_number "$pr_number" \
+    --arg branch_name "$branch_name" \
+    --arg worktree_dir "$worktree_dir" \
+    --arg ticket_id "$ticket_id" \
+    --arg ticket_url "$ticket_url" \
+    '{pr_number: $pr_number, branch_name: $branch_name, worktree_dir: $worktree_dir, ticket_id: $ticket_id, ticket_url: $ticket_url}')
+
+  local updated
+  updated=$(printf '%s\n' "$existing" | jq --argjson entry "$new_entry" '. + [$entry]')
+
+  # Atomic write: write to temp file, then move into place
+  local tmp_file="${ACTIVE_PRS_FILE}.tmp"
+  printf '%s\n' "$updated" > "$tmp_file"
+  mv "$tmp_file" "$ACTIVE_PRS_FILE"
+}
+
+# Creates an empty commit, pushes, and creates a draft PR
+# Arguments:
+#   $1 - worktree_dir
+#   --ticket-id ID (optional)
+#   --ticket-url URL (optional)
+# Returns:
+#   JSON: {pr_number, pr_url, branch_name} to stdout
+#   Exit 0 on success, non-zero on failure
+cmd_start_pr() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: requires at least 1 argument" >&2
+    echo "Usage: scripts/orchestrate start-pr <worktree_dir> [--ticket-id ID] [--ticket-url URL]" >&2
+    return 1
+  fi
+
+  local worktree_dir="$1"
+  shift
+
+  local ticket_id=""
+  local ticket_url=""
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --ticket-id)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --ticket-id requires a value" >&2
+          return 1
+        fi
+        ticket_id="$2"
+        shift 2
+        ;;
+      --ticket-url)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --ticket-url requires a value" >&2
+          return 1
+        fi
+        ticket_url="$2"
+        shift 2
+        ;;
+      *)
+        echo "Error: unknown option '$1'" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ ! -d $worktree_dir ]]; then
+    echo "Error: worktree directory does not exist: ${worktree_dir}" >&2
+    return 1
+  fi
+
+  # Resolve to canonical absolute path so active-prs.json always stores absolute paths
+  if ! worktree_dir=$(cd "$worktree_dir" && pwd -P); then
+    echo "Error: failed to resolve worktree directory to a canonical path: ${worktree_dir}" >&2
+    return 1
+  fi
+
+  # Get branch name from the worktree
+  local branch_name
+  branch_name=$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD)
+
+  if [[ -z $branch_name || $branch_name == "HEAD" ]]; then
+    echo "Error: could not determine branch name in ${worktree_dir}" >&2
+    return 1
+  fi
+
+  # Create empty commit
+  git -C "$worktree_dir" commit \
+    --allow-empty \
+    -m "chore: initial commit for draft PR" \
+    >&2
+
+  # Push to remote
+  git -C "$worktree_dir" push \
+    -u origin "$branch_name" \
+    >&2
+
+  # Derive PR title
+  local title
+  title=$(derive_pr_title "$branch_name" "$ticket_id")
+
+  # Generate PR body
+  local body
+  body=$(generate_pr_body "$ticket_id" "$ticket_url")
+
+  # Create draft PR — stdout captures the URL; stderr flows to caller naturally
+  local pr_url
+  pr_url=$(gh pr create \
+    --head "$branch_name" \
+    --draft \
+    --title "$title" \
+    --body "$body" \
+    --repo "$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')")
+
+  # Extract PR number from URL
+  # gh pr create outputs the PR URL to stdout
+  local pr_number
+  pr_number=$(printf '%s\n' "$pr_url" | grep -oE '[0-9]+$')
+
+  if [[ -z $pr_number ]]; then
+    echo "Error: failed to create draft PR — unexpected output: ${pr_url}" >&2
+    return 1
+  fi
+
+  # Append to active-prs.json
+  append_active_pr "$pr_number" "$branch_name" "$worktree_dir" "$ticket_id" "$ticket_url"
+
+  # Output result JSON
+  jq -cn \
+    --argjson pr_number "$pr_number" \
+    --arg pr_url "$pr_url" \
+    --arg branch_name "$branch_name" \
+    '{"pr_number":$pr_number,"pr_url":$pr_url,"branch_name":$branch_name}'
+}
+
+# ============================================================================
+# Shared helpers
+# ============================================================================
+
+# Returns the login of the currently authenticated gh user
+# Arguments: none
+# Returns:
+#   Outputs the login to stdout
+#   Exit code 0 on success, non-zero if not authenticated
+get_gh_user() {
+  if [[ $# -ne 0 ]]; then
+    echo "Error: get_gh_user takes no arguments" >&2
+    return 2
+  fi
+
+  gh api user --jq '.login'
+}
+
+# ============================================================================
+# poll subcommand functions
+# ============================================================================
+
+# Fetches PR state, author, and mergeability
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   JSON with pr_state, pr_author, mergeable to stdout
+get_pr_info() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: get_pr_info requires exactly 1 argument" >&2
+    echo "Usage: get_pr_info <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  retry 3 5 gh pr view "$pr_number" \
+    --json mergeStateStatus,state,author \
+    --jq '{pr_state: .state, pr_author: .author.login, mergeable: .mergeStateStatus}'
+}
+
+# Fetches the most recent Buildkite commit status
+# Arguments:
+#   $1 - sha: The commit SHA
+# Returns:
+#   JSON with bk_state, bk_desc, bk_url to stdout, or empty string if no BK status
+get_bk_status() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: get_bk_status requires exactly 1 argument" >&2
+    echo "Usage: get_bk_status <sha>" >&2
+    return 2
+  fi
+
+  local sha="$1"
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  retry 3 5 gh api "repos/${repo}/commits/${sha}/statuses" \
+    --jq '[.[] | select(.context | contains("buildkite"))] | sort_by(.updated_at) | last // empty | {bk_state: .state, bk_desc: .description, bk_url: .target_url}'
+}
+
+# Fetches ALL reviews for a PR (no watermark filtering)
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   JSON array of all reviews with id, state, body, user_login, user_type, commit_id
+fetch_all_reviews() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: fetch_all_reviews requires exactly 1 argument" >&2
+    echo "Usage: fetch_all_reviews <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/reviews" \
+    --paginate \
+    --jq "[.[] | {id: .id, state: .state, body: .body, user_login: .user.login, user_type: .user.type, commit_id: .commit_id}]"
+}
+
+# Fetches inline review comments newer than watermark, excluding agent replies
+# Arguments:
+#   $1 - pr_number
+#   $2 - watermark_id
+# Returns:
+#   JSON array of new non-agent comments
+fetch_new_comments() {
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Error: fetch_new_comments requires 1-2 arguments" >&2
+    echo "Usage: fetch_new_comments <pr_number> [watermark_id]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local watermark="${2:-0}"
+
+  if [[ ! $watermark =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$watermark'" >&2
+    return 2
+  fi
+
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments" \
+    --paginate \
+    --jq "[.[] | select(.id > ${watermark}) | select(.body | contains(\"<!-- agent-reply -->\") | not) | select(.user.type != \"Bot\" or .user.login == \"copilot\") | {id: .id, body: .body, path: .path, user_login: .user.login, user_type: .user.type, in_reply_to_id: .in_reply_to_id}]"
+}
+
+# Fetches issue comments newer than watermark, excluding agent replies and bots (except copilot)
+# Arguments:
+#   $1 - pr_number
+#   $2 - watermark_id
+# Returns:
+#   JSON array of new issue comments
+fetch_new_issue_comments() {
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Error: fetch_new_issue_comments requires 1-2 arguments" >&2
+    echo "Usage: fetch_new_issue_comments <pr_number> [watermark_id]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local watermark="${2:-0}"
+
+  if [[ ! $watermark =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$watermark'" >&2
+    return 2
+  fi
+
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  retry 3 5 gh api "repos/${repo}/issues/${pr_number}/comments" \
+    --paginate \
+    --jq "[.[] | select(.id > ${watermark}) | select(.body | contains(\"<!-- agent-reply -->\") | not) | select(.user.type != \"Bot\" or .user.login == \"copilot\") | {id: .id, body: .body, user_login: .user.login, user_type: .user.type}]"
+}
+
+# Fetches a single inline review comment by ID
+# Arguments:
+#   $1 - repo: owner/repo string
+#   $2 - comment_id
+# Returns:
+#   JSON with id, body, user_login, path to stdout
+fetch_parent_comment() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: fetch_parent_comment requires exactly 2 arguments" >&2
+    echo "Usage: fetch_parent_comment <repo> <comment_id>" >&2
+    return 2
+  fi
+
+  local repo="$1"
+  local comment_id="$2"
+
+  retry 3 5 gh api "repos/${repo}/pulls/comments/${comment_id}" \
+    --jq '{id: .id, body: .body, user_login: .user.login, path: .path}'
+}
+
+# Resolves thread context for comments that have in_reply_to_id
+# Uses a cache to avoid fetching the same parent comment multiple times
+# Arguments:
+#   $1 - repo: owner/repo string
+#   $2 - comments_json: JSON array of comments (may have in_reply_to_id)
+# Returns:
+#   Updated JSON array with thread_context added to comments that have in_reply_to_id
+resolve_thread_context() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: resolve_thread_context requires exactly 2 arguments" >&2
+    echo "Usage: resolve_thread_context <repo> <comments_json>" >&2
+    return 2
+  fi
+
+  local repo="$1"
+  local comments_json="$2"
+
+  # Extract unique parent IDs that need fetching
+  local parent_ids
+  parent_ids=$(echo "$comments_json" | jq -r '[.[] | select(.in_reply_to_id != null) | .in_reply_to_id] | unique | .[]')
+
+  if [[ -z $parent_ids ]]; then
+    echo "$comments_json"
+    return 0
+  fi
+
+  # Fetch parent comments and build cache JSON directly (no associative arrays,
+  # so this works on Bash 3.2+ including macOS default)
+  local cache_json="{}"
+  local parent_id
+  while IFS= read -r parent_id; do
+    if [[ -n $parent_id ]]; then
+      local parent_data
+      parent_data=$(fetch_parent_comment "$repo" "$parent_id") || {
+        echo "Warning: failed to fetch parent comment ${parent_id}" >&2
+        continue
+      }
+      cache_json=$(echo "$cache_json" | jq --arg key "$parent_id" --argjson val "$parent_data" '. + {($key): $val}')
+    fi
+  done <<< "$parent_ids"
+
+  # Merge thread_context into comments
+  echo "$comments_json" | jq --argjson cache "$cache_json" '
+    [.[] | if .in_reply_to_id != null and ($cache[(.in_reply_to_id | tostring)] != null)
+      then . + {thread_context: $cache[(.in_reply_to_id | tostring)]}
+      else .
+      end]
+  '
+}
+
+# Fetches inline review comments below watermark that lack terminal reactions from the agent
+# Terminal reactions: +1, -1, rocket
+# For each candidate comment, checks the reactions endpoint for per-user filtering
+# Arguments:
+#   $1 - pr_number
+#   $2 - watermark_id: Only return comments at or below this ID
+#   $3 - agent_login: The agent's GitHub login
+#   $4 - repo: Repository in owner/repo format (optional; resolved if omitted)
+# Returns:
+#   JSON array of unreacted comments
+fetch_unreacted_comments() {
+  if [[ $# -lt 3 || $# -gt 4 ]]; then
+    echo "Error: fetch_unreacted_comments requires 3 or 4 arguments" >&2
+    echo "Usage: fetch_unreacted_comments <pr_number> <watermark_id> <agent_login> [repo]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local watermark="$2"
+  local agent_login="$3"
+  local repo="${4:-}"
+
+  if [[ ! $watermark =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$watermark'" >&2
+    return 2
+  fi
+
+  if [[ -z $repo ]]; then
+    repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+  fi
+
+  # Fetch recent comments at or below watermark from non-agent, non-bot users.
+  # Use sort=created_at&direction=desc and per_page=100 to limit to the most
+  # recent page of comments, avoiding full pagination on large PRs.
+  # Best-effort: if the fetch fails, warn and return empty rather than aborting
+  # the poll, since --include-unreacted is supplemental.
+  local candidates
+  candidates=$(retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments?sort=created_at&direction=desc&per_page=100" \
+    --jq "[.[]
+      | select(.id <= ${watermark})
+      | select(.body | contains(\"<!-- agent-reply -->\") | not)
+      | select(.user.type != \"Bot\" or .user.login == \"copilot\")
+      | select(.user.login != \"${agent_login}\")
+      | {id: .id, body: .body, path: .path, user_login: .user.login, user_type: .user.type, in_reply_to_id: .in_reply_to_id}]") || {
+    echo "Warning: failed to fetch comments for unreacted scan, returning empty" >&2
+    echo "[]"
+    return 0
+  }
+
+  if [[ $(echo "$candidates" | jq 'length') -eq 0 ]]; then
+    echo "[]"
+    return 0
+  fi
+
+  # Cap candidates to the most recent 50 to avoid excessive API calls and rate
+  # limits on large PRs. Sort descending by ID so we check newest first.
+  candidates=$(echo "$candidates" | jq 'sort_by(-.id) | .[0:50]')
+
+  # For each candidate, check reactions for terminal agent reactions
+  # Check reactions per candidate. Best-effort: if a reactions call fails
+  # (rate limit, permissions), skip that comment rather than aborting the poll.
+  local result="[]"
+  local comment_id
+  for comment_id in $(echo "$candidates" | jq -r '.[].id'); do
+    local has_terminal
+    has_terminal=$(retry 3 5 gh api "repos/${repo}/pulls/comments/${comment_id}/reactions?per_page=100" \
+      --jq "[.[] | select(.user.login == \"${agent_login}\") | select(.content == \"+1\" or .content == \"-1\" or .content == \"rocket\")] | length") || {
+      echo "Warning: failed to fetch reactions for comment ${comment_id}, skipping" >&2
+      continue
+    }
+
+    if [[ $has_terminal -eq 0 ]]; then
+      local comment_json
+      comment_json=$(echo "$candidates" | jq --argjson cid "$comment_id" '[.[] | select(.id == $cid)] | .[0]')
+      result=$(echo "$result" | jq --argjson c "$comment_json" '. + [$c]')
+    fi
+  done
+
+  echo "$result"
+}
+
+# Computes the maximum ID from a JSON array, returning the watermark if array is empty
+# Arguments:
+#   $1 - json_array: JSON array with .id fields
+#   $2 - current_watermark: Fallback if array is empty
+# Returns:
+#   The maximum ID to stdout
+compute_max_id() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: compute_max_id requires exactly 2 arguments" >&2
+    echo "Usage: compute_max_id <json_array> <current_watermark>" >&2
+    return 2
+  fi
+
+  local json_array="$1"
+  local current_watermark="$2"
+  local max_id
+  max_id=$(echo "$json_array" | jq '[.[].id] | max // empty')
+
+  if [[ -z $max_id ]]; then
+    echo "$current_watermark"
+  else
+    echo "$max_id"
+  fi
+}
+
+# Computes approval state from all reviews
+# Arguments:
+#   $1 - all_reviews_json_array: Full review list (not watermark-filtered)
+# Returns:
+#   One of: APPROVED, CHANGES_REQUESTED, PENDING
+compute_approval_state() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: compute_approval_state requires exactly 1 argument" >&2
+    echo "Usage: compute_approval_state <all_reviews_json>" >&2
+    return 2
+  fi
+
+  local all_reviews="$1"
+
+  echo "$all_reviews" | jq -r '
+    [.[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")]
+    | sort_by(.user_login)
+    | group_by(.user_login)
+    | map(sort_by(.id) | last)
+    | if any(.state == "CHANGES_REQUESTED") then "CHANGES_REQUESTED"
+      elif any(.state == "APPROVED") then "APPROVED"
+      else "PENDING"
+      end
+  '
+}
+
+# Fetches ALL Copilot inline review comments (no watermark filtering)
+# Arguments:
+#   $1 - pr_number
+#   $2 - (optional) head_sha: If provided, filters to comments on this commit only
+# Returns:
+#   JSON array of Copilot comments with id, body, path, commit_id
+fetch_copilot_comments() {
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Error: fetch_copilot_comments requires 1-2 arguments" >&2
+    echo "Usage: fetch_copilot_comments <pr_number> [head_sha]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local head_sha="${2:-}"
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  # Use .[] (not wrapped in []) so pagination produces one item per line, then slurp into a single array
+  local jq_filter='.[] | select(.user.login | ascii_downcase | startswith("copilot")) | {id: .id, body: .body, path: .path, commit_id: .commit_id}'
+
+  local raw_comments
+  raw_comments=$(retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments" \
+    --paginate \
+    --jq "$jq_filter" | jq -s '.')
+
+  if [[ -n $head_sha ]]; then
+    echo "$raw_comments" | jq --arg sha "$head_sha" '[.[] | select(.commit_id == $sha)]'
+  else
+    echo "$raw_comments"
+  fi
+}
+
+# Enriches comment objects with their reactions from the GitHub API
+# Arguments:
+#   $1 - comments_json: JSON array of comments (must have .id field)
+# Returns:
+#   JSON array with .reactions added to each comment as an array of {content, user: {login}}
+enrich_with_reactions() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: enrich_with_reactions requires exactly 1 argument" >&2
+    echo "Usage: enrich_with_reactions <comments_json>" >&2
+    return 2
+  fi
+
+  local comments_json="$1"
+  local count
+  count=$(echo "$comments_json" | jq 'length')
+
+  if [[ $count -eq 0 ]]; then
+    echo "$comments_json"
+    return 0
+  fi
+
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  local result="$comments_json"
+  local i=0
+  while [[ $i -lt $count ]]; do
+    local comment_id
+    comment_id=$(echo "$comments_json" | jq -r ".[$i].id")
+
+    local reactions
+    reactions=$(retry 3 5 gh api "repos/${repo}/pulls/comments/${comment_id}/reactions" \
+      --paginate \
+      --jq '.[] | {content: .content, user: {login: .user.login}}' | jq -s '.') || reactions='[]'
+
+    result=$(echo "$result" | jq --argjson idx "$i" --argjson rxns "$reactions" '.[$idx].reactions = $rxns')
+    i=$((i + 1))
+  done
+
+  echo "$result"
+}
+
+# Fetches the login of the currently authenticated GitHub user
+# Returns:
+#   The login string to stdout
+get_authenticated_user() {
+  if [[ $# -ne 0 ]]; then
+    echo "Usage: get_authenticated_user" >&2
+    return 1
+  fi
+  retry 3 5 gh api user --jq '.login'
+}
+
+# poll subcommand main
+cmd_poll() {
+  local pr_number=""
+  local sha=""
+  local review_wm=0
+  local comment_wm=0
+  local issue_comment_wm=0
+  local include_unreacted=false
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --review-watermark)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --review-watermark requires a value" >&2
+          return 2
+        fi
+        review_wm="$2"
+        shift 2
+        ;;
+      --comment-watermark)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --comment-watermark requires a value" >&2
+          return 2
+        fi
+        comment_wm="$2"
+        shift 2
+        ;;
+      --issue-comment-watermark)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --issue-comment-watermark requires a value" >&2
+          return 2
+        fi
+        issue_comment_wm="$2"
+        shift 2
+        ;;
+      --include-unreacted)
+        include_unreacted=true
+        shift
+        ;;
+      -*)
+        echo "Error: unknown option $1" >&2
+        return 1
+        ;;
+      *)
+        if [[ -z $pr_number ]]; then
+          pr_number="$1"
+          shift
+        elif [[ -z $sha ]]; then
+          sha="$1"
+          shift
+        else
+          echo "Error: unexpected argument $1" >&2
+          return 1
+        fi
+        ;;
+    esac
+  done
+
+  if [[ -z $pr_number ]]; then
+    echo "Error: pr_number is required" >&2
+    echo "Usage: scripts/orchestrate poll <pr_number> <sha> [--review-watermark ID] [--comment-watermark ID] [--issue-comment-watermark ID] [--include-unreacted]" >&2
+    return 1
+  fi
+
+  if [[ -z $sha ]]; then
+    echo "Error: sha is required" >&2
+    echo "Usage: scripts/orchestrate poll <pr_number> <sha> [--review-watermark ID] [--comment-watermark ID] [--issue-comment-watermark ID] [--include-unreacted]" >&2
+    return 1
+  fi
+
+  # Validate watermarks are numeric
+  if [[ ! $review_wm =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$review_wm'" >&2
+    return 2
+  fi
+  if [[ ! $comment_wm =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$comment_wm'" >&2
+    return 2
+  fi
+  if [[ ! $issue_comment_wm =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$issue_comment_wm'" >&2
+    return 2
+  fi
+
+  local pr_info bk_status all_reviews new_reviews
+  local new_comments new_issue_comments approval_state
+
+  pr_info=$(get_pr_info "$pr_number")
+  bk_status=$(get_bk_status "$sha")
+  all_reviews=$(fetch_all_reviews "$pr_number")
+
+  # Filter all_reviews by watermark for new_reviews
+  new_reviews=$(echo "$all_reviews" | jq --argjson wm "$review_wm" '[.[] | select(.id > $wm)]')
+
+  new_comments=$(fetch_new_comments "$pr_number" "$comment_wm")
+  new_issue_comments=$(fetch_new_issue_comments "$pr_number" "$issue_comment_wm")
+  approval_state=$(compute_approval_state "$all_reviews")
+
+  # Fetch Copilot inline comments for clean review detection (short-circuit if no Copilot review)
+  # Copilot reviews use login "copilot-pull-request-reviewer[bot]"; inline comments use "Copilot"
+  local has_copilot_review
+  has_copilot_review=$(echo "$all_reviews" | jq 'any(.user_login | ascii_downcase | startswith("copilot"))')
+  local copilot_comments='[]'
+  local agent_login=""
+  if [[ $has_copilot_review == "true" ]]; then
+    local head_copilot_comments
+    head_copilot_comments=$(fetch_copilot_comments "$pr_number" "$sha")
+    copilot_comments=$(enrich_with_reactions "$head_copilot_comments")
+    agent_login=$(get_authenticated_user)
+  fi
+
+  # Resolve thread context only when there are reply comments (avoids an
+  # extra API call on every poll when no replies exist)
+  local has_replies
+  has_replies=$(echo "$new_comments" | jq '[.[] | select(.in_reply_to_id != null)] | length')
+  if [[ $has_replies -gt 0 ]]; then
+    local repo
+    repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+    new_comments=$(resolve_thread_context "$repo" "$new_comments")
+  fi
+
+  local new_review_wm new_comment_wm new_issue_comment_wm
+  new_review_wm=$(compute_max_id "$new_reviews" "$review_wm")
+  new_comment_wm=$(compute_max_id "$new_comments" "$comment_wm")
+  new_issue_comment_wm=$(compute_max_id "$new_issue_comments" "$issue_comment_wm")
+
+  # Build default bk fields for when no BK status exists
+  local bk_json
+  if [[ -z $bk_status ]]; then
+    bk_json='{"bk_state":"","bk_desc":"","bk_url":""}'
+  else
+    bk_json="$bk_status"
+  fi
+
+  # Fetch unreacted comments if requested
+  local unreacted_json="[]"
+  if [[ $include_unreacted == true ]]; then
+    local unreacted_agent_login
+    unreacted_agent_login=$(get_gh_user)
+    # Reuse $repo if already resolved during thread context; otherwise let the
+    # function resolve it internally.
+    unreacted_json=$(fetch_unreacted_comments "$pr_number" "$comment_wm" "$unreacted_agent_login" "${repo:-}")
+  fi
+
+  jq -n \
+    --argjson pr_info "$pr_info" \
+    --argjson bk "$bk_json" \
+    --argjson all_reviews "$all_reviews" \
+    --argjson reviews "$new_reviews" \
+    --argjson comments "$new_comments" \
+    --argjson issue_comments "$new_issue_comments" \
+    --argjson copilot_comments "$copilot_comments" \
+    --arg agent_login "$agent_login" \
+    --arg head_sha "$sha" \
+    --argjson unreacted "$unreacted_json" \
+    --arg approval_state "$approval_state" \
+    --arg review_wm "$new_review_wm" \
+    --arg comment_wm "$new_comment_wm" \
+    --arg issue_comment_wm "$new_issue_comment_wm" \
+    --argjson include_unreacted "$include_unreacted" \
+    '
+    $pr_info + $bk + {
+      bk_terminal: (($bk.bk_state == "error") or ($bk.bk_state == "failure" and ($bk.bk_desc | contains("failed")))),
+      approval_state: $approval_state,
+      has_new_feedback: (($reviews | length) > 0 or ($comments | length) > 0 or ($issue_comments | length) > 0),
+      copilot_clean_review: (
+        ($all_reviews | any(.user_login | ascii_downcase | startswith("copilot"))) and
+        ([$copilot_comments[]
+          | select(.commit_id == $head_sha)
+          | select(.reactions | all(
+              (.content != "+1" and .content != "-1") or .user.login != $agent_login
+            ))
+        ] | length == 0)
+      ),
+      reviews: $reviews,
+      comments: $comments,
+      issue_comments: $issue_comments,
+      watermarks: {
+        review: ($review_wm | tonumber),
+        comment: ($comment_wm | tonumber),
+        issue_comment: ($issue_comment_wm | tonumber)
+      }
+    } + (if $include_unreacted then {unreacted_comments: $unreacted} else {} end)
+    '
+}
+
+# ============================================================================
+# review subcommand functions
+# ============================================================================
+
+# Checks if Copilot has already been requested as a reviewer or has submitted a review
+# Arguments:
+#   $1 - pr_number: The pull request number
+# Returns:
+#   0 if Copilot review already exists, 1 otherwise
+has_copilot_review() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: has_copilot_review requires exactly 1 argument" >&2
+    echo "Usage: has_copilot_review <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  if gh pr view "$pr_number" --json reviewRequests \
+       --jq '.reviewRequests[].login' | grep -qx "copilot"; then
+    echo "Copilot review already requested" >&2
+    return 0
+  fi
+
+  if gh pr view "$pr_number" --json reviews \
+       --jq '.reviews[].author.login' | grep -qx "copilot"; then
+    echo "Copilot has already reviewed" >&2
+    return 0
+  fi
+
+  return 1
+}
+
+# Requests a Copilot review on a pull request
+# Arguments:
+#   $1 - pr_number: The pull request number
+# Returns:
+#   0 on success, non-zero on failure
+request_copilot_review() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: request_copilot_review requires exactly 1 argument" >&2
+    echo "Usage: request_copilot_review <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  gh pr edit "$pr_number" --add-reviewer @copilot
+}
+
+# Checks if ianwremmel already has a pending review request
+# Only checks reviewRequests (pending), not reviews (submitted). This allows
+# re-requesting review after ianwremmel submits CHANGES_REQUESTED and the
+# agent addresses the feedback.
+# Arguments:
+#   $1 - pr_number: The pull request number
+# Returns:
+#   0 if ianwremmel has a pending review request, 1 otherwise
+has_human_review() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: has_human_review requires exactly 1 argument" >&2
+    echo "Usage: has_human_review <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  if gh pr view "$pr_number" --json reviewRequests \
+       --jq '.reviewRequests[].login' | grep -qx "ianwremmel"; then
+    echo "ianwremmel review already requested" >&2
+    return 0
+  fi
+
+  return 1
+}
+
+# Requests a human review on a pull request
+# Arguments:
+#   $1 - pr_number: The pull request number
+# Returns:
+#   0 on success, non-zero on failure
+request_human_review() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: request_human_review requires exactly 1 argument" >&2
+    echo "Usage: request_human_review <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  gh pr edit "$pr_number" --add-reviewer ianwremmel
+}
+
+# review copilot subcommand main
+cmd_review_copilot() {
+  local force=false
+
+  if [[ $# -ge 1 ]] && [[ $1 == "--force" ]]; then
+    force=true
+    shift
+  fi
+
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate review copilot [--force] <pr_number>" >&2
+    return 1
+  fi
+
+  local pr_number="$1"
+  local current_user
+
+  if current_user=$(get_gh_user); then
+    if [[ $current_user == "ianwremmel" ]]; then
+      echo "Authenticated as ianwremmel, using existing credentials" >&2
+    else
+      if [[ -z ${GH_REVIEW_REQUEST_TOKEN:-} ]]; then
+        echo "Error: GH_REVIEW_REQUEST_TOKEN must be set when not authenticated as ianwremmel (current user: ${current_user})" >&2
+        return 1
+      fi
+      export GH_TOKEN="${GH_REVIEW_REQUEST_TOKEN}"
+    fi
+  else
+    if [[ -z ${GH_REVIEW_REQUEST_TOKEN:-} ]]; then
+      echo "Error: not authenticated with gh and GH_REVIEW_REQUEST_TOKEN is not set" >&2
+      return 1
+    fi
+    export GH_TOKEN="${GH_REVIEW_REQUEST_TOKEN}"
+  fi
+
+  if [[ $force == false ]] && has_copilot_review "$pr_number"; then
+    return 0
+  fi
+
+  echo "Requesting Copilot review for PR #${pr_number}" >&2
+  request_copilot_review "$pr_number"
+  echo "Copilot review requested successfully" >&2
+}
+
+# review human subcommand main
+cmd_review_human() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate review human <pr_number>" >&2
+    return 1
+  fi
+
+  local pr_number="$1"
+  local current_user
+
+  if ! current_user=$(get_gh_user); then
+    echo "Error: not authenticated with gh" >&2
+    return 1
+  fi
+
+  if [[ $current_user == "ianwremmel" ]]; then
+    echo "Authenticated as ianwremmel — cannot review own PR, skipping" >&2
+    return 0
+  fi
+
+  if has_human_review "$pr_number"; then
+    return 0
+  fi
+
+  echo "Requesting human review for PR #${pr_number}" >&2
+  request_human_review "$pr_number"
+  echo "Human review requested successfully" >&2
+}
+
+# review subcommand main
+cmd_review() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: requires at least 1 argument" >&2
+    echo "Usage: scripts/orchestrate review copilot [--force] <pr_number>" >&2
+    echo "       scripts/orchestrate review human <pr_number>" >&2
+    return 1
+  fi
+
+  local target="$1"
+  shift
+
+  case $target in
+    copilot)
+      cmd_review_copilot "$@"
+      ;;
+    human)
+      cmd_review_human "$@"
+      ;;
+    *)
+      echo "Error: unknown review target '${target}', expected 'copilot' or 'human'" >&2
+      return 1
+      ;;
+  esac
+}
+
+# ============================================================================
+# check-status subcommand functions
+# ============================================================================
+
+# Fetches compact PR status for polling (~4+ API calls; paginated)
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   JSON to stdout with merged, closed, ci_state, has_feedback, copilot_clean,
+#   labels, needs_copilot_request, approval_state
+#   Exit 0 on success (including when CI status fetch fails — reported as
+#   ci_state="error"). Exit 1 only when PR metadata or repo lookup fails.
+fetch_check_status() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: fetch_check_status requires exactly 1 argument" >&2
+    echo "Usage: fetch_check_status <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  # API call 1: PR metadata (state, labels, reviews, review requests, head SHA)
+  local pr_data
+  if ! pr_data=$(retry 3 5 gh pr view "$pr_number" \
+    --json state,labels,reviews,reviewRequests,headRefOid \
+    --jq '{
+      state: .state,
+      labels: [.labels[].name],
+      reviews: [.reviews[] | {state: .state, author: .author.login}],
+      review_requests: [.reviewRequests[].login // empty | select(type == "string")],
+      head_sha: .headRefOid
+    }'); then
+    echo "Error: failed to fetch PR #${pr_number}" >&2
+    return 1
+  fi
+
+  local pr_state
+  pr_state=$(echo "$pr_data" | jq -r '.state')
+  local head_sha
+  head_sha=$(echo "$pr_data" | jq -r '.head_sha')
+  local merged=false
+  local closed=false
+
+  if [[ $pr_state == "MERGED" ]]; then
+    merged=true
+  fi
+  if [[ $pr_state == "CLOSED" ]]; then
+    closed=true
+  fi
+
+  # Repo name — needed by both CI status and inline comment API calls
+  local repo
+  if ! repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner'); then
+    echo "Error: failed to determine repository name" >&2
+    return 1
+  fi
+
+  # API call 2: CI status from commit statuses
+  local ci_state="pending"
+  if [[ -n $head_sha ]] && [[ $head_sha != "null" ]]; then
+    local bk_status
+    if bk_status=$(retry 3 5 gh api "repos/${repo}/commits/${head_sha}/statuses" \
+      --jq '[.[] | select(.context | contains("buildkite"))] | sort_by(.updated_at) | last // empty | .state'); then
+      if [[ -n $bk_status ]]; then
+        ci_state="$bk_status"
+      fi
+    else
+      ci_state="error"
+    fi
+  fi
+
+  # Compute approval_state from reviews (last review per author wins)
+  # Filter out copilot reviews, sort by author for group_by, then pick the
+  # last actionable review per author (sorted by array index as proxy for time)
+  local approval_state
+  approval_state=$(echo "$pr_data" | jq -r '
+    [.reviews[] | select(.author | ascii_downcase | startswith("copilot") | not)]
+    | [to_entries[] | .value + {idx: .key}]
+    | [.[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")]
+    | sort_by(.author)
+    | group_by(.author)
+    | map(sort_by(.idx) | last)
+    | if any(.state == "CHANGES_REQUESTED") then "CHANGES_REQUESTED"
+      elif any(.state == "APPROVED") then "APPROVED"
+      else "PENDING"
+      end
+  ')
+
+  # API call 3: Fetch inline comments to detect unresolved feedback.
+  # Without this, we miss Copilot suggestions and human inline comments that
+  # don't use CHANGES_REQUESTED review state.
+  local inline_comments='[]'
+  local inline_comments_raw
+  if inline_comments_raw=$(retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments" \
+    --paginate \
+    --jq '.[] | {id: .id, user_login: .user.login, user_type: .user.type, body: .body, in_reply_to_id: .in_reply_to_id}' \
+    | jq -s '.'); then
+    inline_comments="$inline_comments_raw"
+  else
+    # Comment fetch failed — assume unresolved feedback exists so we don't
+    # silently skip review comments due to a transient API error.
+    echo "Warning: failed to fetch inline comments for PR #${pr_number}" >&2
+    inline_comments='[{"_fetch_error": true}]'
+  fi
+
+  # Identify top-level (non-reply) comments that are NOT agent replies.
+  # A comment is "addressed" if it has an agent reply (a reply with
+  # "<!-- agent-reply -->" in the body). Comments without agent replies are
+  # unresolved feedback.
+  # If comment fetch failed, assume unresolved feedback to be safe
+  local unresolved_human_count=0
+  local unresolved_copilot_count=0
+  # Only exit code needed — check if sentinel was set by failed API call
+  if echo "$inline_comments" | jq -e '.[0]._fetch_error // false' > /dev/null 2>&1; then
+    unresolved_human_count=1
+    unresolved_copilot_count=1
+  else
+    local agent_reply_parent_ids
+    agent_reply_parent_ids=$(echo "$inline_comments" | jq '[.[] | select(.body | contains("<!-- agent-reply -->")) | .in_reply_to_id] | unique')
+
+    # Unresolved human comments: top-level non-bot comments without an agent reply.
+    # Only reply comments (in_reply_to_id != null) carry the agent-reply marker;
+    # top-level comments are resolved when their id appears in $replied.
+    unresolved_human_count=$(echo "$inline_comments" | jq --argjson replied "$agent_reply_parent_ids" '
+      [.[]
+        | select(.user_type != "Bot")
+        | select(.in_reply_to_id == null)
+        | select([.id] | inside($replied) | not)
+      ] | length
+    ')
+
+    # Unresolved Copilot comments: top-level Copilot comments without an agent reply
+    unresolved_copilot_count=$(echo "$inline_comments" | jq --argjson replied "$agent_reply_parent_ids" '
+      [.[]
+        | select(.user_login | ascii_downcase | startswith("copilot"))
+        | select(.in_reply_to_id == null)
+        | select([.id] | inside($replied) | not)
+      ] | length
+    ')
+  fi
+
+  # Compute has_feedback: true if CHANGES_REQUESTED OR unresolved inline comments
+  local has_feedback
+  local has_changes_requested
+  has_changes_requested=$(echo "$pr_data" | jq -r '
+    ([.reviews[] | select(.author | ascii_downcase | startswith("copilot") | not) | select(.state == "CHANGES_REQUESTED")] | length > 0)
+  ')
+  if [[ $has_changes_requested == "true" ]] || [[ $unresolved_human_count -gt 0 ]]; then
+    has_feedback=true
+  else
+    has_feedback=false
+  fi
+
+  # Compute copilot_clean: copilot has reviewed AND has no unresolved comments
+  # AND is not currently pending re-review
+  local copilot_has_reviewed
+  copilot_has_reviewed=$(echo "$pr_data" | jq -r '
+    [.reviews[] | select(.author | ascii_downcase | startswith("copilot"))] | length > 0
+  ')
+
+  local copilot_requested
+  copilot_requested=$(echo "$pr_data" | jq -r '
+    [.review_requests[] | select(ascii_downcase | startswith("copilot"))] | length > 0
+  ')
+
+  local copilot_clean=false
+  if [[ $copilot_has_reviewed == "true" ]] && [[ $copilot_requested == "false" ]] && [[ $unresolved_copilot_count -eq 0 ]]; then
+    copilot_clean=true
+  fi
+
+  # needs_copilot_request: copilot has never reviewed AND is not currently requested
+  local needs_copilot_request=false
+  if [[ $copilot_has_reviewed == "false" ]] && [[ $copilot_requested == "false" ]]; then
+    needs_copilot_request=true
+  fi
+
+  # Extract labels array
+  local labels
+  labels=$(echo "$pr_data" | jq -c '.labels')
+
+  # Assemble output JSON
+  jq -n \
+    --argjson merged "$merged" \
+    --argjson closed "$closed" \
+    --arg ci_state "$ci_state" \
+    --argjson has_feedback "$has_feedback" \
+    --argjson copilot_clean "$copilot_clean" \
+    --argjson labels "$labels" \
+    --argjson needs_copilot_request "$needs_copilot_request" \
+    --arg approval_state "$approval_state" \
+    '{
+      merged: $merged,
+      closed: $closed,
+      ci_state: $ci_state,
+      has_feedback: $has_feedback,
+      copilot_clean: $copilot_clean,
+      labels: $labels,
+      needs_copilot_request: $needs_copilot_request,
+      approval_state: $approval_state
+    }'
+}
+
+# check-status subcommand main
+cmd_check_status() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate check-status <pr_number>" >&2
+    return 1
+  fi
+
+  fetch_check_status "$1"
+}
+
+# ============================================================================
+# debug subcommand functions
+# ============================================================================
+
+# Fetches comprehensive PR debug state
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   JSON with full PR debug state to stdout
+fetch_debug_state() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: fetch_debug_state requires exactly 1 argument" >&2
+    echo "Usage: fetch_debug_state <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  # Fetch extended PR metadata
+  local pr_data
+  if ! pr_data=$(retry 3 5 gh pr view "$pr_number" \
+    --json state,labels,reviews,reviewRequests,headRefOid,headRefName,isDraft,title,body,statusCheckRollup \
+    --jq '{
+      state: .state,
+      title: .title,
+      is_draft: .isDraft,
+      labels: [.labels[].name],
+      reviews: [.reviews[] | {state: .state, author: .author.login}],
+      review_requests: [.reviewRequests[].login // empty | select(type == "string")],
+      head_sha: .headRefOid,
+      head_branch: .headRefName,
+      body: .body,
+      checks: [(.statusCheckRollup // [])[] | {name: .name, status: .status, conclusion: .conclusion}]
+    }'); then
+    echo "Error: failed to fetch PR #${pr_number}" >&2
+    return 1
+  fi
+
+  local pr_state
+  pr_state=$(echo "$pr_data" | jq -r '.state')
+  local head_sha
+  head_sha=$(echo "$pr_data" | jq -r '.head_sha')
+  local head_branch
+  head_branch=$(echo "$pr_data" | jq -r '.head_branch')
+
+  # Extract progress block from PR body
+  local body
+  body=$(echo "$pr_data" | jq -r '.body // ""')
+  local progress_yaml=""
+  if [[ -n $body ]]; then
+    progress_yaml=$(extract_progress "$body")
+  fi
+
+  # Convert progress YAML to JSON object
+  local progress_json="{}"
+  if [[ -n $progress_yaml ]]; then
+    progress_json=$(echo "$progress_yaml" | awk -F': ' '
+      BEGIN { printf "{" }
+      NR > 1 { printf "," }
+      {
+        key=$1
+        val=$2
+        gsub(/^ +| +$/, "", key)
+        gsub(/^ +| +$/, "", val)
+        if (val == "true" || val == "false" || val ~ /^[0-9]+$/) {
+          printf "\"%s\":%s", key, val
+        } else {
+          gsub(/"/, "\\\"", val)
+          printf "\"%s\":\"%s\"", key, val
+        }
+      }
+      END { printf "}" }
+    ')
+    # Validate the JSON; fall back to empty object if malformed
+    if ! echo "$progress_json" | jq . >/dev/null 2>&1; then
+      progress_json="{}"
+    fi
+  fi
+
+  # CI state from commit statuses
+  local ci_state="pending"
+  if [[ -n $head_sha ]] && [[ $head_sha != "null" ]]; then
+    local repo
+    if repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner'); then
+      local bk_status
+      if bk_status=$(retry 3 5 gh api "repos/${repo}/commits/${head_sha}/statuses" \
+        --jq '[.[] | select(.context | contains("buildkite"))] | sort_by(.updated_at) | last // empty | .state'); then
+        if [[ -n $bk_status ]]; then
+          ci_state="$bk_status"
+        fi
+      else
+        ci_state="error"
+      fi
+    else
+      ci_state="error"
+    fi
+  fi
+
+  # Fetch recent comments with reactions
+  local comments_json="[]"
+  if [[ -n $head_sha ]] && [[ $head_sha != "null" ]]; then
+    local repo
+    repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner') || repo=""
+    if [[ -n $repo ]]; then
+      # Fetch up to 10 recent issue comments with reactions
+      local issue_comments
+      if issue_comments=$(retry 3 5 gh api "repos/${repo}/issues/${pr_number}/comments?per_page=10&direction=desc" \
+        --jq '[.[] | {id: .id, author: .user.login, created_at: .created_at, body: (.body | if length > 200 then .[:200] + "..." else . end), reactions: {total_count: .reactions.total_count, "+1": .reactions["+1"], "-1": .reactions["-1"], eyes: .reactions.eyes, rocket: .reactions.rocket, confused: .reactions.confused}}]' 2>/dev/null); then
+        comments_json="$issue_comments"
+      fi
+    fi
+  fi
+
+  # Worktree info
+  local worktree_json="{}"
+  local worktree_list
+  worktree_list=$(git worktree list --porcelain 2>/dev/null) || worktree_list=""
+  if [[ -n $worktree_list ]] && [[ -n $head_branch ]]; then
+    local worktree_path
+    worktree_path=$(printf '%s\n' "$worktree_list" \
+      | awk -v branch="branch refs/heads/${head_branch}" '
+        /^worktree / { path = substr($0, 10) }
+        $0 == branch { print path; exit }
+      ')
+    if [[ -n $worktree_path ]]; then
+      local worktree_exists=false
+      if [[ -d $worktree_path ]]; then
+        worktree_exists=true
+      fi
+      worktree_json=$(jq -cn \
+        --arg path "$worktree_path" \
+        --argjson exists "$worktree_exists" \
+        '{"path":$path,"exists":$exists}')
+    fi
+  fi
+
+  # Lock file
+  local lock_json="null"
+  local lock_file="/tmp/claude/project-state/locks/${pr_number}.json"
+  if [[ -f $lock_file ]]; then
+    local lock_content
+    if lock_content=$(jq -c '.' "$lock_file" 2>/dev/null); then
+      local lock_mtime
+      lock_mtime=$(stat -c '%Y' "$lock_file" 2>/dev/null) || lock_mtime=""
+      local lock_age_minutes=""
+      if [[ -n $lock_mtime ]]; then
+        local now
+        now=$(date +%s)
+        lock_age_minutes=$(( (now - lock_mtime) / 60 ))
+      fi
+      lock_json=$(jq -cn \
+        --argjson content "$lock_content" \
+        --arg age_minutes "${lock_age_minutes}" \
+        '{"content":$content,"age_minutes":($age_minutes | if . == "" then null else tonumber end)}')
+    fi
+  fi
+
+  # Status files
+  local status_files_json="[]"
+  local status_dir="/tmp/claude/issue-status"
+  if [[ -d $status_dir ]]; then
+    local status_entries="[]"
+    local found_files=false
+    for status_file in "${status_dir}"/*.json; do
+      if [[ -f $status_file ]]; then
+        found_files=true
+        local filename
+        filename=$(basename "$status_file")
+        local file_content
+        if file_content=$(jq -c '.' "$status_file" 2>/dev/null); then
+          status_entries=$(echo "$status_entries" | jq \
+            --arg name "$filename" \
+            --argjson content "$file_content" \
+            '. + [{"file": $name, "content": $content}]')
+        fi
+      fi
+    done
+    if [[ $found_files == true ]]; then
+      status_files_json="$status_entries"
+    fi
+  fi
+
+  # Assemble output JSON
+  jq -n \
+    --arg pr_number "$pr_number" \
+    --arg state "$pr_state" \
+    --arg title "$(echo "$pr_data" | jq -r '.title')" \
+    --argjson is_draft "$(echo "$pr_data" | jq '.is_draft')" \
+    --arg head_sha "$head_sha" \
+    --arg head_branch "$head_branch" \
+    --argjson labels "$(echo "$pr_data" | jq -c '.labels')" \
+    --arg ci_state "$ci_state" \
+    --argjson checks "$(echo "$pr_data" | jq -c '.checks')" \
+    --argjson reviews "$(echo "$pr_data" | jq -c '.reviews')" \
+    --argjson review_requests "$(echo "$pr_data" | jq -c '.review_requests')" \
+    --argjson progress "$progress_json" \
+    --argjson recent_comments "$comments_json" \
+    --argjson worktree "$worktree_json" \
+    --argjson status_files "$status_files_json" \
+    --argjson lock "$lock_json" \
+    '{
+      pr_number: $pr_number,
+      state: $state,
+      title: $title,
+      is_draft: $is_draft,
+      head_sha: $head_sha,
+      head_branch: $head_branch,
+      labels: $labels,
+      ci_state: $ci_state,
+      checks: $checks,
+      reviews: $reviews,
+      review_requests: $review_requests,
+      progress: $progress,
+      recent_comments: $recent_comments,
+      worktree: $worktree,
+      status_files: $status_files,
+      lock: $lock
+    }'
+}
+
+# debug subcommand main
+cmd_debug() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate debug <pr_number>" >&2
+    return 1
+  fi
+
+  fetch_debug_state "$1"
+}
+
+# ============================================================================
+# Top-level dispatch
+# ============================================================================
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: subcommand required" >&2
+    echo "Usage: scripts/orchestrate <subcommand> [args...]" >&2
+    return 1
+  fi
+
+  local subcommand="$1"
+  shift
+
+  case $subcommand in
+    progress)
+      cmd_progress "$@"
+      ;;
+    reply)
+      cmd_reply "$@"
+      ;;
+    ready)
+      cmd_ready "$@"
+      ;;
+    setup)
+      cmd_setup "$@"
+      ;;
+    find-worktree)
+      cmd_find_worktree "$@"
+      ;;
+    react)
+      cmd_react "$@"
+      ;;
+    label)
+      cmd_label "$@"
+      ;;
+    start-pr)
+      cmd_start_pr "$@"
+      ;;
+    poll)
+      cmd_poll "$@"
+      ;;
+    review)
+      cmd_review "$@"
+      ;;
+    check-status)
+      cmd_check_status "$@"
+      ;;
+    debug)
+      cmd_debug "$@"
+      ;;
+    *)
+      echo "Error: unknown subcommand '${subcommand}'" >&2
+      echo "Usage: scripts/orchestrate <subcommand> [args...]" >&2
+      return 1
+      ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

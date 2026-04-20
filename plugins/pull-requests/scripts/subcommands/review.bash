@@ -23,6 +23,10 @@ cmd_review_copilot() {
 
   local pr_number="$1"
   local current_user
+  # Blank token means "keep existing gh credentials"; a non-empty token
+  # is rotated in only for this request via a subshell below so GH_TOKEN
+  # never leaks into the caller's shell state.
+  local rotate_token=""
 
   if current_user=$(get_gh_user); then
     if [[ $current_user == "ianwremmel" ]]; then
@@ -32,23 +36,28 @@ cmd_review_copilot() {
         echo "Error: GH_REVIEW_REQUEST_TOKEN must be set when not authenticated as ianwremmel (current user: ${current_user})" >&2
         return 1
       fi
-      export GH_TOKEN="${GH_REVIEW_REQUEST_TOKEN}"
+      rotate_token="${GH_REVIEW_REQUEST_TOKEN}"
     fi
   else
     if [[ -z ${GH_REVIEW_REQUEST_TOKEN:-} ]]; then
       echo "Error: not authenticated with gh and GH_REVIEW_REQUEST_TOKEN is not set" >&2
       return 1
     fi
-    export GH_TOKEN="${GH_REVIEW_REQUEST_TOKEN}"
+    rotate_token="${GH_REVIEW_REQUEST_TOKEN}"
   fi
 
-  if [[ $force == false ]] && has_copilot_review "$pr_number"; then
-    return 0
-  fi
+  # Wrap the gh calls in a subshell so `export GH_TOKEN=...` stays local.
+  (
+    [[ -n $rotate_token ]] && export GH_TOKEN="$rotate_token"
 
-  echo "Requesting Copilot review for PR #${pr_number}" >&2
-  request_copilot_review "$pr_number"
-  echo "Copilot review requested successfully" >&2
+    if [[ $force == false ]] && has_copilot_review "$pr_number"; then
+      exit 0
+    fi
+
+    echo "Requesting Copilot review for PR #${pr_number}" >&2
+    request_copilot_review "$pr_number"
+    echo "Copilot review requested successfully" >&2
+  )
 }
 
 # review human subcommand main

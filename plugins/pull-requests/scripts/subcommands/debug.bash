@@ -144,7 +144,10 @@ fetch_debug_state() {
     local lock_content
     if lock_content=$(jq -c '.' "$lock_file" 2>/dev/null); then
       local lock_mtime
-      lock_mtime=$(stat -c '%Y' "$lock_file" 2>/dev/null) || lock_mtime=""
+      # GNU (`stat -c %Y`) on Linux, BSD (`stat -f %m`) on macOS.
+      lock_mtime=$(stat -c '%Y' "$lock_file" 2>/dev/null \
+                   || stat -f '%m' "$lock_file" 2>/dev/null \
+                   || echo "")
       local lock_age_minutes=""
       if [[ -n $lock_mtime ]]; then
         local now

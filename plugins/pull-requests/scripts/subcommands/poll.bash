@@ -108,11 +108,12 @@ cmd_poll() {
 
   # Fetch Copilot inline comments for clean review detection (short-circuit if no Copilot review)
   # Copilot reviews use login "copilot-pull-request-reviewer[bot]"; inline comments use "Copilot"
-  local has_copilot_review
-  has_copilot_review=$(echo "$all_reviews" | jq 'any(.user_login | ascii_downcase | startswith("copilot"))')
+  # Local name differs from the `has_copilot_review` function in lib/reviews to avoid reader confusion.
+  local copilot_has_reviewed
+  copilot_has_reviewed=$(echo "$all_reviews" | jq 'any(.user_login | ascii_downcase | startswith("copilot"))')
   local copilot_comments='[]'
   local agent_login=""
-  if [[ $has_copilot_review == "true" ]]; then
+  if [[ $copilot_has_reviewed == "true" ]]; then
     local head_copilot_comments
     head_copilot_comments=$(fetch_copilot_comments "$pr_number" "$sha")
     copilot_comments=$(enrich_with_reactions "$head_copilot_comments")

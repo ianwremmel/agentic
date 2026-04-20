@@ -227,6 +227,31 @@ setup() {
   [[ $output == *"GH_TOKEN=test-token-123"* ]]
 }
 
+@test "cmd_review_copilot does not leak GH_TOKEN into the calling shell" {
+  unset GH_TOKEN
+  export GH_REVIEW_REQUEST_TOKEN="test-token-abc"
+
+  gh() {
+    if [[ $2 == "user" ]]; then
+      echo "ci-bot"
+    elif [[ $2 == "edit" ]]; then
+      :  # succeed silently
+    elif [[ ${5:-} == "reviewRequests" ]]; then
+      echo "other-user"
+    elif [[ ${5:-} == "reviews" ]]; then
+      echo "other-user"
+    fi
+  }
+  export -f gh
+
+  # Call directly (not through `run`) so post-call env changes are
+  # visible in the bats test shell.
+  cmd_review_copilot "42"
+
+  # GH_TOKEN must still be unset in the caller's shell.
+  [[ -z ${GH_TOKEN:-} ]]
+}
+
 @test "cmd_review_copilot requests review when gh auth fails but GH_REVIEW_REQUEST_TOKEN is set" {
   unset GH_TOKEN
   export GH_REVIEW_REQUEST_TOKEN="test-token-123"

@@ -211,6 +211,32 @@ setup() {
   [[ $output == "CHANGES_REQUESTED" ]]
 }
 
+@test "compute_approval_state ignores copilot reviews (match check-status)" {
+  # Copilot APPROVED alone should not flip the state to APPROVED, because
+  # check-status's has_changes_requested / has_copilot_review logic ignores
+  # copilot for this purpose.
+  run compute_approval_state '[{"id":1,"state":"APPROVED","user_login":"copilot"}]'
+
+  [[ $status -eq 0 ]]
+  [[ $output == "PENDING" ]]
+}
+
+@test "compute_approval_state ignores copilot CHANGES_REQUESTED" {
+  # Copilot-only feedback should not propagate up as CHANGES_REQUESTED here;
+  # poll exposes copilot feedback via unresolved_copilot_comments instead.
+  run compute_approval_state '[{"id":1,"state":"APPROVED","user_login":"alice"},{"id":2,"state":"CHANGES_REQUESTED","user_login":"copilot"}]'
+
+  [[ $status -eq 0 ]]
+  [[ $output == "APPROVED" ]]
+}
+
+@test "compute_approval_state is case-insensitive for copilot filter" {
+  run compute_approval_state '[{"id":1,"state":"APPROVED","user_login":"CopilotBot"}]'
+
+  [[ $status -eq 0 ]]
+  [[ $output == "PENDING" ]]
+}
+
 @test "bk_terminal is true for failed" {
   local result
   result=$(jq -n --argjson bk '{"bk_state":"failure","bk_desc":"Build #123 failed"}' \

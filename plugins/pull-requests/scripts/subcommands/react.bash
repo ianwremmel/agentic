@@ -61,7 +61,7 @@ cmd_react() {
   esac
 
   local repo
-  repo=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
 
   local api_path
   if [[ $comment_type == "inline" ]]; then

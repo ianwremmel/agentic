@@ -28,7 +28,9 @@ fetch_all_reviews() {
     --jq "[.[] | {id: .id, state: .state, body: .body, user_login: .user.login, user_type: .user.type, commit_id: .commit_id}]"
 }
 
-# Computes approval state from all reviews
+# Computes approval state from all reviews.
+# Copilot reviews are excluded so `poll`'s approval_state agrees with
+# `check-status`, which also ignores copilot for this purpose.
 # Arguments:
 #   $1 - all_reviews_json_array: Full review list (not watermark-filtered)
 # Returns:
@@ -43,7 +45,10 @@ compute_approval_state() {
   local all_reviews="$1"
 
   echo "$all_reviews" | jq -r '
-    [.[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")]
+    [.[]
+      | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+      | select((.user_login // "") | ascii_downcase | startswith("copilot") | not)
+    ]
     | sort_by(.user_login)
     | group_by(.user_login)
     | map(sort_by(.id) | last)

@@ -105,45 +105,49 @@ request_copilot_review() {
   gh pr edit "$pr_number" --add-reviewer @copilot
 }
 
-# Checks if ianwremmel already has a pending review request
-# Only checks reviewRequests (pending), not reviews (submitted). This allows
-# re-requesting review after ianwremmel submits CHANGES_REQUESTED and the
-# agent addresses the feedback.
+# Checks whether a specific human reviewer has a pending review request
+# on a PR. Only checks reviewRequests (pending), not reviews (submitted),
+# so callers can re-request review after the reviewer submits
+# CHANGES_REQUESTED and the agent addresses the feedback.
 # Arguments:
-#   $1 - pr_number: The pull request number
+#   $1 - reviewer: The reviewer's GitHub login
+#   $2 - pr_number: The pull request number
 # Returns:
-#   0 if ianwremmel has a pending review request, 1 otherwise
-has_human_review() {
-  if [[ $# -ne 1 ]]; then
-    echo "Error: has_human_review requires exactly 1 argument" >&2
-    echo "Usage: has_human_review <pr_number>" >&2
+#   0 if the reviewer has a pending review request, 1 otherwise
+has_human_review_request() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: has_human_review_request requires exactly 2 arguments" >&2
+    echo "Usage: has_human_review_request <reviewer> <pr_number>" >&2
     return 2
   fi
 
-  local pr_number="$1"
+  local reviewer="$1"
+  local pr_number="$2"
 
   if gh pr view "$pr_number" --json reviewRequests \
-       --jq '.reviewRequests[].login' | grep -qx "ianwremmel"; then
-    echo "ianwremmel review already requested" >&2
+       --jq '.reviewRequests[].login' | grep -qx "$reviewer"; then
+    echo "Review from ${reviewer} already requested" >&2
     return 0
   fi
 
   return 1
 }
 
-# Requests a human review on a pull request
+# Requests a review from a specific human reviewer on a pull request.
 # Arguments:
-#   $1 - pr_number: The pull request number
+#   $1 - reviewer: The reviewer's GitHub login
+#   $2 - pr_number: The pull request number
 # Returns:
 #   0 on success, non-zero on failure
 request_human_review() {
-  if [[ $# -ne 1 ]]; then
-    echo "Error: request_human_review requires exactly 1 argument" >&2
-    echo "Usage: request_human_review <pr_number>" >&2
+  if [[ $# -ne 2 ]]; then
+    echo "Error: request_human_review requires exactly 2 arguments" >&2
+    echo "Usage: request_human_review <reviewer> <pr_number>" >&2
     return 2
   fi
 
-  local pr_number="$1"
+  local reviewer="$1"
+  local pr_number="$2"
 
-  gh pr edit "$pr_number" --add-reviewer ianwremmel
+  gh pr edit "$pr_number" --add-reviewer "$reviewer"
 }

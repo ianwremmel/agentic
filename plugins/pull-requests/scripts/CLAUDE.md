@@ -7,7 +7,8 @@ Bash automation that backs the `pull-requests` plugin's skills and agents.
 ```
 scripts/
 ├── orchestrate          # Thin entry point. Sources lib/ + subcommands/ and dispatches.
-├── orchestrate.bats     # Integration tests; sources orchestrate (which loads everything).
+├── orchestrate.bats     # Script-structure + top-level dispatch tests only.
+├── test-helpers.bash    # Shared mocks (retry override, _apply_jq_from_args, strict mode) sourced by every .bats.
 ├── lib/                 # Shared helpers, sourced by subcommands. Idempotent via load guards.
 ├── subcommands/         # One file per `orchestrate <subcommand>` implementation.
 └── buildkite/           # Standalone Buildkite CLI helpers (executed directly, not through orchestrate).
@@ -38,19 +39,33 @@ Single entry point for everything PR-related. Run `scripts/orchestrate
 
 ## Tests
 
-Run all bats tests from the plugin root:
+Tests live alongside the module they cover and source only that module
+(plus `scripts/test-helpers.bash` for shared mocks). Run everything from
+the plugin root:
 
 ```sh
 cd plugins/pull-requests
 bats scripts/orchestrate.bats \
      scripts/lib/*.bats \
+     scripts/subcommands/*.bats \
      scripts/buildkite/*.bats
 ```
 
-`scripts/orchestrate.bats` is the integration test: it sources orchestrate
-(which loads every module) and exercises the public function surface. The
-tests in `lib/_retry.bats` and `buildkite/*.bats` test those modules in
-isolation.
+- `scripts/orchestrate.bats` — script-structure checks and top-level
+  dispatch (`main` requires a subcommand, rejects unknown ones, routes
+  to each `cmd_*`).
+- `scripts/lib/*.bats` — unit tests for shared helpers: `_retry.bats`
+  (retry behavior) and `gh-auth.bats` (`is_human_auth`, `wrap_agent_body`,
+  `get_gh_user`).
+- `scripts/subcommands/*.bats` — one file per subcommand, exercising
+  `cmd_<name>` plus any helpers used exclusively by that subcommand.
+  Tests source the subcommand file, which transitively sources the
+  `lib/` modules it depends on (via load guards).
+- `scripts/buildkite/*.bats` — the standalone CLI helpers.
+- `scripts/test-helpers.bash` — sets strict mode (`set -euo pipefail`),
+  overrides `retry` to run commands immediately without sleeping, and
+  defines `_apply_jq_from_args` (tests provide `_gh_raw_data` and call
+  the helper through a mocked `gh`).
 
 ## Adding a new subcommand
 
@@ -58,6 +73,8 @@ isolation.
    Source the `lib/*` modules it needs.
 2. Add `source "$SCRIPTS_DIR/subcommands/<name>"` to `orchestrate`.
 3. Add the dispatch case to `orchestrate`'s `main()`.
-4. Add tests to `orchestrate.bats` under a new `# === <name> subcommand
-   tests ===` section, or split them into `subcommands/<name>.bats` if
-   the section grows large.
+4. Create `subcommands/<name>.bats` with a `setup()` that sources the
+   new subcommand file and `test-helpers.bash`. Cover `cmd_<name>` and
+   any subcommand-local helpers.
+5. Add a `main dispatches to <name>` test to `orchestrate.bats`
+   (alongside the existing dispatch tests).

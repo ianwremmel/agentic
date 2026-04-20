@@ -35,3 +35,6 @@ Shared helper functions, sourced (never executed). Each file:
 3. Have any `subcommands/*` module that uses it source it directly too —
    the load guard means there is no double-source cost, and direct
    sourcing keeps the dependency explicit.
+4. If the module adds widely-useful behavior that deserves direct unit
+   tests, create `lib/<name>.bats` alongside it. See `_retry.bats` and
+   `gh-auth.bats` for the pattern.

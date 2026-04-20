@@ -23,6 +23,14 @@ re-source).
 | `check-status`   | Aggregates the check-runs / status-checks state for a PR's head SHA into a single rollup.                   |
 | `debug`          | Dumps a complete debug snapshot of a PR: state, progress block, worktree info, status files, lock files. Handy for incident triage. |
 
+## Tests
+
+Each subcommand has a sibling `<name>.bats` file. The bats `setup()`
+sources `./scripts/subcommands/<name>` (which transitively loads its
+`lib/` deps) and `./scripts/test-helpers.bash` (which provides the
+`retry` override and `_apply_jq_from_args` helper). Tests exercise
+`cmd_<name>` directly and any subcommand-local helpers.
+
 ## Adding a new subcommand
 
 See `../CLAUDE.md` § "Adding a new subcommand".

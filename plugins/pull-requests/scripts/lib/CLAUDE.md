@@ -9,13 +9,40 @@ Shared helper functions, sourced (never executed). Each file:
 
 ## Files
 
-| File             | Purpose                                                                                                        |
-|------------------|----------------------------------------------------------------------------------------------------------------|
-| `_retry.bash`    | `retry()` — runs a command with exponential backoff. Used everywhere a network call could be flaky.            |
-| `gh-auth.bash`   | Identifies who the agent is acting as: `get_gh_user`, `get_authenticated_user`, `is_human_auth`, `wrap_agent_body`. The wrap helper adds the `<!-- agent-reply -->` HTML marker (always) plus a sparkle (✨) block when `is_human_auth` says we're posting under a human's account. |
-| `pr-state.bash`  | Reads and mutates PR state: `get_pr_body`, `get_pr_info`, `get_bk_status`, plus the `clc-progress` YAML block helpers (`extract_progress`, `read_progress`, `write_progress`, `update_checklist`). |
-| `comments.bash`  | Fetches and enriches PR conversation: `fetch_new_comments`, `fetch_new_issue_comments`, `fetch_parent_comment`, `resolve_thread_context`, `fetch_unreacted_comments`, `compute_max_id`, `fetch_copilot_comments`, `enrich_with_reactions`. The `<!-- agent-reply -->` marker is what filters the agent's own posts out of the feedback loop. |
-| `reviews.bash`   | Manages reviews: `fetch_all_reviews`, `compute_approval_state`, `has_copilot_review`, `request_copilot_review`, `has_human_review`, `request_human_review`. |
+### `_retry.bash`
+
+Exports `retry()` — runs a command with exponential backoff. Used
+everywhere a network call could be flaky.
+
+### `gh-auth.bash`
+
+Identifies who the agent is acting as: `get_gh_user`,
+`get_authenticated_user`, `is_human_auth`, `wrap_agent_body`. The wrap
+helper adds the `<!-- agent-reply -->` HTML marker (always) plus a
+sparkle (✨) block when `is_human_auth` says we're posting under a
+human's account.
+
+### `pr-state.bash`
+
+Reads and mutates PR state: `get_pr_body`, `get_pr_info`,
+`get_bk_status`, plus the `clc-progress` YAML block helpers
+(`extract_progress`, `read_progress`, `write_progress`,
+`update_checklist`).
+
+### `comments.bash`
+
+Fetches and enriches PR conversation: `fetch_new_comments`,
+`fetch_new_issue_comments`, `fetch_parent_comment`,
+`resolve_thread_context`, `fetch_unreacted_comments`, `compute_max_id`,
+`fetch_copilot_comments`, `enrich_with_reactions`. The
+`<!-- agent-reply -->` marker is what filters the agent's own posts
+out of the feedback loop.
+
+### `reviews.bash`
+
+Manages reviews: `fetch_all_reviews`, `compute_approval_state`,
+`has_copilot_review`, `request_copilot_review`,
+`has_human_review_request`, `request_human_review`.
 
 ## Adding a new lib module
 

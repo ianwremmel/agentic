@@ -13,11 +13,20 @@ they're invoked directly by skills, agents, or other scripts.
 All three take `<org>` and `<pipeline>` as the first two positional
 arguments — nothing is hardcoded or read from the environment.
 
-| Script             | Usage                                                                                                                                                                                  |
-|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `bk-failed-jobs`   | `bk-failed-jobs <org> <pipeline> <build>` — JSON array of `{name, state, id, retried}` for failed/broken jobs.                                                                         |
-| `bk-failure-info`  | `bk-failure-info <org> <pipeline> <build>` — build annotations plus JUnit XML artifact list, combined into one JSON blob.                                                              |
-| `bk-job-log`       | `bk-job-log <org> <pipeline> <build> <job_id> [--lines RANGE] [--refresh]` — caches the full log locally, then slices it per `--lines`. Default range: `-200:` (last 200 lines).       |
+### `bk-failed-jobs <org> <pipeline> <build>`
+
+JSON array of `{name, state, id, retried}` for failed/broken jobs in
+the build.
+
+### `bk-failure-info <org> <pipeline> <build>`
+
+Build annotations plus JUnit XML artifact list, combined into one JSON
+blob.
+
+### `bk-job-log <org> <pipeline> <build> <job_id> [--lines RANGE] [--refresh]`
+
+Caches the full log locally, then slices it per `--lines`. Default
+range: `-200:` (last 200 lines). Pass `--refresh` to bypass the cache.
 
 ### `bk-job-log` range syntax
 

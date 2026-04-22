@@ -31,6 +31,16 @@ subdirectories exist as scaffolding only.
   `strict: false`.
 - **Versioning.** Bump `version` in the individual plugin's `plugin.json`
   whenever its behavior changes. Semantic versioning.
+- **Markdown tables.** Use aligned source-level column widths. Pad every
+  cell (and the separator row's dashes) to the max width of its column
+  so tables are easy to scan in the raw source. New/edited tables should
+  look like:
+
+  ```
+  | Col A | Col B that is longer |
+  | ----- | -------------------- |
+  | x     | y                    |
+  ```
 
 ## Adding a new plugin
 

@@ -113,7 +113,8 @@ venue. The reference implementation for GitHub is:
 ```bash
 is_human_auth() {
   # "User" + login not matching any known agent-name pattern
-  # See plugins/pull-requests/scripts/lib/gh-auth.bash
+  # Reference implementation lands with #3 in
+  # plugins/pull-requests/scripts/lib/gh-auth.bash.
 }
 ```
 

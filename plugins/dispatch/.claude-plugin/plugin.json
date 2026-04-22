@@ -1,6 +1,6 @@
 {
-  "name": "linear",
-  "description": "Orchestrate projects via Linear.app: triage, planning, status updates, and cross-team sync.",
+  "name": "dispatch",
+  "description": "Orchestrate agent work across GitHub, CI, and issue trackers.",
   "version": "0.1.0",
   "author": {
     "name": "Ian Remmel"
@@ -8,5 +8,5 @@
   "homepage": "https://github.com/ianwremmel/agentic",
   "repository": "https://github.com/ianwremmel/agentic",
   "license": "MIT",
-  "keywords": ["linear", "project-management", "issues", "planning"]
+  "keywords": ["github", "ci", "issue-tracker", "orchestration", "pull-requests"]
 }

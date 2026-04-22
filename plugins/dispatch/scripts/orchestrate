@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Unified entry point for dispatch subcommands.
+#
+# Loads shared helpers from lib/ and subcommand implementations from
+# subcommands/, then dispatches to the requested subcommand.
+#
+# Usage: scripts/orchestrate <subcommand> [args...]
+#
+# See ./CLAUDE.md for the layout, ./subcommands/CLAUDE.md for what each
+# subcommand does, and ./lib/CLAUDE.md for the shared helpers.
+
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Shared helpers (idempotent via load guards).
+source "$SCRIPTS_DIR/lib/_retry.bash"
+
+# Subcommand implementations.
+source "$SCRIPTS_DIR/subcommands/check-status.bash"
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: subcommand required" >&2
+    echo "Usage: scripts/orchestrate <subcommand> [args...]" >&2
+    return 1
+  fi
+
+  local subcommand="$1"
+  shift
+
+  case $subcommand in
+    check-status)  cmd_check_status "$@" ;;
+    *)
+      echo "Error: unknown subcommand '${subcommand}'" >&2
+      echo "Usage: scripts/orchestrate <subcommand> [args...]" >&2
+      return 1
+      ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

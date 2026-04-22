@@ -4,23 +4,16 @@
     "name": "Ian Remmel"
   },
   "metadata": {
-    "description": "Agentic workflows for pull request management and Linear.app project orchestration.",
+    "description": "Agentic workflows for everyday engineering: GitHub, CI, and issue-tracker orchestration.",
     "pluginRoot": "./plugins"
   },
   "plugins": [
     {
-      "name": "pull-requests",
-      "source": "./plugins/pull-requests",
-      "description": "Create and monitor pull requests end-to-end: drafting, review, CI triage, and merge.",
+      "name": "dispatch",
+      "source": "./plugins/dispatch",
+      "description": "Orchestrate agent work across GitHub, CI, and issue trackers.",
       "category": "development",
-      "tags": ["github", "pull-requests", "ci", "code-review"]
-    },
-    {
-      "name": "linear",
-      "source": "./plugins/linear",
-      "description": "Orchestrate projects via Linear.app: triage, planning, status updates, and cross-team sync.",
-      "category": "project-management",
-      "tags": ["linear", "project-management", "issues", "planning"]
+      "tags": ["github", "ci", "issue-tracker", "orchestration", "pull-requests"]
     }
   ]
 }

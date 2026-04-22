@@ -12,7 +12,7 @@ From inside Claude Code, after adding the `agentic` marketplace:
 /plugin install dispatch@agentic
 ```
 
-See the [root README](https://github.com/ianwremmel/agentic#install) for marketplace setup.
+See the [root README](/README.md#install) for marketplace setup.
 
 ## Usage
 
@@ -20,8 +20,8 @@ Once installed, the plugin's skills appear under the `dispatch:` namespace. Run 
 
 ## Contributing
 
-See the [root README](https://github.com/ianwremmel/agentic#contributing) for branch and commit conventions.
+See the [root README](/README.md#contributing) for branch and commit conventions.
 
 ## License
 
-[MIT](https://github.com/ianwremmel/agentic/blob/main/LICENSE) © Ian Remmel
+[MIT](/LICENSE) © Ian Remmel

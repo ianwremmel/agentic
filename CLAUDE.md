@@ -11,8 +11,9 @@ directory with its own `.claude-plugin/plugin.json` manifest plus the standard
 
 Plugins currently published:
 
-- `plugins/pull-requests/` — create and monitor pull requests
-- `plugins/linear/` — orchestrate projects via Linear.app
+- `plugins/dispatch/` — dispatch engineering work across pull requests and
+  Linear.app projects (PR lifecycle plus Linear triage, planning, status, and
+  cross-team sync)
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.
@@ -44,7 +45,7 @@ subdirectories exist as scaffolding only.
 
 ## Local iteration
 
-- Load a single plugin: `claude --plugin-dir ./plugins/pull-requests`
+- Load a single plugin: `claude --plugin-dir ./plugins/dispatch`
 - Reload after edits: `/reload-plugins` (from inside Claude Code)
 - Validate the whole marketplace: `claude plugin validate .`
 

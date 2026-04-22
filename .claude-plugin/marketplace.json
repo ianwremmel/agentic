@@ -9,18 +9,20 @@
   },
   "plugins": [
     {
-      "name": "pull-requests",
-      "source": "./plugins/pull-requests",
-      "description": "Create and monitor pull requests end-to-end: drafting, review, CI triage, and merge.",
+      "name": "dispatch",
+      "source": "./plugins/dispatch",
+      "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
       "category": "development",
-      "tags": ["github", "pull-requests", "ci", "code-review"]
-    },
-    {
-      "name": "linear",
-      "source": "./plugins/linear",
-      "description": "Orchestrate projects via Linear.app: triage, planning, status updates, and cross-team sync.",
-      "category": "project-management",
-      "tags": ["linear", "project-management", "issues", "planning"]
+      "tags": [
+        "github",
+        "pull-requests",
+        "ci",
+        "code-review",
+        "linear",
+        "project-management",
+        "issues",
+        "planning"
+      ]
     }
   ]
 }

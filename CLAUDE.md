@@ -7,15 +7,14 @@ Guidance for Claude Code when working in this repository.
 A Claude Code **plugin marketplace**. The `.claude-plugin/marketplace.json`
 catalog lists the plugins under `plugins/`. Each plugin is a self-contained
 directory with its own `.claude-plugin/plugin.json` manifest plus the standard
-`skills/`, `agents/`, `commands/`, and `hooks/` subdirectories.
+`skills/`, `agents/`, `commands/`, and `hooks/` subdirectories (and optionally
+`scripts/` for bash automation the plugin shells out to).
 
 Plugins currently published:
 
-- `plugins/pull-requests/` — create and monitor pull requests
-- `plugins/linear/` — orchestrate projects via Linear.app
-
-Skills, agents, and hooks are being migrated from another repo. For now the
-subdirectories exist as scaffolding only.
+- `plugins/dispatch/` — orchestrate agent work across GitHub, CI, and issue
+  trackers. Today ships the `scripts/orchestrate` entry point with a single
+  `check-status` subcommand; more subcommands land incrementally.
 
 ## Repo conventions
 
@@ -44,7 +43,7 @@ subdirectories exist as scaffolding only.
 
 ## Local iteration
 
-- Load a single plugin: `claude --plugin-dir ./plugins/pull-requests`
+- Load a single plugin: `claude --plugin-dir ./plugins/dispatch`
 - Reload after edits: `/reload-plugins` (from inside Claude Code)
 - Validate the whole marketplace: `claude plugin validate .`
 

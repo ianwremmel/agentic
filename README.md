@@ -2,7 +2,7 @@
 
 > A Claude Code plugin marketplace of agentic workflows for everyday software engineering.
 
-This repository is a [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). It packages plugins that extend Claude Code with skills, agents, commands, and hooks tuned for day-to-day engineering work. The current catalog covers pull request lifecycle management and project orchestration via Linear.app. Skills, agents, and hooks are being migrated from a prior repo; plugin directories are scaffolded and ready for content to land.
+This repository is a [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). It packages plugins that extend Claude Code with skills, agents, commands, and hooks tuned for day-to-day engineering work. The catalog currently ships one plugin, `dispatch`, which orchestrates agent work across GitHub, CI, and issue trackers.
 
 ## Table of Contents
 
@@ -32,8 +32,7 @@ claude plugin marketplace add ianwremmel/agentic
 Install any of the plugins by name, scoped to this marketplace:
 
 ```shell
-/plugin install pull-requests@agentic
-/plugin install linear@agentic
+/plugin install dispatch@agentic
 ```
 
 After installing, reload plugins to pick up the new skills, agents, and commands:
@@ -44,18 +43,16 @@ After installing, reload plugins to pick up the new skills, agents, and commands
 
 ## Plugins
 
-| Plugin                                   | What it does                                                                                          |
-| :--------------------------------------- | :---------------------------------------------------------------------------------------------------- |
-| [`pull-requests`](plugins/pull-requests) | Create and monitor pull requests end-to-end: drafting, review, CI triage, and merge.                  |
-| [`linear`](plugins/linear)               | Orchestrate projects via [Linear.app](https://linear.app): triage, planning, status, cross-team sync. |
+| Plugin                         | What it does                                                           |
+| :----------------------------- | :--------------------------------------------------------------------- |
+| [`dispatch`](plugins/dispatch) | Orchestrate agent work across GitHub, CI, and issue trackers.          |
 
 ## Local Development
 
 Point Claude Code at a plugin directory without publishing:
 
 ```shell
-claude --plugin-dir ./plugins/pull-requests
-claude --plugin-dir ./plugins/linear
+claude --plugin-dir ./plugins/dispatch
 ```
 
 Validate the marketplace and every plugin manifest:
@@ -72,12 +69,9 @@ Layout:
 │   └── marketplace.json
 ├── .github/workflows/
 └── plugins/
-    ├── pull-requests/
-    │   ├── .claude-plugin/plugin.json
-    │   ├── skills/  agents/  commands/  hooks/
-    └── linear/
+    └── dispatch/
         ├── .claude-plugin/plugin.json
-        ├── skills/  agents/  commands/  hooks/
+        └── scripts/   # orchestrate entry point + lib/ + subcommands/
 ```
 
 ## Contributing

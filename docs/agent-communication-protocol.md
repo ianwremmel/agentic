@@ -1,7 +1,5 @@
 # Agent Communication Protocol
 
-Status: draft
-
 This document defines the on-the-wire protocol that any agent MUST
 follow when it speaks to humans in a PR, issue, or ticket comment
 stream. It is a protocol specification, not an implementation guide:
@@ -18,11 +16,16 @@ Agents talk to humans in three venues:
 2. **PR inline review comments** — threads anchored to a file and
    line.
 3. **Ticket comments** — comments on an issue in any tracker
-   (GitHub Issues, Linear, Jira, Asana, or anything else).
+   (GitHub Issues, Linear, Jira, Asana, or anything else). Where a
+   tracker supports threaded comments, each thread follows the same
+   rules as a PR inline review thread.
 
-A fourth venue — the in-product chat inside the Claude Code client
-(web, desktop, iOS/macOS) — is **not** covered by this protocol and
-MUST NOT substitute for it. See "Claude Code on the web" below.
+The in-product chat inside the Claude Code client (web, desktop,
+iOS/macOS) is a separate surface: the protocol governs what the
+agent writes into the three venues above, not what appears in the
+chat. The chat MAY mirror what the agent posts into a venue, but
+MUST NOT be used as a substitute for it. See "Claude Code on the
+web" below.
 
 Two facts make the problem awkward:
 
@@ -78,11 +81,19 @@ holds; it is NOT a config switch.
 ### Mode A — Agent-credentialed
 
 The credentials identify a bot / service / app — not a human
-teammate. On GitHub that means either the account type is `Bot`, or
-the login obviously belongs to an agent (e.g. matches `*copilot*`,
-`*codex*`, `*claude*`, `*ai-agent*`). On other platforms, it means
-the identity is a service account, OAuth app, or bot seat rather
-than a human user seat.
+teammate. Two signals decide this:
+
+- **Platform-typed identities.** Some platforms explicitly classify
+  an account as a bot / integration / service account (e.g.
+  GitHub's `type: "Bot"`). An identity so classified is always
+  Mode A.
+- **Name matching.** Where the platform doesn't classify identities
+  (or to catch bot-like accounts the platform nominally types as
+  users), the identifier is matched against known agent-name
+  patterns — e.g. `*copilot*`, `*codex*`, `*claude*`, `*ai-agent*`
+  — case-insensitive, against whichever identifier the platform
+  surfaces (login, display name, email local-part). Name matching
+  applies on every platform, not just GitHub.
 
 In this mode the byline itself tells readers the author is an
 agent, so no visible wrapper is added. Only the machine marker is

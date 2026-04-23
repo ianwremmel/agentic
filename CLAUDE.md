@@ -41,6 +41,13 @@ subdirectories exist as scaffolding only.
   | ----- | -------------------- |
   | x     | y                    |
   ```
+- **Design-doc status.** Design docs under `docs/` have exactly four
+  statuses: `draft`, `accepted`, `cancelled`, `obsoleted`. Don't write
+  a `Status:` line for `draft` (implied by any unmerged doc) or
+  `accepted` (implied by any merged doc). Only `cancelled` and
+  `obsoleted` appear explicitly, as a `Status: cancelled` / `Status:
+  obsoleted` line under the title, optionally followed by a one-line
+  note or link to the superseding doc.
 
 ## Adding a new plugin
 

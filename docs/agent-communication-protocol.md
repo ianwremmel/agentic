@@ -61,16 +61,14 @@ sparkle wrap so the human can distinguish their own comments from
 their agent's. Scenario 3 posts through a dedicated bot account and
 needs only the machine marker.
 
-### Claude Code on the web
+### Hosted Claude Code clients
 
-Today Claude Code on the web tends to reply to a PR or ticket event
-by writing to the in-product chat only. **That is not compliant with
-this protocol.** When the web client is subscribed to a PR or ticket
-and answers a comment event, the reply MUST be posted into the
-originating venue (PR issue comment, PR inline thread, or ticket
-comment). The in-product chat MAY additionally mirror the reply,
-but it cannot be the sole destination — anyone not looking at Claude
-Code at that moment would never see the response.
+The hosted Claude Code clients (web, desktop, iOS / macOS app) use
+their own protocol for GitHub interactions. That protocol is
+acceptable as-is and this document does not override it for GitHub
+PRs / issues. For every other venue this document covers — most
+notably ticket comments on non-GitHub trackers — the hosted clients
+MUST follow the protocol defined here, the same way the CLI does.
 
 ## Modes
 
@@ -167,8 +165,10 @@ In Mode B the body MUST be wrapped in a visible sparkle block:
 - Leading and trailing lines are `✨` (U+2728) on their own.
 - One blank line of padding on each side of the body.
 - The sparkle wrap MUST NOT appear in Mode A.
-- The body itself is unchanged Markdown. Writers MUST NOT embed
-  the marker or sparkle sentinels inside the body.
+- The body itself is opaque to the protocol. Writers may include
+  any content they like, including stray `✨` characters; readers
+  detect the wrap by the leading and trailing lines, not by
+  scanning the body.
 
 The sparkle wrap renders correctly on every tracker we've seen so
 far, so Mode B uses the same visual format regardless of platform.
@@ -195,14 +195,14 @@ In a threaded venue (PR inline review comments, most trackers), a
 thread may look like: human → agent reply → human reply → agent
 reply. Earlier agent turns are part of the conversation and MUST
 NOT be stripped from what the agent reads — dropping them loses
-context. Only the *trailing* agent turn on a thread whose newest
-comment carries the agent's own marker may be skipped, because
-that turn represents the agent's already-emitted answer.
+context.
 
-Restated: skip a thread only when the newest comment was written
-by this agent AND carries a terminal signal. If a human has
-replied to the agent's reply, the thread is re-opened and the
-whole conversation is in play again.
+Skip a thread only when its newest comment was written by this
+agent AND carries a terminal signal: that combination represents
+"the agent has already answered this and considers it closed." If
+a human has replied to the agent's reply, the thread is re-opened
+and the whole conversation is in play again, including all prior
+agent turns.
 
 ## Terminal signals
 
@@ -266,30 +266,39 @@ Mode B. Reactions carry no body and therefore no marker.
 The specific API calls / SDK methods are out of scope for this
 document.
 
-## Review requests
+## Reviews
 
-On some platforms, requesting certain kinds of reviews is
-restricted to human accounts. The canonical example is GitHub,
-where Copilot reviews can only be requested by human users, not by
-bot accounts. When an agent needs to request such a review from
-Mode A, it may need to obtain alternative credentials (a token
-belonging to a human user, granted for this purpose) to make the
-call. The specifics are a platform- and deployment-level concern
-and out of scope for this protocol.
+This section covers two related cases: requesting a review and
+leaving one.
+
+### Requesting a review
+
+Some platforms restrict certain review types to human accounts —
+GitHub, for instance, only lets human users request a Copilot
+review, not bot accounts. When an agent in Mode A needs to request
+such a review, it may have to obtain alternative credentials (a
+token belonging to a human user, granted for the purpose) to make
+the call. The specifics are a platform- and deployment-level
+concern and out of scope for this protocol.
 
 An agent MUST NOT request a review from the same user account it
-is authenticated as — that's a self-review and platforms generally
-reject it.
+is authenticated as. Most platforms reject self-review requests
+outright; even where they don't, it produces nonsense in the UI.
 
-## Open questions
+### Leaving a review (Mode B)
 
-- **Web-client wiring.** Claude Code on the web currently tends to
-  reply in the in-product chat when it receives a PR/ticket event.
-  The protocol requires those replies to land in the originating
-  venue instead; wiring that through is tracked separately.
-- **Per-platform marker catalog.** For each platform we integrate
-  with, we need to record the specific marker mechanism used
-  (HTML comment, custom field, sentinel line, …) so every agent
-  running against that platform can read and write it compatibly.
-  This catalog lives alongside the platform integrations, not in
-  this document.
+In Mode B the agent shares a user account with a human. Most
+platforms forbid that user from leaving an "Approve" or "Request
+changes" review on their own PR — only "Comment"-style reviews are
+allowed. The agent therefore MUST NOT submit Approve / Request-
+changes reviews on PRs authored by its human; it MUST submit
+"Comment"-style reviews instead.
+
+Comment-style reviews leave the decision-making to the human.
+Each comment the agent writes inside such a review is a question
+or a request for action directed at the human, and the agent is
+responsible for examining each subsequent reply and deciding
+whether it is a question to answer, an instruction to act on, or
+already-resolved context to skip. The same Read-side and
+terminal-signal rules above apply.
+

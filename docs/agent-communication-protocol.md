@@ -193,16 +193,38 @@ about, the agent MUST mark it as processed. How:
 
 In a threaded venue (PR inline review comments, most trackers), a
 thread may look like: human → agent reply → human reply → agent
-reply. Earlier agent turns are part of the conversation and MUST
-NOT be stripped from what the agent reads — dropping them loses
-context.
+reply. Every comment in every thread remains relevant context — none
+of it gets stripped from what the agent reads.
 
-Skip a thread only when its newest comment was written by this
-agent AND carries a terminal signal: that combination represents
-"the agent has already answered this and considers it closed." If
-a human has replied to the agent's reply, the thread is re-opened
-and the whole conversation is in play again, including all prior
-agent turns.
+What changes between polls is whether a thread is **actionable**:
+whether the agent needs to take a new action on it.
+
+A thread is **non-actionable** when any of:
+
+- Its newest comment was written by this agent AND carries a
+  terminal signal — "the agent has already answered this and
+  considers it closed."
+- The platform has explicitly resolved it (e.g. GitHub's
+  "Resolved" state on a review thread).
+
+Non-actionable threads still inform the agent's understanding of
+the broader conversation, but they don't need a new reply or
+reaction.
+
+A thread is **actionable** otherwise. The most important case is
+when a human has replied to the agent's reply: the whole
+conversation is back in play, including every prior agent turn.
+
+#### Caching
+
+Non-actionable threads MAY be kept in a local cache (scoped to the
+PR or ticket) and loaded on demand rather than re-fetched every
+poll. The protocol doesn't prescribe a cache shape — only that
+when the agent does need a non-actionable thread for context, it
+remains available verbatim. Cache invalidation is the writer's
+problem; the most important case is "thread becomes actionable
+again," which means a new comment was added and the cache for that
+thread is stale.
 
 ## Terminal signals
 
@@ -301,4 +323,19 @@ responsible for examining each subsequent reply and deciding
 whether it is a question to answer, an instruction to act on, or
 already-resolved context to skip. The same Read-side and
 terminal-signal rules above apply.
+
+### Reading a review (Mode B, inverse)
+
+The same constraint runs the other way: when a human reviews a PR
+the agent authored, they can't submit Approve or Request-changes
+either, because the platform sees the reviewer and the author as
+the same account. They can only leave Comment-style reviews.
+
+The agent therefore MUST NOT wait for a formal "Request changes"
+review state on its own PRs. There won't be one. Each comment the
+human leaves on the PR — review comments, inline comments, or
+top-level PR comments — must be evaluated as either a question to
+answer or an implicit change request to act on. Treating the
+absence of a Request-changes review as "no changes requested" is a
+protocol violation.
 

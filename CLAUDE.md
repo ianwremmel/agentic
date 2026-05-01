@@ -31,6 +31,23 @@ subdirectories exist as scaffolding only.
   `strict: false`.
 - **Versioning.** Bump `version` in the individual plugin's `plugin.json`
   whenever its behavior changes. Semantic versioning.
+- **Markdown tables.** Use aligned source-level column widths. Pad every
+  cell (and the separator row's dashes) to the max width of its column
+  so tables are easy to scan in the raw source. New/edited tables should
+  look like:
+
+  ```
+  | Col A | Col B that is longer |
+  | ----- | -------------------- |
+  | x     | y                    |
+  ```
+- **Design-doc status.** Design docs under `docs/` have exactly four
+  statuses: `draft`, `accepted`, `cancelled`, `obsoleted`. Don't write
+  a `Status:` line for `draft` (implied by any unmerged doc) or
+  `accepted` (implied by any merged doc). Only `cancelled` and
+  `obsoleted` appear explicitly, as a `Status: cancelled` / `Status:
+  obsoleted` line under the title, optionally followed by a one-line
+  note or link to the superseding doc.
 
 ## Adding a new plugin
 

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fetches the last N lines of a Buildkite job log.
+# Replaces mcp__claude_ai_Buildkite_MCP_Remote__read_logs.
+# Usage: scripts/bk-job-log <build_number> <job_id> [--tail N]
+
+source "$(dirname "${BASH_SOURCE[0]}")/_retry"
+
+# Fetches log output for a specific Buildkite job
+# Arguments:
+#   $1 - build_number: The Buildkite build number
+#   $2 - job_id: The job UUID
+#   $3 - tail_lines: Number of lines to output (default 200)
+# Returns:
+#   Outputs the last N lines of the job log to stdout
+get_job_log() {
+  if [[ $# -lt 2 || $# -gt 3 ]]; then
+    echo "Error: get_job_log requires 2-3 arguments" >&2
+    echo "Usage: scripts/bk-job-log <build_number> <job_id> [--tail N]" >&2
+    return 2
+  fi
+
+  local build_number="$1"
+  local job_id="$2"
+  local tail_lines="${3:-200}"
+
+  retry 3 5 bk job log "$job_id" \
+    --build "$build_number" \
+    -p ianremmelllc/apps \
+    | tail -n "$tail_lines"
+}
+
+main() {
+  local tail_lines=200
+  local args=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tail)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --tail requires a value" >&2
+          return 1
+        fi
+        tail_lines="$2"
+        if [[ ! $tail_lines =~ ^[1-9][0-9]*$ ]]; then
+          echo "Error: --tail requires a positive integer, got: '$tail_lines'" >&2
+          return 2
+        fi
+        shift 2
+        ;;
+      *)
+        args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ ${#args[@]} -ne 2 ]]; then
+    echo "Error: requires exactly 2 positional arguments" >&2
+    echo "Usage: scripts/bk-job-log <build_number> <job_id> [--tail N]" >&2
+    return 1
+  fi
+
+  local build_number="${args[0]}"
+  local job_id="${args[1]}"
+  local result
+
+  result=$(get_job_log "$build_number" "$job_id" "$tail_lines")
+  echo "$result"
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

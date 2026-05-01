@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fetches build annotations and JUnit artifact paths for failure analysis.
+# Combines annotation and artifact listing in a single script call.
+# Usage: scripts/bk-failure-info <build_number>
+
+source "$(dirname "${BASH_SOURCE[0]}")/_retry"
+
+# Fetches build annotations from Buildkite
+# Arguments:
+#   $1 - build_number: The Buildkite build number
+# Returns:
+#   Outputs JSON array of annotations to stdout
+get_annotations() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: get_annotations requires exactly 1 argument" >&2
+    echo "Usage: get_annotations <build_number>" >&2
+    return 2
+  fi
+
+  local build_number="$1"
+
+  retry 3 5 bk api "/organizations/ianremmelllc/pipelines/apps/builds/${build_number}/annotations" \
+    | jq '[.[] | {style: .style, body_html: .body_html}]'
+}
+
+# Lists JUnit XML artifacts from a Buildkite build
+# Arguments:
+#   $1 - build_number: The Buildkite build number
+# Returns:
+#   Outputs JSON array of JUnit artifacts to stdout
+get_junit_artifacts() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: get_junit_artifacts requires exactly 1 argument" >&2
+    echo "Usage: get_junit_artifacts <build_number>" >&2
+    return 2
+  fi
+
+  local build_number="$1"
+
+  retry 3 5 bk artifacts list --build "$build_number" \
+    -p ianremmelllc/apps \
+    --json \
+    | jq '[.[] | select(.filename | test("\\.xml$")) | {id: .id, filename: .filename}]'
+}
+
+main() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/bk-failure-info <build_number>" >&2
+    return 1
+  fi
+
+  local build_number="$1"
+  local annotations
+  local junit_artifacts
+
+  annotations=$(get_annotations "$build_number")
+  junit_artifacts=$(get_junit_artifacts "$build_number")
+
+  jq -n \
+    --argjson annotations "$annotations" \
+    --argjson junit_artifacts "$junit_artifacts" \
+    '{annotations: $annotations, junit_artifacts: $junit_artifacts}'
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

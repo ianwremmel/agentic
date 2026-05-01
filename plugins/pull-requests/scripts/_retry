@@ -1,0 +1,51 @@
+# _retry - Shared retry library for sourcing
+# No shebang or set -euo pipefail - the calling script provides those
+
+# Retries a command with exponential backoff
+# Arguments:
+#   $1 - max_attempts: Maximum number of attempts
+#   $2 - backoff_seconds: Initial backoff in seconds (doubles each retry)
+#   $@ - command: The command and its arguments to retry
+# Returns:
+#   Exit code of the last command attempt
+#   Outputs command stdout on success
+#   Logs retry attempts to stderr
+retry() {
+  if [[ $# -lt 3 ]]; then
+    echo "Error: retry requires at least 3 arguments" >&2
+    echo "Usage: retry <max_attempts> <backoff_seconds> <command...>" >&2
+    return 2
+  fi
+
+  local max_attempts="$1"
+  local backoff="$2"
+  shift 2
+
+  local attempt=1
+  local exit_code
+
+  while true; do
+    exit_code=0
+    "$@" || exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+      return 0
+    fi
+
+    if [[ $attempt -ge $max_attempts ]]; then
+      echo "Error: command failed after $max_attempts attempts: $*" >&2
+      return $exit_code
+    fi
+
+    echo "Attempt $attempt/$max_attempts failed (exit $exit_code), retrying in ${backoff}s..." >&2
+    sleep "$backoff"
+    backoff=$((backoff * 2))
+    attempt=$((attempt + 1))
+  done
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  echo "This is a library file. Source it instead of executing directly:" >&2
+  echo '  source "$(dirname "$0")/_retry"' >&2
+  exit 1
+fi

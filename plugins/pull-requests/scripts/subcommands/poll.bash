@@ -1,0 +1,196 @@
+# subcommands/poll - One-shot poll of a PR for new reviews, comments, CI state, and approval status.
+# Sourced by ../orchestrate; defines functions for the `poll` subcommand.
+
+SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+source "$SCRIPTS_DIR/lib/gh-auth.bash"
+source "$SCRIPTS_DIR/lib/pr-state.bash"
+source "$SCRIPTS_DIR/lib/comments.bash"
+source "$SCRIPTS_DIR/lib/reviews.bash"
+
+# poll subcommand main
+cmd_poll() {
+  local pr_number=""
+  local sha=""
+  local review_wm=0
+  local comment_wm=0
+  local issue_comment_wm=0
+  local include_unreacted=false
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --review-watermark)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --review-watermark requires a value" >&2
+          return 2
+        fi
+        review_wm="$2"
+        shift 2
+        ;;
+      --comment-watermark)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --comment-watermark requires a value" >&2
+          return 2
+        fi
+        comment_wm="$2"
+        shift 2
+        ;;
+      --issue-comment-watermark)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --issue-comment-watermark requires a value" >&2
+          return 2
+        fi
+        issue_comment_wm="$2"
+        shift 2
+        ;;
+      --include-unreacted)
+        include_unreacted=true
+        shift
+        ;;
+      -*)
+        echo "Error: unknown option $1" >&2
+        return 1
+        ;;
+      *)
+        if [[ -z $pr_number ]]; then
+          pr_number="$1"
+          shift
+        elif [[ -z $sha ]]; then
+          sha="$1"
+          shift
+        else
+          echo "Error: unexpected argument $1" >&2
+          return 1
+        fi
+        ;;
+    esac
+  done
+
+  if [[ -z $pr_number ]]; then
+    echo "Error: pr_number is required" >&2
+    echo "Usage: scripts/orchestrate poll <pr_number> <sha> [--review-watermark ID] [--comment-watermark ID] [--issue-comment-watermark ID] [--include-unreacted]" >&2
+    return 1
+  fi
+
+  if [[ -z $sha ]]; then
+    echo "Error: sha is required" >&2
+    echo "Usage: scripts/orchestrate poll <pr_number> <sha> [--review-watermark ID] [--comment-watermark ID] [--issue-comment-watermark ID] [--include-unreacted]" >&2
+    return 1
+  fi
+
+  # Validate watermarks are numeric
+  if [[ ! $review_wm =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$review_wm'" >&2
+    return 2
+  fi
+  if [[ ! $comment_wm =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$comment_wm'" >&2
+    return 2
+  fi
+  if [[ ! $issue_comment_wm =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$issue_comment_wm'" >&2
+    return 2
+  fi
+
+  local pr_info bk_status all_reviews new_reviews
+  local new_comments new_issue_comments approval_state
+
+  pr_info=$(get_pr_info "$pr_number")
+  bk_status=$(get_bk_status "$sha")
+  all_reviews=$(fetch_all_reviews "$pr_number")
+
+  # Filter all_reviews by watermark for new_reviews
+  new_reviews=$(echo "$all_reviews" | jq --argjson wm "$review_wm" '[.[] | select(.id > $wm)]')
+
+  new_comments=$(fetch_new_comments "$pr_number" "$comment_wm")
+  new_issue_comments=$(fetch_new_issue_comments "$pr_number" "$issue_comment_wm")
+  approval_state=$(compute_approval_state "$all_reviews")
+
+  # Fetch Copilot inline comments for clean review detection (short-circuit if no Copilot review)
+  # Copilot reviews use login "copilot-pull-request-reviewer[bot]"; inline comments use "Copilot"
+  # Local name differs from the `has_copilot_review` function in lib/reviews to avoid reader confusion.
+  local copilot_has_reviewed
+  copilot_has_reviewed=$(echo "$all_reviews" | jq 'any(.user_login | ascii_downcase | startswith("copilot"))')
+  local copilot_comments='[]'
+  local agent_login=""
+  if [[ $copilot_has_reviewed == "true" ]]; then
+    local head_copilot_comments
+    head_copilot_comments=$(fetch_copilot_comments "$pr_number" "$sha")
+    copilot_comments=$(enrich_with_reactions "$head_copilot_comments")
+    agent_login=$(get_authenticated_user)
+  fi
+
+  # Resolve thread context only when there are reply comments (avoids an
+  # extra API call on every poll when no replies exist)
+  local has_replies
+  has_replies=$(echo "$new_comments" | jq '[.[] | select(.in_reply_to_id != null)] | length')
+  if [[ $has_replies -gt 0 ]]; then
+    local repo
+    repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+    new_comments=$(resolve_thread_context "$repo" "$new_comments")
+  fi
+
+  local new_review_wm new_comment_wm new_issue_comment_wm
+  new_review_wm=$(compute_max_id "$new_reviews" "$review_wm")
+  new_comment_wm=$(compute_max_id "$new_comments" "$comment_wm")
+  new_issue_comment_wm=$(compute_max_id "$new_issue_comments" "$issue_comment_wm")
+
+  # Build default bk fields for when no BK status exists
+  local bk_json
+  if [[ -z $bk_status ]]; then
+    bk_json='{"bk_state":"","bk_desc":"","bk_url":""}'
+  else
+    bk_json="$bk_status"
+  fi
+
+  # Fetch unreacted comments if requested
+  local unreacted_json="[]"
+  if [[ $include_unreacted == true ]]; then
+    local unreacted_agent_login
+    unreacted_agent_login=$(get_gh_user)
+    # Reuse $repo if already resolved during thread context; otherwise let the
+    # function resolve it internally.
+    unreacted_json=$(fetch_unreacted_comments "$pr_number" "$comment_wm" "$unreacted_agent_login" "${repo:-}")
+  fi
+
+  jq -n \
+    --argjson pr_info "$pr_info" \
+    --argjson bk "$bk_json" \
+    --argjson all_reviews "$all_reviews" \
+    --argjson reviews "$new_reviews" \
+    --argjson comments "$new_comments" \
+    --argjson issue_comments "$new_issue_comments" \
+    --argjson copilot_comments "$copilot_comments" \
+    --arg agent_login "$agent_login" \
+    --arg head_sha "$sha" \
+    --argjson unreacted "$unreacted_json" \
+    --arg approval_state "$approval_state" \
+    --arg review_wm "$new_review_wm" \
+    --arg comment_wm "$new_comment_wm" \
+    --arg issue_comment_wm "$new_issue_comment_wm" \
+    --argjson include_unreacted "$include_unreacted" \
+    '
+    $pr_info + $bk + {
+      bk_terminal: (($bk.bk_state == "error") or ($bk.bk_state == "failure" and ($bk.bk_desc | contains("failed")))),
+      approval_state: $approval_state,
+      has_new_feedback: (($reviews | length) > 0 or ($comments | length) > 0 or ($issue_comments | length) > 0),
+      copilot_clean_review: (
+        ($all_reviews | any(.user_login | ascii_downcase | startswith("copilot"))) and
+        ([$copilot_comments[]
+          | select(.commit_id == $head_sha)
+          | select(.reactions | all(
+              (.content != "+1" and .content != "-1") or .user.login != $agent_login
+            ))
+        ] | length == 0)
+      ),
+      reviews: $reviews,
+      comments: $comments,
+      issue_comments: $issue_comments,
+      watermarks: {
+        review: ($review_wm | tonumber),
+        comment: ($comment_wm | tonumber),
+        issue_comment: ($issue_comment_wm | tonumber)
+      }
+    } + (if $include_unreacted then {unreacted_comments: $unreacted} else {} end)
+    '
+}

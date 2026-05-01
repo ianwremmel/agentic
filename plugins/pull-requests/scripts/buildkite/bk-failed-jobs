@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Lists failed and broken jobs from a Buildkite build.
+# Usage: scripts/buildkite/bk-failed-jobs <org> <pipeline> <build_number>
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry.bash"
+
+# Fetches failed and broken jobs from a Buildkite build.
+# Arguments:
+#   $1 - org: Buildkite organization slug
+#   $2 - pipeline: Buildkite pipeline slug
+#   $3 - build_number: The Buildkite build number
+# Returns:
+#   JSON array of {name, state, id, retried} to stdout
+get_failed_jobs() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: get_failed_jobs requires exactly 3 arguments" >&2
+    echo "Usage: get_failed_jobs <org> <pipeline> <build_number>" >&2
+    return 2
+  fi
+
+  local org="$1"
+  local pipeline="$2"
+  local build_number="$3"
+
+  retry 3 5 bk build view "$build_number" \
+    -p "${org}/${pipeline}" \
+    --json \
+    | jq '[.jobs[] | select(.state == "failed" or .state == "broken") | {name: .name, state: .state, id: .id, retried: .retried}]'
+}
+
+main() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: requires exactly 3 arguments" >&2
+    echo "Usage: scripts/buildkite/bk-failed-jobs <org> <pipeline> <build_number>" >&2
+    return 1
+  fi
+
+  get_failed_jobs "$@"
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

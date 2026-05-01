@@ -1,0 +1,236 @@
+# subcommands/debug - Dump a complete debug snapshot of a PR: state, progress, worktree, status files, lock files.
+# Sourced by ../orchestrate; defines functions for the `debug` subcommand.
+
+SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+source "$SCRIPTS_DIR/lib/pr-state.bash"
+
+# Fetches comprehensive PR debug state
+# Arguments:
+#   $1 - pr_number
+# Returns:
+#   JSON with full PR debug state to stdout
+fetch_debug_state() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: fetch_debug_state requires exactly 1 argument" >&2
+    echo "Usage: fetch_debug_state <pr_number>" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+
+  # Fetch extended PR metadata
+  local pr_data
+  if ! pr_data=$(retry 3 5 gh pr view "$pr_number" \
+    --json state,labels,reviews,reviewRequests,headRefOid,headRefName,isDraft,title,body,statusCheckRollup \
+    --jq '{
+      state: .state,
+      title: .title,
+      is_draft: .isDraft,
+      labels: [.labels[].name],
+      reviews: [.reviews[] | {state: .state, author: .author.login}],
+      review_requests: [.reviewRequests[].login // empty | select(type == "string")],
+      head_sha: .headRefOid,
+      head_branch: .headRefName,
+      body: .body,
+      checks: [(.statusCheckRollup // [])[] | {name: .name, status: .status, conclusion: .conclusion}]
+    }'); then
+    echo "Error: failed to fetch PR #${pr_number}" >&2
+    return 1
+  fi
+
+  local pr_state
+  pr_state=$(echo "$pr_data" | jq -r '.state')
+  local head_sha
+  head_sha=$(echo "$pr_data" | jq -r '.head_sha')
+  local head_branch
+  head_branch=$(echo "$pr_data" | jq -r '.head_branch')
+
+  # Extract progress block from PR body
+  local body
+  body=$(echo "$pr_data" | jq -r '.body // ""')
+  local progress_yaml=""
+  if [[ -n $body ]]; then
+    progress_yaml=$(extract_progress "$body")
+  fi
+
+  # Convert progress YAML to JSON object
+  local progress_json="{}"
+  if [[ -n $progress_yaml ]]; then
+    progress_json=$(echo "$progress_yaml" | awk -F': ' '
+      BEGIN { printf "{" }
+      NR > 1 { printf "," }
+      {
+        key=$1
+        val=$2
+        gsub(/^ +| +$/, "", key)
+        gsub(/^ +| +$/, "", val)
+        if (val == "true" || val == "false" || val ~ /^[0-9]+$/) {
+          printf "\"%s\":%s", key, val
+        } else {
+          gsub(/"/, "\\\"", val)
+          printf "\"%s\":\"%s\"", key, val
+        }
+      }
+      END { printf "}" }
+    ')
+    # Validate the JSON; fall back to empty object if malformed
+    if ! echo "$progress_json" | jq . >/dev/null 2>&1; then
+      progress_json="{}"
+    fi
+  fi
+
+  # CI state from commit statuses
+  local ci_state="pending"
+  if [[ -n $head_sha ]] && [[ $head_sha != "null" ]]; then
+    local repo
+    if repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner'); then
+      local bk_status
+      if bk_status=$(retry 3 5 gh api "repos/${repo}/commits/${head_sha}/statuses" \
+        --jq '[.[] | select(.context | contains("buildkite"))] | sort_by(.updated_at) | last // empty | .state'); then
+        if [[ -n $bk_status ]]; then
+          ci_state="$bk_status"
+        fi
+      else
+        ci_state="error"
+      fi
+    else
+      ci_state="error"
+    fi
+  fi
+
+  # Fetch recent comments with reactions
+  local comments_json="[]"
+  if [[ -n $head_sha ]] && [[ $head_sha != "null" ]]; then
+    local repo
+    repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner') || repo=""
+    if [[ -n $repo ]]; then
+      # Fetch up to 10 recent issue comments with reactions
+      local issue_comments
+      if issue_comments=$(retry 3 5 gh api "repos/${repo}/issues/${pr_number}/comments?per_page=10&direction=desc" \
+        --jq '[.[] | {id: .id, author: .user.login, created_at: .created_at, body: (.body | if length > 200 then .[:200] + "..." else . end), reactions: {total_count: .reactions.total_count, "+1": .reactions["+1"], "-1": .reactions["-1"], eyes: .reactions.eyes, rocket: .reactions.rocket, confused: .reactions.confused}}]' 2>/dev/null); then
+        comments_json="$issue_comments"
+      fi
+    fi
+  fi
+
+  # Worktree info
+  local worktree_json="{}"
+  local worktree_list
+  worktree_list=$(git worktree list --porcelain 2>/dev/null) || worktree_list=""
+  if [[ -n $worktree_list ]] && [[ -n $head_branch ]]; then
+    local worktree_path
+    worktree_path=$(printf '%s\n' "$worktree_list" \
+      | awk -v branch="branch refs/heads/${head_branch}" '
+        /^worktree / { path = substr($0, 10) }
+        $0 == branch { print path; exit }
+      ')
+    if [[ -n $worktree_path ]]; then
+      local worktree_exists=false
+      if [[ -d $worktree_path ]]; then
+        worktree_exists=true
+      fi
+      worktree_json=$(jq -cn \
+        --arg path "$worktree_path" \
+        --argjson exists "$worktree_exists" \
+        '{"path":$path,"exists":$exists}')
+    fi
+  fi
+
+  # Lock file
+  local lock_json="null"
+  local lock_file="/tmp/claude/project-state/locks/${pr_number}.json"
+  if [[ -f $lock_file ]]; then
+    local lock_content
+    if lock_content=$(jq -c '.' "$lock_file" 2>/dev/null); then
+      local lock_mtime
+      # GNU (`stat -c %Y`) on Linux, BSD (`stat -f %m`) on macOS.
+      lock_mtime=$(stat -c '%Y' "$lock_file" 2>/dev/null \
+                   || stat -f '%m' "$lock_file" 2>/dev/null \
+                   || echo "")
+      local lock_age_minutes=""
+      if [[ -n $lock_mtime ]]; then
+        local now
+        now=$(date +%s)
+        lock_age_minutes=$(( (now - lock_mtime) / 60 ))
+      fi
+      lock_json=$(jq -cn \
+        --argjson content "$lock_content" \
+        --arg age_minutes "${lock_age_minutes}" \
+        '{"content":$content,"age_minutes":($age_minutes | if . == "" then null else tonumber end)}')
+    fi
+  fi
+
+  # Status files
+  local status_files_json="[]"
+  local status_dir="/tmp/claude/issue-status"
+  if [[ -d $status_dir ]]; then
+    local status_entries="[]"
+    local found_files=false
+    for status_file in "${status_dir}"/*.json; do
+      if [[ -f $status_file ]]; then
+        found_files=true
+        local filename
+        filename=$(basename "$status_file")
+        local file_content
+        if file_content=$(jq -c '.' "$status_file" 2>/dev/null); then
+          status_entries=$(echo "$status_entries" | jq \
+            --arg name "$filename" \
+            --argjson content "$file_content" \
+            '. + [{"file": $name, "content": $content}]')
+        fi
+      fi
+    done
+    if [[ $found_files == true ]]; then
+      status_files_json="$status_entries"
+    fi
+  fi
+
+  # Assemble output JSON
+  jq -n \
+    --arg pr_number "$pr_number" \
+    --arg state "$pr_state" \
+    --arg title "$(echo "$pr_data" | jq -r '.title')" \
+    --argjson is_draft "$(echo "$pr_data" | jq '.is_draft')" \
+    --arg head_sha "$head_sha" \
+    --arg head_branch "$head_branch" \
+    --argjson labels "$(echo "$pr_data" | jq -c '.labels')" \
+    --arg ci_state "$ci_state" \
+    --argjson checks "$(echo "$pr_data" | jq -c '.checks')" \
+    --argjson reviews "$(echo "$pr_data" | jq -c '.reviews')" \
+    --argjson review_requests "$(echo "$pr_data" | jq -c '.review_requests')" \
+    --argjson progress "$progress_json" \
+    --argjson recent_comments "$comments_json" \
+    --argjson worktree "$worktree_json" \
+    --argjson status_files "$status_files_json" \
+    --argjson lock "$lock_json" \
+    '{
+      pr_number: $pr_number,
+      state: $state,
+      title: $title,
+      is_draft: $is_draft,
+      head_sha: $head_sha,
+      head_branch: $head_branch,
+      labels: $labels,
+      ci_state: $ci_state,
+      checks: $checks,
+      reviews: $reviews,
+      review_requests: $review_requests,
+      progress: $progress,
+      recent_comments: $recent_comments,
+      worktree: $worktree,
+      status_files: $status_files,
+      lock: $lock
+    }'
+}
+
+# debug subcommand main
+cmd_debug() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: requires exactly 1 argument" >&2
+    echo "Usage: scripts/orchestrate debug <pr_number>" >&2
+    return 1
+  fi
+
+  fetch_debug_state "$1"
+}

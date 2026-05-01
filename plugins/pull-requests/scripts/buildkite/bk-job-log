@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fetches a Buildkite job's log, caches the full log locally, and returns
+# a slice of lines.
+#
+# Usage: scripts/buildkite/bk-job-log <org> <pipeline> <build_number> <job_id> [--lines RANGE]
+#
+# RANGE is one of:
+#   N            # just line N (1-indexed)
+#   START:END    # inclusive range
+#   START:       # START through end
+#   :END         # beginning through END
+#   :            # whole log
+# Negative numbers count from the end: -1 is the last line, -200 is the
+# 200th-from-last. So --lines -200: returns the last 200 lines.
+#
+# Default when --lines is omitted: -200:  (i.e. the last 200 lines).
+#
+# Logs are cached under ${BK_JOB_LOG_CACHE_DIR:-/tmp/claude/bk-job-log-cache}
+# keyed by <org>-<pipeline>-<build>-<job>.log. The cache is used if
+# present; pass --refresh to re-download.
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry.bash"
+
+readonly DEFAULT_RANGE="-200:"
+
+# Cache location can be overridden for tests / custom workflows.
+BK_JOB_LOG_CACHE_DIR="${BK_JOB_LOG_CACHE_DIR:-/tmp/claude/bk-job-log-cache}"
+
+# Returns the path to the cache file for a given job, creating the cache
+# directory if needed.
+cache_path_for() {
+  local org="$1" pipeline="$2" build="$3" job_id="$4"
+  mkdir -p "$BK_JOB_LOG_CACHE_DIR"
+  # Flatten any slashes in identifiers so they don't create subdirs.
+  local key="${org}-${pipeline}-${build}-${job_id}"
+  key="${key//\//_}"
+  echo "$BK_JOB_LOG_CACHE_DIR/${key}.log"
+}
+
+# Downloads the full log for a job and writes it to `cache_file`. Uses
+# retry for transient bk failures.
+download_log() {
+  if [[ $# -ne 5 ]]; then
+    echo "Error: download_log requires exactly 5 arguments" >&2
+    echo "Usage: download_log <org> <pipeline> <build> <job_id> <cache_file>" >&2
+    return 2
+  fi
+  local org="$1" pipeline="$2" build="$3" job_id="$4" cache_file="$5"
+  retry 3 5 bk job log "$job_id" \
+    --build "$build" \
+    -p "${org}/${pipeline}" \
+    > "$cache_file"
+}
+
+# Resolves a range spec against a total line count.
+# Emits "START END" (1-indexed, inclusive) to stdout, or exits non-zero
+# on a malformed spec.
+resolve_range() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: resolve_range requires exactly 2 arguments" >&2
+    return 2
+  fi
+
+  local spec="$1" total="$2"
+  local start end
+
+  if [[ $spec == *:* ]]; then
+    start="${spec%%:*}"
+    end="${spec#*:}"
+  else
+    start="$spec"
+    end="$spec"
+  fi
+
+  # Empty means "from the beginning" / "to the end".
+  [[ -z $start ]] && start=1
+  [[ -z $end ]] && end=-1
+
+  # Validate numeric (optionally leading -).
+  if ! [[ $start =~ ^-?[0-9]+$ && $end =~ ^-?[0-9]+$ ]]; then
+    echo "Error: invalid --lines range '${spec}'" >&2
+    return 2
+  fi
+
+  # Negative values count from the end: -1 == last line.
+  [[ $start == -* ]] && start=$((total + start + 1))
+  [[ $end == -*   ]] && end=$((total + end + 1))
+
+  # Clamp to log bounds.
+  (( start < 1 )) && start=1
+  (( end > total )) && end=$total
+
+  if (( start > end || total == 0 )); then
+    # Empty slice — emit a range that will print nothing.
+    echo "1 0"
+    return 0
+  fi
+
+  echo "$start $end"
+}
+
+# Prints the portion of `cache_file` given by the range spec.
+extract_log_range() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: extract_log_range requires exactly 2 arguments" >&2
+    echo "Usage: extract_log_range <cache_file> <range_spec>" >&2
+    return 2
+  fi
+  local cache_file="$1" spec="$2"
+  local total
+  total=$(wc -l < "$cache_file" | tr -d ' ')
+
+  local bounds start end
+  bounds=$(resolve_range "$spec" "$total") || return $?
+  start="${bounds% *}"
+  end="${bounds#* }"
+
+  if (( end < start )); then
+    return 0
+  fi
+
+  sed -n "${start},${end}p" "$cache_file"
+}
+
+# Returns log lines for a job, using cache when present.
+# Arguments:
+#   $1 - org, $2 - pipeline, $3 - build, $4 - job_id
+#   $5 - range_spec (default DEFAULT_RANGE)
+#   $6 - refresh (any non-empty value forces re-download)
+get_job_log() {
+  if [[ $# -lt 4 || $# -gt 6 ]]; then
+    echo "Error: get_job_log requires 4-6 arguments" >&2
+    echo "Usage: get_job_log <org> <pipeline> <build> <job_id> [range] [refresh]" >&2
+    return 2
+  fi
+
+  local org="$1" pipeline="$2" build="$3" job_id="$4"
+  local range_spec="${5:-$DEFAULT_RANGE}"
+  local refresh="${6:-}"
+
+  local cache_file
+  cache_file=$(cache_path_for "$org" "$pipeline" "$build" "$job_id")
+
+  if [[ -n $refresh || ! -s $cache_file ]]; then
+    download_log "$org" "$pipeline" "$build" "$job_id" "$cache_file"
+  fi
+
+  extract_log_range "$cache_file" "$range_spec"
+}
+
+main() {
+  local range_spec="$DEFAULT_RANGE"
+  local refresh=""
+  local positional=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --lines requires a value" >&2
+          return 1
+        fi
+        range_spec="$2"
+        shift 2
+        ;;
+      --refresh)
+        refresh=1
+        shift
+        ;;
+      --help|-h)
+        sed -n '3,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        return 0
+        ;;
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do positional+=("$1"); shift; done
+        ;;
+      *)
+        positional+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ ${#positional[@]} -ne 4 ]]; then
+    echo "Error: requires exactly 4 positional arguments" >&2
+    echo "Usage: scripts/buildkite/bk-job-log <org> <pipeline> <build_number> <job_id> [--lines RANGE] [--refresh]" >&2
+    return 1
+  fi
+
+  get_job_log "${positional[0]}" "${positional[1]}" "${positional[2]}" "${positional[3]}" "$range_spec" "$refresh"
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

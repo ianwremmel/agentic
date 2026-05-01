@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fetches build annotations and JUnit artifact paths for failure analysis.
+# Usage: scripts/buildkite/bk-failure-info <org> <pipeline> <build_number>
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/_retry.bash"
+
+# Fetches build annotations from Buildkite.
+# Arguments:
+#   $1 - org, $2 - pipeline, $3 - build_number
+# Returns:
+#   JSON array of {style, body_html} to stdout
+get_annotations() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: get_annotations requires exactly 3 arguments" >&2
+    echo "Usage: get_annotations <org> <pipeline> <build_number>" >&2
+    return 2
+  fi
+
+  local org="$1"
+  local pipeline="$2"
+  local build_number="$3"
+
+  retry 3 5 bk api "/organizations/${org}/pipelines/${pipeline}/builds/${build_number}/annotations" \
+    | jq '[.[] | {style: .style, body_html: .body_html}]'
+}
+
+# Lists JUnit XML artifacts from a Buildkite build.
+# Arguments:
+#   $1 - org, $2 - pipeline, $3 - build_number
+# Returns:
+#   JSON array of {id, filename} to stdout
+get_junit_artifacts() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: get_junit_artifacts requires exactly 3 arguments" >&2
+    echo "Usage: get_junit_artifacts <org> <pipeline> <build_number>" >&2
+    return 2
+  fi
+
+  local org="$1"
+  local pipeline="$2"
+  local build_number="$3"
+
+  retry 3 5 bk artifacts list --build "$build_number" \
+    -p "${org}/${pipeline}" \
+    --json \
+    | jq '[.[] | select(.filename | test("\\.xml$")) | {id: .id, filename: .filename}]'
+}
+
+main() {
+  if [[ $# -ne 3 ]]; then
+    echo "Error: requires exactly 3 arguments" >&2
+    echo "Usage: scripts/buildkite/bk-failure-info <org> <pipeline> <build_number>" >&2
+    return 1
+  fi
+
+  local org="$1"
+  local pipeline="$2"
+  local build_number="$3"
+  local annotations
+  local junit_artifacts
+
+  annotations=$(get_annotations "$org" "$pipeline" "$build_number")
+  junit_artifacts=$(get_junit_artifacts "$org" "$pipeline" "$build_number")
+
+  jq -n \
+    --argjson annotations "$annotations" \
+    --argjson junit_artifacts "$junit_artifacts" \
+    '{annotations: $annotations, junit_artifacts: $junit_artifacts}'
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

@@ -1,0 +1,317 @@
+# lib/comments - Fetch, filter, and enrich PR comments and review comments.
+# Sourced; no shebang, no `set -euo pipefail` (the caller provides those).
+
+[[ -n "${__LIB_COMMENTS_LOADED:-}" ]] && return 0
+__LIB_COMMENTS_LOADED=1
+
+SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+source "$SCRIPTS_DIR/lib/_retry.bash"
+
+# Fetches inline review comments newer than watermark, excluding agent replies
+# Arguments:
+#   $1 - pr_number
+#   $2 - watermark_id
+# Returns:
+#   JSON array of new non-agent comments
+fetch_new_comments() {
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Error: fetch_new_comments requires 1-2 arguments" >&2
+    echo "Usage: fetch_new_comments <pr_number> [watermark_id]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local watermark="${2:-0}"
+
+  if [[ ! $watermark =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$watermark'" >&2
+    return 2
+  fi
+
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments" \
+    --paginate \
+    --jq "[.[] | select(.id > ${watermark}) | select(.body | contains(\"<!-- agent-reply -->\") | not) | select(.user.type != \"Bot\" or .user.login == \"copilot\") | {id: .id, body: .body, path: .path, user_login: .user.login, user_type: .user.type, in_reply_to_id: .in_reply_to_id}]"
+}
+
+# Fetches issue comments newer than watermark, excluding agent replies and bots (except copilot)
+# Arguments:
+#   $1 - pr_number
+#   $2 - watermark_id
+# Returns:
+#   JSON array of new issue comments
+fetch_new_issue_comments() {
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Error: fetch_new_issue_comments requires 1-2 arguments" >&2
+    echo "Usage: fetch_new_issue_comments <pr_number> [watermark_id]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local watermark="${2:-0}"
+
+  if [[ ! $watermark =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$watermark'" >&2
+    return 2
+  fi
+
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  retry 3 5 gh api "repos/${repo}/issues/${pr_number}/comments" \
+    --paginate \
+    --jq "[.[] | select(.id > ${watermark}) | select(.body | contains(\"<!-- agent-reply -->\") | not) | select(.user.type != \"Bot\" or .user.login == \"copilot\") | {id: .id, body: .body, user_login: .user.login, user_type: .user.type}]"
+}
+
+# Fetches a single inline review comment by ID
+# Arguments:
+#   $1 - repo: owner/repo string
+#   $2 - comment_id
+# Returns:
+#   JSON with id, body, user_login, path to stdout
+fetch_parent_comment() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: fetch_parent_comment requires exactly 2 arguments" >&2
+    echo "Usage: fetch_parent_comment <repo> <comment_id>" >&2
+    return 2
+  fi
+
+  local repo="$1"
+  local comment_id="$2"
+
+  retry 3 5 gh api "repos/${repo}/pulls/comments/${comment_id}" \
+    --jq '{id: .id, body: .body, user_login: .user.login, path: .path}'
+}
+
+# Resolves thread context for comments that have in_reply_to_id
+# Uses a cache to avoid fetching the same parent comment multiple times
+# Arguments:
+#   $1 - repo: owner/repo string
+#   $2 - comments_json: JSON array of comments (may have in_reply_to_id)
+# Returns:
+#   Updated JSON array with thread_context added to comments that have in_reply_to_id
+resolve_thread_context() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: resolve_thread_context requires exactly 2 arguments" >&2
+    echo "Usage: resolve_thread_context <repo> <comments_json>" >&2
+    return 2
+  fi
+
+  local repo="$1"
+  local comments_json="$2"
+
+  # Extract unique parent IDs that need fetching
+  local parent_ids
+  parent_ids=$(echo "$comments_json" | jq -r '[.[] | select(.in_reply_to_id != null) | .in_reply_to_id] | unique | .[]')
+
+  if [[ -z $parent_ids ]]; then
+    echo "$comments_json"
+    return 0
+  fi
+
+  # Fetch parent comments and build cache JSON directly (no associative arrays,
+  # so this works on Bash 3.2+ including macOS default)
+  local cache_json="{}"
+  local parent_id
+  while IFS= read -r parent_id; do
+    if [[ -n $parent_id ]]; then
+      local parent_data
+      parent_data=$(fetch_parent_comment "$repo" "$parent_id") || {
+        echo "Warning: failed to fetch parent comment ${parent_id}" >&2
+        continue
+      }
+      cache_json=$(echo "$cache_json" | jq --arg key "$parent_id" --argjson val "$parent_data" '. + {($key): $val}')
+    fi
+  done <<< "$parent_ids"
+
+  # Merge thread_context into comments
+  echo "$comments_json" | jq --argjson cache "$cache_json" '
+    [.[] | if .in_reply_to_id != null and ($cache[(.in_reply_to_id | tostring)] != null)
+      then . + {thread_context: $cache[(.in_reply_to_id | tostring)]}
+      else .
+      end]
+  '
+}
+
+# Fetches inline review comments below watermark that lack terminal reactions from the agent
+# Terminal reactions: +1, -1, rocket
+# For each candidate comment, checks the reactions endpoint for per-user filtering
+# Arguments:
+#   $1 - pr_number
+#   $2 - watermark_id: Only return comments at or below this ID
+#   $3 - agent_login: The agent's GitHub login
+#   $4 - repo: Repository in owner/repo format (optional; resolved if omitted)
+# Returns:
+#   JSON array of unreacted comments
+fetch_unreacted_comments() {
+  if [[ $# -lt 3 || $# -gt 4 ]]; then
+    echo "Error: fetch_unreacted_comments requires 3 or 4 arguments" >&2
+    echo "Usage: fetch_unreacted_comments <pr_number> <watermark_id> <agent_login> [repo]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local watermark="$2"
+  local agent_login="$3"
+  local repo="${4:-}"
+
+  if [[ ! $watermark =~ ^[0-9]+$ ]]; then
+    echo "Error: watermark must be a non-negative integer, got: '$watermark'" >&2
+    return 2
+  fi
+
+  if [[ -z $repo ]]; then
+    repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+  fi
+
+  # Fetch recent comments at or below watermark from non-agent, non-bot users.
+  # Use sort=created_at&direction=desc and per_page=100 to limit to the most
+  # recent page of comments, avoiding full pagination on large PRs.
+  # Best-effort: if the fetch fails, warn and return empty rather than aborting
+  # the poll, since --include-unreacted is supplemental.
+  local candidates
+  candidates=$(retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments?sort=created_at&direction=desc&per_page=100" \
+    --jq "[.[]
+      | select(.id <= ${watermark})
+      | select(.body | contains(\"<!-- agent-reply -->\") | not)
+      | select(.user.type != \"Bot\" or .user.login == \"copilot\")
+      | select(.user.login != \"${agent_login}\")
+      | {id: .id, body: .body, path: .path, user_login: .user.login, user_type: .user.type, in_reply_to_id: .in_reply_to_id}]") || {
+    echo "Warning: failed to fetch comments for unreacted scan, returning empty" >&2
+    echo "[]"
+    return 0
+  }
+
+  if [[ $(echo "$candidates" | jq 'length') -eq 0 ]]; then
+    echo "[]"
+    return 0
+  fi
+
+  # Cap candidates to the most recent 50 to avoid excessive API calls and rate
+  # limits on large PRs. Sort descending by ID so we check newest first.
+  candidates=$(echo "$candidates" | jq 'sort_by(-.id) | .[0:50]')
+
+  # For each candidate, check reactions for terminal agent reactions
+  # Check reactions per candidate. Best-effort: if a reactions call fails
+  # (rate limit, permissions), skip that comment rather than aborting the poll.
+  local result="[]"
+  local comment_id
+  for comment_id in $(echo "$candidates" | jq -r '.[].id'); do
+    local has_terminal
+    has_terminal=$(retry 3 5 gh api "repos/${repo}/pulls/comments/${comment_id}/reactions?per_page=100" \
+      --jq "[.[] | select(.user.login == \"${agent_login}\") | select(.content == \"+1\" or .content == \"-1\" or .content == \"rocket\")] | length") || {
+      echo "Warning: failed to fetch reactions for comment ${comment_id}, skipping" >&2
+      continue
+    }
+
+    if [[ $has_terminal -eq 0 ]]; then
+      local comment_json
+      comment_json=$(echo "$candidates" | jq --argjson cid "$comment_id" '[.[] | select(.id == $cid)] | .[0]')
+      result=$(echo "$result" | jq --argjson c "$comment_json" '. + [$c]')
+    fi
+  done
+
+  echo "$result"
+}
+
+# Computes the maximum ID from a JSON array, returning the watermark if array is empty
+# Arguments:
+#   $1 - json_array: JSON array with .id fields
+#   $2 - current_watermark: Fallback if array is empty
+# Returns:
+#   The maximum ID to stdout
+compute_max_id() {
+  if [[ $# -ne 2 ]]; then
+    echo "Error: compute_max_id requires exactly 2 arguments" >&2
+    echo "Usage: compute_max_id <json_array> <current_watermark>" >&2
+    return 2
+  fi
+
+  local json_array="$1"
+  local current_watermark="$2"
+  local max_id
+  max_id=$(echo "$json_array" | jq '[.[].id] | max // empty')
+
+  if [[ -z $max_id ]]; then
+    echo "$current_watermark"
+  else
+    echo "$max_id"
+  fi
+}
+
+# Fetches ALL Copilot inline review comments (no watermark filtering)
+# Arguments:
+#   $1 - pr_number
+#   $2 - (optional) head_sha: If provided, filters to comments on this commit only
+# Returns:
+#   JSON array of Copilot comments with id, body, path, commit_id
+fetch_copilot_comments() {
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Error: fetch_copilot_comments requires 1-2 arguments" >&2
+    echo "Usage: fetch_copilot_comments <pr_number> [head_sha]" >&2
+    return 2
+  fi
+
+  local pr_number="$1"
+  local head_sha="${2:-}"
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  # Use .[] (not wrapped in []) so pagination produces one item per line, then slurp into a single array
+  local jq_filter='.[] | select(.user.login | ascii_downcase | startswith("copilot")) | {id: .id, body: .body, path: .path, commit_id: .commit_id}'
+
+  local raw_comments
+  raw_comments=$(retry 3 5 gh api "repos/${repo}/pulls/${pr_number}/comments" \
+    --paginate \
+    --jq "$jq_filter" | jq -s '.')
+
+  if [[ -n $head_sha ]]; then
+    echo "$raw_comments" | jq --arg sha "$head_sha" '[.[] | select(.commit_id == $sha)]'
+  else
+    echo "$raw_comments"
+  fi
+}
+
+# Enriches comment objects with their reactions from the GitHub API
+# Arguments:
+#   $1 - comments_json: JSON array of comments (must have .id field)
+# Returns:
+#   JSON array with .reactions added to each comment as an array of {content, user: {login}}
+enrich_with_reactions() {
+  if [[ $# -ne 1 ]]; then
+    echo "Error: enrich_with_reactions requires exactly 1 argument" >&2
+    echo "Usage: enrich_with_reactions <comments_json>" >&2
+    return 2
+  fi
+
+  local comments_json="$1"
+  local count
+  count=$(echo "$comments_json" | jq 'length')
+
+  if [[ $count -eq 0 ]]; then
+    echo "$comments_json"
+    return 0
+  fi
+
+  local repo
+  repo=$(retry 3 5 gh repo view --json nameWithOwner --jq '.nameWithOwner')
+
+  local result="$comments_json"
+  local i=0
+  while [[ $i -lt $count ]]; do
+    local comment_id
+    comment_id=$(echo "$comments_json" | jq -r ".[$i].id")
+
+    local reactions
+    reactions=$(retry 3 5 gh api "repos/${repo}/pulls/comments/${comment_id}/reactions" \
+      --paginate \
+      --jq '.[] | {content: .content, user: {login: .user.login}}' | jq -s '.') || reactions='[]'
+
+    result=$(echo "$result" | jq --argjson idx "$i" --argjson rxns "$reactions" '.[$idx].reactions = $rxns')
+    i=$((i + 1))
+  done
+
+  echo "$result"
+}

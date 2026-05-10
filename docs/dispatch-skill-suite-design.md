@@ -394,20 +394,20 @@ tracker:
 | Asana   | A tag (or custom field) of the same form.                                                            |
 
 `<expires-at-epoch>` is renewed every tick to `now +
-cross-host-lease-ttl-seconds` (default: 1800 seconds = 30
-minutes; configurable). The TTL is deliberately MUCH longer
-than `2 × tick-interval-seconds` because a single tick can
-legitimately stretch on slow tracker / MCP / CI calls. Setting
-the lease TTL to twice the tick interval would let another
-host steal work during any long poll. The TTL must comfortably
-exceed worst-case poll + retry-backoff + per-task-timeout
-latency to avoid live-work theft.
+cross-host-lease-ttl-seconds`. The TTL must comfortably exceed
+worst-case poll + retry-backoff + per-task-timeout latency to
+avoid live-work theft. With per-task timeouts up to 1 hour
+(`implement-step`, `verify-ticket`, `review-milestone`), the
+default is **2 hours** (7200 seconds = 2 × longest task
+timeout, with margin).
 
-In addition to the per-tick refresh in the main loop, the
-dispatcher MAY renew leases more frequently from a separate
-thread / timer (every 60 seconds regardless of main-loop
-cadence) for hosts that anticipate long ticks. This is an
-optional optimization; the main-loop renewal is the baseline.
+A 2-hour TTL means a crashed host's work has a 2-hour adoption
+delay. To shorten that without risking live-work theft, the
+dispatcher MUST renew leases independently of the main loop:
+a separate thread / timer renews every `tick-interval-seconds`
+regardless of how long the main loop's current iteration has
+taken. The independent renewal cannot be blocked by a slow
+poll because it doesn't acquire any of the per-object locks.
 
 Other hosts inspecting the object see the lease and skip if
 not yet expired. Expired leases are replaced atomically using
@@ -456,10 +456,12 @@ non-self lease.
      against the live process table.
    - **Reclaim `queue/in-progress/`**: atomically move every
      file from `queue/in-progress/` back to `queue/incoming/`
-     so the next main-loop drain re-processes them. Each file
-     carries an `attempts` counter (in its sibling `.attempts`
-     file); files with `attempts >= 2` go to `queue/dead-letter/`
-     instead, with a reason of "exceeded retries on startup."
+     so the next main-loop drain re-processes them. The
+     attempt counter lives in the JSON envelope itself (see
+     "Queue protocol"); read the counter, increment, and
+     temp+rename the file as part of the reclaim. Files whose
+     counter would reach 2 go to `queue/dead-letter/` with a
+     reason of "exceeded retries on startup."
    - Start main loop.
 
 **Main loop** (runs every `tick-interval-seconds`, default 60):
@@ -656,14 +658,31 @@ durable.
 `~/.dispatch/queue/incoming/` via temp-file-plus-rename:
 
 ```
-1. Pick file name: NNNN-<short-id>.txt where NNNN is
+1. Pick file name: NNNN-<short-id>.json where NNNN is
    monotonically-increasing (zero-padded epoch-millis is fine).
 2. Write the body to ~/.dispatch/queue/incoming/.tmp.<short-id>.
 3. fsync the file.
-4. atomic rename to ~/.dispatch/queue/incoming/NNNN-<short-id>.txt.
+4. atomic rename to ~/.dispatch/queue/incoming/NNNN-<short-id>.json.
 ```
 
-**Grammar.** Each queue item is a single line:
+**Envelope.** Each queue item is a JSON object containing the
+work-item body and a self-contained attempt counter:
+
+```json
+{
+  "body": "project: My Project Name",
+  "attempts": 0,
+  "enqueued-at": 1700000000
+}
+```
+
+The attempt counter is incremented in-envelope on each retry
+(temp-file-plus-rename, atomic). No sibling `.attempts` file
+— there's no atomic move that covers two files together, so
+the counter MUST live in the same file as the body.
+
+**Grammar (the `body` field).** The body string is a single
+line in one of these forms:
 
 | Form                            | Semantics                                                                                  |
 | ------------------------------- | ------------------------------------------------------------------------------------------ |
@@ -807,29 +826,73 @@ The dispatcher's central decision logic, per tick:
 | Ticket canceled by human                                           | Cleanup: close draft PR if any, remove worktree, release claim      | n/a (scripted)     |
 | Ticket reassigned to non-agent identity                            | Release claim, leave worktree, log INFO                             | n/a (scripted)     |
 | New blocker added on ticket making it effectively-blocked          | Pause: don't dispatch new work for this ticket; comment on ticket   | n/a (scripted)     |
-| PR closed without merge, comment indicates cancellation intent     | Transition parent ticket (if any) to `canceled`, cleanup            | n/a (scripted)     |
-| PR closed without merge, no cancellation intent in close comment   | Transition parent ticket back to `available` for re-dispatch        | n/a (scripted)     |
-| PR closed without merge, comment is ambiguous                      | Default to `available` (conservative)                               | n/a (scripted)     |
+| PR closed without merge, close comment matches cancel-intent regex | Transition parent ticket (if any) to `canceled`, cleanup            | n/a (scripted)     |
+| PR closed without merge, close comment matches re-attempt regex    | Transition parent ticket back to `available` for re-dispatch        | n/a (scripted)     |
+| PR closed without merge, close comment matches done-elsewhere regex | Transition parent ticket to `canceled` with rationale pointing at superseding PR | n/a (scripted) |
+| PR closed without merge, ambiguous (parent-ticket case)            | Per "Cancellation-intent detection": LLM fallback if enabled (default), else `ERROR` and post clarification comment | `respond-thread` (if fallback) |
+| PR closed without merge, casual invocation                         | Log INFO and terminate                                              | n/a (scripted)     |
 | Daemon detects stuck child (timeout exceeded)                      | Kill, retry once, escalate on second timeout                        | n/a (scripted)     |
 
-The dispatcher's logic is a state machine, but the state
-machine is defined by the **protocol**, not by the dispatcher.
-`ticket-workflow-protocol.md` §"State transitions" enumerates
-the legal role transitions; the event table above is the
-mapping from observed external events to those transitions.
-The dispatcher's job is to detect the event, apply the
-protocol-specified transition, and dispatch the agent task (if
-any) that the transition requires. The vast majority of these
-transitions don't involve an LLM.
+The dispatcher's logic is a state machine, but **two layers of
+state machines** are at play. They must not be conflated:
 
-Implementation note: the state machine is per-object (per
-project, per ticket, per PR). Each object's local state
-(`role`, `claim`, `task-running`, `session-id`, lease) is
-mutated under that object's `~/.dispatch/locks/<object-id>.lock`
-to prevent concurrent ticks racing on the same object — though
-since there's only one dispatcher per host, the locks mostly
-serve to defend against the dispatcher and a slash command
-mutating the same object simultaneously.
+- **Protocol-owned state machine** —
+  `ticket-workflow-protocol.md` §"State transitions" defines
+  the legal ticket role transitions (`available → in-progress
+  → in-review → ... → verified` etc.). The event table above
+  is the mapping from observed external events to those
+  protocol-specified transitions. The dispatcher's role is to
+  detect events and apply the protocol's transitions.
+- **Dispatcher-owned state machine** — the dispatcher tracks
+  its own per-object state for objects it has claimed. These
+  states are NOT protocol-defined; they describe what the
+  dispatcher is doing about each object at any moment.
+
+The dispatcher-owned states are:
+
+| Object       | State                  | Meaning                                                                                                          |
+| ------------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Queue item   | `incoming`             | Just enqueued by a slash command; awaits next tick.                                                              |
+|              | `in-progress`          | Dispatcher is processing it this tick.                                                                           |
+|              | `processed`            | Successfully handled; archived briefly in `queue/processed/`.                                                    |
+|              | `dead-letter`          | Failed twice or malformed; archived in `queue/dead-letter/`.                                                     |
+| Lease        | `reserved`             | Slot reserved pre-fork; PID not yet bound.                                                                       |
+|              | `active`               | Slot bound to a live agent task.                                                                                  |
+| Project      | `claimed`              | Local + cross-host lease held; orchestrating tickets.                                                            |
+|              | `awaiting-review`      | Milestone structurally complete; `review-milestone` task in flight.                                              |
+|              | `advancing`            | Review consumed transactionally; advancing to next milestone.                                                    |
+|              | `done`                 | All milestones / open tickets exhausted; releasing claim.                                                        |
+| Ticket       | `claimed`              | Local + cross-host lease held; in-flight via dispatcher.                                                         |
+|              | `task-running`         | A `dispatch:*` agent task is currently executing for this ticket (lease held).                                   |
+|              | `awaiting-event`       | Idle waiting for an external event (CI passes, deploy completes, etc.); no agent task running.                   |
+|              | `awaiting-review`      | PR is open and the ticket is in `in-review` per protocol; dispatcher polls for review activity.                  |
+|              | `releasing`            | Ticket reached terminal protocol state; dispatcher running cleanup.                                              |
+| PR           | `tracked`              | Registered with the dispatcher; mapped to a parent ticket if any.                                                |
+|              | `task-running`         | An `implement-step` / `respond-thread` task is currently executing for this PR.                                  |
+|              | `awaiting-ci`          | CI rollup is `pending`; dispatcher polls; no task running.                                                       |
+|              | `awaiting-review`      | All threads non-actionable, CI green, awaiting human reviewer signal per "Finished detection."                   |
+|              | `awaiting-merge`       | Marked `finished`; awaiting human merge action.                                                                  |
+|              | `awaiting-deploy`      | Merged; awaiting deploy completion before verification.                                                          |
+| Milestone    | `tracking`             | Dispatcher polling its tickets.                                                                                  |
+|              | `structurally-complete`| All tickets `verified` / `canceled`; no follow-ups yet identified.                                               |
+|              | `review-running`       | `review-milestone` task in flight.                                                                                |
+|              | `review-result-pending`| Task exited; dispatcher awaiting next-tick to consume the result file transactionally.                           |
+
+Transitions between these states happen on the same events
+the protocol-state-machine reacts to, but the dispatcher's
+states are local — they describe the dispatcher's bookkeeping,
+not the work item's protocol role. The implementation plan
+specifies the per-object lock acquisition order for each
+transition.
+
+Implementation note: the dispatcher-owned state is per-object
+(per queue-item, per lease, per project, per ticket, per PR,
+per milestone). Each object's local state is mutated under
+that object's `~/.dispatch/locks/<object-id>.lock` to prevent
+concurrent ticks racing on the same object — though since
+there's only one dispatcher per host, the locks mostly serve
+to defend against the dispatcher and a slash command mutating
+the same object simultaneously.
 
 ### Finished detection (Mode A vs Mode B)
 
@@ -865,17 +928,35 @@ depending on the agent's authentication mode for the PR
     comment → finished.
   - Text-token (`Done.`, `Shipped.`) on a recent agent
     comment → finished.
-  - A new top-level human comment whose body the
-    `respond-thread` task (or its detection helper) classified
-    as approval-shaped (e.g., "looks good", "ship it", "lgtm")
-    → finished. Classification is via the same regex-first
-    helper used for cancellation-intent (with similar regex:
-    `lgtm`, `looks?\s*good`, `ship\s*it`, `approved`), with the
-    same opt-in LLM fallback for ambiguous cases (config:
-    `approval-intent-llm-fallback`).
-  - A new human comment that the agent has already classified
-    as a question or instruction → NOT finished; remains in
-    review iteration.
+  - A new top-level human comment whose body matches an
+    **approval regex** AND does NOT contain unresolved-
+    instruction markers → finished. The approval regex
+    matches `lgtm`, `looks?\s*good`, `ship\s*it`, `approved`,
+    `\bgo for it\b`, `\bgreen light\b` (case-insensitive).
+    The rejection-of-mixed-comments rule: if the comment ALSO
+    contains any of `but`, `except`, `however`, `please`,
+    `could you`, `can you`, `should`, `would you`, `?` (the
+    last covering questions), the comment is NOT classified
+    as pure approval. Mixed comments fall through to the next
+    bullet.
+  - A new human comment that classifies as ambiguous (matches
+    approval but also matches mixed-comment markers) → routed
+    to `respond-thread` for substantive handling, and the
+    dispatcher does NOT advance to `finished` until the
+    `respond-thread` task exits with a "all addressed" signal
+    (terminal reaction posted, no further unaddressed
+    instructions).
+  - A new human comment that classifies as a question or
+    instruction → routed to `respond-thread`; NOT finished;
+    remains in review iteration.
+
+  When the regex is too uncertain to decide (no approval
+  match but no question/instruction match either, e.g., a
+  short emoji-only comment), `approval-intent-llm-fallback`
+  (default: enabled) dispatches a single short LLM
+  classification task. With the fallback disabled, the
+  dispatcher waits for additional human input rather than
+  guessing.
 
 Mode is determined per-PR by inspecting the PR author identity:
 if the PR author is a known bot identity (per protocol §"Mode A"
@@ -885,59 +966,97 @@ detection), Mode A; else Mode B.
 
 `ticket-workflow-protocol.md` §"Multi-PR tickets" requires that
 a ticket only transition to `delivered` once **all PRs needed
-to satisfy its aims** are merged or deployed. Single-PR
-tickets are the simple case; multi-PR tickets need the
-dispatcher to track the PR set.
+to satisfy its aims** are merged or deployed. The dispatcher
+tracks the PR set via a checklist on the parent ticket.
 
-The ticket's PR-checklist lives on the parent ticket itself
-(in the ticket body, distinct from each individual PR's plan
-checklist), as a markdown checklist of expected PRs:
+**The `## PRs` section is REQUIRED on every parent-ticket
+dispatch**, even single-PR work. Absence is no longer
+"single-PR by convention" — the round-2 design's
+absence-as-single-PR rule was a footgun (Codex C8). If
+`dispatch:pr` runs on a parent-ticket and the ticket has no
+`## PRs` section, the skill MUST add one before exiting (with
+at least one entry covering the PR it's about to open).
+
+**Checklist format.** The section is a markdown task list, with
+each item formatted as:
 
 ```
 ## PRs
 
-- [ ] {short description of PR 1}
-- [ ] {short description of PR 2}
-- [ ] {short description of PR 3}
+- [ ] <short description> [#<pr-number>](<pr-url>)
 ```
 
-The ticket subagent (or `dispatch:pr` skill at registration
-time) is responsible for filling the PR-checklist. The
-dispatcher reads the PR-checklist on every ticket poll;
-checking off entries when the corresponding PR merges. The
-ticket transitions to `delivered` only when every PR-checklist
-entry is checked off AND no unchecked entries remain.
+Or, before a PR has been opened (a planned but not-yet-existing
+PR for a multi-PR ticket):
 
-If a single-PR ticket has no PR-checklist (no `## PRs`
-section), the first merged PR triggers `delivered` directly —
-the absence of the section signals "single PR is sufficient."
+```
+- [ ] <short description> (planned)
+```
+
+When a planned PR is opened, the dispatcher (or the
+`implement-step` task that opens it) replaces the `(planned)`
+marker with the `[#N](url)` link. When a PR merges, the
+dispatcher matches the PR URL against the checklist entries
+and checks the corresponding box.
+
+The PR URL (or `(planned)` marker) is the **stable
+identifier** for the entry. Short descriptions are
+human-readable but never used for matching — entries are
+identified by their URL, not their description.
+
+**Delivery transition.** The ticket transitions to `delivered`
+only when:
+
+- Every `- [ ]` in the `## PRs` section is checked off
+  (`- [x]`), AND
+- No `(planned)` markers remain (every entry has a real PR
+  URL), AND
+- Every linked PR is merged.
+
+A single-PR ticket has exactly one checklist entry; the
+transition fires when that single PR merges. A multi-PR
+ticket waits for all entries to merge before `delivered`.
 
 ### Cancellation-intent detection
 
 When a PR closes without merge, the dispatcher inspects the
 close comment (or last human comment immediately preceding
-close). Detection is regex-first:
+close). Detection is regex-first, with different default
+behaviors depending on whether the PR has a parent ticket:
 
-- Cancel intent: case-insensitive matches on `cancel`, `won.?t do`,
-  `abandon`, `dropping this`, `not pursuing`, `wontfix`.
-- Otherwise: ambiguous → default to `available` (re-attempt is
-  the conservative path).
+- **Cancel intent** (case-insensitive): matches on `cancel`,
+  `won.?t do`, `abandon`, `dropping this`, `not pursuing`,
+  `wontfix`. → Treat as cancellation (transition parent ticket
+  to `canceled` if any; casual: log INFO).
+- **Approve / done intent**: matches on `merged elsewhere`,
+  `superseded`, `obsoleted`, `done in <pr-link>`. → Treat as
+  cancellation (the work was completed via another path; the
+  parent ticket transitions to `canceled` with rationale
+  pointing at the superseding PR).
+- **Re-attempt intent**: matches on `try again`, `retry`,
+  `start over`, `fresh attempt`. → Transition parent ticket
+  back to `available` for re-dispatch.
+- **Ambiguous** (no regex matches, OR multiple regexes match
+  with conflicting outcomes):
+  - **Casual invocation (no parent ticket)** — log INFO and
+    terminate. There's no ticket state to flip; the close is
+    final.
+  - **Parent-ticket invocation, `cancellation-intent-llm-fallback`
+    enabled (default: enabled for parent-ticket cases)** —
+    dispatch a single short `respond-thread` task with a
+    "classify the human's intent on this PR close" prompt.
+    The LLM result is the decision.
+  - **Parent-ticket invocation, fallback disabled** — log
+    `ERROR`, post a comment on the ticket asking the human to
+    clarify (cancel or re-attempt?), and leave the ticket in
+    its current role. Do NOT default to `available`; that was
+    the round-2 approach and Codex flagged it as reopening
+    intentionally-canceled work.
 
-The regex is **best-effort**: it will mis-classify genuinely
-clever phrasings ("let's punt for now" reads as ambiguous; "no
-need to ship this" reads as ambiguous). The conservative
-default to `available` means false-cancellations are rare; the
-common failure mode is treating an intentional cancellation as
-"try again," which the next poll's human disposition (a
-follow-up comment, a re-cancel) corrects.
-
-For genuinely ambiguous comments where the regex can't decide,
-the dispatcher MAY dispatch a single short `respond-thread`
-task with a "classify cancellation intent" prompt, taking the
-LLM result as the decision. This is an opt-in fallback
-(`cancellation-intent-llm-fallback: true`), not the default —
-keeping the regex-first rule reduces LLM cost on the common
-case.
+The regex remains **best-effort**: it catches the common
+phrasings cheaply. The default-enabled LLM fallback for
+parent-ticket cases handles the long tail without the round-2
+"reopen-on-ambiguous" footgun.
 
 ### Ticket selection and ranking
 
@@ -1315,6 +1434,34 @@ own pre-merge review (the human merges the PR; if the diff
 looks wrong, they don't merge). The alternative (escalate on
 dirty state) traded reliable recovery for fragility, and the
 user explicitly chose the unconditional-adoption path.
+
+**Explicit scope limits.** The unconditional-adoption rule
+applies only to:
+
+- Tracked changes in the working tree (`git status` modified /
+  added / deleted entries), AND
+- Untracked files that match the ticket's pattern (typically
+  files the agent itself created during the prior session, in
+  expected paths).
+
+The dispatcher MUST refuse to adopt — and MUST escalate via
+`ERROR` log + a comment on the ticket tagging a human — when:
+
+- The branch contains active conflict markers (`<<<<<<<`,
+  `=======`, `>>>>>>>`) in any tracked file. These never
+  appear naturally in mid-flight agent work; their presence
+  indicates a real merge conflict that needs human resolution.
+- The branch HEAD differs from the recorded `branch` in
+  `~/.dispatch/tickets/<id>/branch` AND the divergence is not
+  clearly the agent's own commits.
+- Untracked files exist outside the ticket's expected scope
+  (e.g., changes to repo-config files like `.gitignore`,
+  `package.json`, `Cargo.toml` that the prior session was
+  not authorized to touch).
+
+These three exceptions catch the cases where unconditional
+adoption would actually ship garbage. Other dirty state is
+adopted as-is.
 
 ### Agent task timeout
 

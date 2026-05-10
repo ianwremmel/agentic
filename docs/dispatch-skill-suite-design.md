@@ -465,7 +465,17 @@ non-self lease.
 **Main loop** (runs every `tick-interval-seconds`, default 60):
 
 1. Update `dispatcher.last-tick`.
-2. **Drain queue** — atomically process items in
+2. **Reclaim stale in-progress queue items** — for each file in
+   `queue/in-progress/` whose mtime is older than
+   `2 × tick-interval-seconds` (i.e., not the current tick's
+   in-flight items), atomically move it back to
+   `queue/incoming/` with its attempt counter incremented in
+   the envelope (see "Queue protocol"). Items whose counter
+   reaches 2 go to `queue/dead-letter/` with a reason file.
+   This step prevents items from getting stuck in
+   `in-progress/` between daemon ticks if processing failed
+   without a daemon crash.
+3. **Drain queue** — atomically process items in
    `queue/incoming/`:
    - For each file in `queue/incoming/` (sorted by name for
      FIFO order), atomically rename it into
@@ -486,7 +496,7 @@ non-self lease.
    - On unexpected error, leave the file in `queue/in-progress/`
      for retry on the next tick; if it fails twice, move to
      `dead-letter/`.
-3. **Reap completed agent tasks** — for each lease in
+4. **Reap completed agent tasks** — for each lease in
    `slots/leases/`, check whether the recorded PID has exited
    (matching `pid-start-ns`). For exits:
    - Read the task's exit code and output file.
@@ -497,31 +507,31 @@ non-self lease.
      just the exit code.
    - Update local state (`task-running`, last-progress).
    - Atomically delete the lease file (releases the slot).
-4. **Per-project polls** — for each claimed project, poll the
+5. **Per-project polls** — for each claimed project, poll the
    tracker (changed-since filter) for ticket-set changes,
    update the actionable pool. Renew the project's cross-host
    lease.
-5. **Per-ticket polls** — for each claimed ticket, poll the
+6. **Per-ticket polls** — for each claimed ticket, poll the
    tracker for ticket-state changes (cancellation,
    reassignment, new blockers, actionable threads on the
    ticket). Renew the ticket's lease.
-6. **Per-PR polls** — for each claimed PR, fetch state per
+7. **Per-PR polls** — for each claimed PR, fetch state per
    `pr-status-protocol.md`. Detect events (CI rollup change,
    new actionable thread, merge, close, conflict). Renew the
    PR's lease.
-7. **Watchdog** — for each in-flight task lease with elapsed
+8. **Watchdog** — for each in-flight task lease with elapsed
    time >= per-task timeout, kill the child, log `ERROR`, mark
    task timed-out, retry once (per "Retry semantics" below) or
    escalate.
-8. **Re-validate before dispatch** — apply changes from steps
-   4–6 to the in-memory event set, dropping any actions that
+9. **Re-validate before dispatch** — apply changes from steps
+   5–7 to the in-memory event set, dropping any actions that
    are no longer eligible (ticket was canceled, blocker was
    added, claim was lost to a competing host's lease). This
    step prevents stale-event dispatch.
-9. **Dispatch** — for each free slot AND each remaining
-   eligible event, dispatch an agent task. Resume-from-`WAIT`
-   takes priority over fresh dispatch.
-10. **Idle-shutdown check** — if no claimed work AND no
+10. **Dispatch** — for each free slot AND each remaining
+    eligible event, dispatch an agent task. Resume-from-`WAIT`
+    takes priority over fresh dispatch.
+11. **Idle-shutdown check** — if no claimed work AND no
     in-flight tasks AND `dispatcher.last-tick` minus
     `last-active-time` > `idle-shutdown-seconds` (default
     30 min), shut down gracefully.
@@ -564,20 +574,42 @@ A complete lease file has this JSON shape:
 }
 ```
 
-Acquire is **two-phase**:
+Acquire is **two-phase**, with a **parent-controlled child
+startup barrier** to prevent the race where the daemon crashes
+after `fork()` but before the lease is durably populated:
 
+0. **Pre-fork — open the readiness pipe.** The dispatcher
+   creates an anonymous `pipe(2)` (read end FD `R`, write end
+   FD `W`) and a kept-fd named `barrier-fd` for the child.
 1. **Phase 1 — reserve.** Under `flock(slots/lock)`, count
    `*.lease` files in any state; if `< cap`, write a new lease
    via temp+rename with `{state: "reserved", pid: null,
    pid-start-ns: null, reserved-at: <now>}`. Release
    `slots/lock`. The slot is now reserved against
    oversubscription but not yet bound to a process.
-2. **Phase 2 — populate.** `fork()` the child; in the parent,
-   re-write the lease file in place via temp+rename with
-   `{state: "active", pid: <child-pid>, pid-start-ns:
-   <start-ns>, dispatched-at: <now>}`. The flock is NOT
-   re-acquired here; the file is owned by this dispatcher and
-   no other writer touches it.
+2. **Phase 2a — fork.** The dispatcher forks. The child
+   inherits FD `R` (read end). The dispatcher closes its copy
+   of `R` and keeps `W`. **The child blocks on `read(R, 1)`
+   before doing anything else** — no task prompt, no tool use,
+   no protocol writes. This is the child startup barrier.
+3. **Phase 2b — populate.** In the parent, re-write the lease
+   file in place via temp+rename with `{state: "active", pid:
+   <child-pid>, pid-start-ns: <start-ns>, dispatched-at:
+   <now>}`. The lease is now durably "active." The flock is
+   NOT re-acquired here; the file is owned by this dispatcher
+   and no other writer touches it.
+4. **Phase 2c — release the barrier.** The parent writes one
+   byte to `W`, then closes `W`. The child's `read(R, 1)`
+   returns; the child proceeds with its task. If the parent
+   dies before writing, the child's `read(R, 1)` returns 0
+   bytes (EOF, since both write-ends are now closed); the
+   child sees EOF and exits without doing any work.
+
+This barrier ensures: a forked child NEVER acts on its task
+before the dispatcher has durably recorded the active lease.
+Crashes between fork and populate are recoverable on next
+startup because the child detects parent-death via EOF and
+self-terminates.
 
 Failure handling:
 
@@ -585,12 +617,18 @@ Failure handling:
   deletes the lease file immediately (no leak; slot returns
   to the pool).
 - **Reservation written, fork succeeds, lease repopulation
-  fails (disk full, etc.)** — the dispatcher kills the just-
-  forked child (it has not yet started doing work), then
-  deletes the lease.
-- **Daemon crash between reserve and populate** — orphan
-  recovery on next startup deletes all `state: "reserved"`
-  leases unconditionally (no PID was ever bound).
+  fails (disk full, etc.)** — the dispatcher closes `W`
+  without writing the go-byte. The child reads EOF and exits
+  on its own. The dispatcher then deletes the reserved lease.
+- **Daemon crash after fork, before populate** — the
+  dispatcher process holding `W` dies; the child reads EOF
+  and exits. On next startup, orphan recovery deletes the
+  `state: "reserved"` lease unconditionally (no PID was ever
+  bound).
+- **Daemon crash after populate** — the lease is `state:
+  "active"`. On next startup, orphan recovery checks the PID;
+  if alive, the orphan child is adopted; if dead, the lease
+  is deleted.
 
 Release:
 

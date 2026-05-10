@@ -500,7 +500,11 @@ non-self lease.
 The dispatcher maintains a single host-wide active-slot
 capacity, default 3 (configurable via the `active-slot-cap`
 config). Held slots are represented by **lease files** in
-`~/.dispatch/slots/leases/`, each containing JSON:
+`~/.dispatch/slots/leases/`. Lease lifecycle is two-phase to
+handle the fact that the child PID is unknown until after
+`fork()`.
+
+A complete lease file has this JSON shape:
 
 ```json
 {
@@ -508,31 +512,56 @@ config). Held slots are represented by **lease files** in
   "task-id": "<task-id>",
   "task-type": "implement-step | respond-thread | verify-ticket | review-milestone",
   "object-id": "<tracker>:<id>",
+  "state": "reserved | active",
   "pid": 12345,
   "pid-start-ns": 12345678901234567,
-  "dispatched-at": 1700000000
+  "reserved-at": 1700000000,
+  "dispatched-at": 1700000005
 }
 ```
 
-Lifecycle:
+Acquire is **two-phase**:
 
-- **Acquire** — under `flock(slots/lock)`, count `*.lease`
-  files; if `< cap`, atomically write the new lease via
-  temp+rename. Then `fork()` the child. If the child fork
-  fails after the lease is written, the dispatcher
-  immediately deletes the lease (no leak). If the lease write
-  fails before fork, the dispatcher just doesn't dispatch —
-  no oversubscription.
-- **Release (normal)** — on reap, the dispatcher deletes the
-  lease file under `flock(slots/lock)`.
-- **Release (orphan recovery)** — at startup, every lease's
-  `pid` + `pid-start-ns` is verified against the live process
-  table; mismatches indicate orphaned leases (daemon crashed
-  during dispatch or post-fork) and are deleted.
-- **Resume-from-`WAIT` priority** — when a slot frees, the
-  dispatcher first checks the resume-queue for parked tasks
-  needing a slot back; if any, the oldest resume wins. New
-  dispatches only proceed when no resumes are pending.
+1. **Phase 1 — reserve.** Under `flock(slots/lock)`, count
+   `*.lease` files in any state; if `< cap`, write a new lease
+   via temp+rename with `{state: "reserved", pid: null,
+   pid-start-ns: null, reserved-at: <now>}`. Release
+   `slots/lock`. The slot is now reserved against
+   oversubscription but not yet bound to a process.
+2. **Phase 2 — populate.** `fork()` the child; in the parent,
+   re-write the lease file in place via temp+rename with
+   `{state: "active", pid: <child-pid>, pid-start-ns:
+   <start-ns>, dispatched-at: <now>}`. The flock is NOT
+   re-acquired here; the file is owned by this dispatcher and
+   no other writer touches it.
+
+Failure handling:
+
+- **Reservation written but `fork()` fails** — the dispatcher
+  deletes the lease file immediately (no leak; slot returns
+  to the pool).
+- **Reservation written, fork succeeds, lease repopulation
+  fails (disk full, etc.)** — the dispatcher kills the just-
+  forked child (it has not yet started doing work), then
+  deletes the lease.
+- **Daemon crash between reserve and populate** — orphan
+  recovery on next startup deletes all `state: "reserved"`
+  leases unconditionally (no PID was ever bound).
+
+Release:
+
+- **Normal** — on reap, the dispatcher deletes the lease file
+  under `flock(slots/lock)`.
+- **Orphan recovery** — at startup, every `state: "active"`
+  lease's `pid` + `pid-start-ns` is verified against the live
+  process table; mismatches indicate orphaned leases (daemon
+  crashed mid-task) and are deleted. `state: "reserved"`
+  leases are always orphans (see above).
+
+Resume-from-`WAIT` priority — when a slot frees, the
+dispatcher first checks the resume-queue for parked tasks
+needing a slot back; if any, the oldest resume wins. New
+dispatches only proceed when no resumes are pending.
 
 The cap is host-wide; multiple parallel projects share it.
 

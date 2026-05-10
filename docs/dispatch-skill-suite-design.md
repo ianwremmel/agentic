@@ -248,6 +248,30 @@ nudge passes through the writer.
     <object-id>.lock           # short-held atomic locks for state mutations (flock)
 ```
 
+### Operational logging integration
+
+`ticket-workflow-protocol.md` §"Operational logging" requires
+log entries on the "session transcript." The daemon is not a
+Claude session, so the design clarifies what fills that role:
+
+- **Daemon's session transcript** — `~/.dispatch/dispatcher.log`.
+  Every protocol log line emitted by the daemon (`HEARTBEAT`,
+  `TRANSITION`, `BLOCK`, `INFO`, `ERROR`, `WAIT`, `RESUME`)
+  lands here, formatted per protocol §9.
+- **Dispatched task's session transcript** — the claude session
+  output (whatever Claude Code records for that session).
+  Tasks emit protocol log lines to their own session output
+  per the protocol's normal rules.
+- **Correlation** — every dispatched task receives a
+  `DISPATCH_TASK_ID` env var (UUID). The daemon's log line for
+  the dispatch event includes this task id; the task's own
+  log lines include it via the standard fields. Tail-then-grep
+  by task id reconstructs the cross-process timeline.
+
+The dispatcher's heartbeats (every 5 minutes per protocol §9)
+land in `dispatcher.log`; users tail that file to watch the
+daemon's activity.
+
 ### Daemon liveness
 
 `~/.dispatch/dispatcher.lock`, held via `flock` for the daemon's
@@ -369,16 +393,30 @@ tracker:
 | GitHub  | A label of the form `dispatched-by-<host-id>:<expires-at-epoch>` on the issue / PR.                  |
 | Asana   | A tag (or custom field) of the same form.                                                            |
 
-`<expires-at-epoch>` is renewed on every dispatcher tick to
-`now + 2 × tick-interval-seconds`. Other hosts inspecting the
-object see the lease and skip if not yet expired. Expired
-leases are replaced atomically using compare-and-swap if the
-tracker supports it (Linear and GitHub do via `If-Match`-style
-ETags); for trackers that don't, the small read-modify-write
-race window is acceptable since two hosts whose ticks happened
-to coincide both see the expired lease and the loser's lease
-write fails (or both succeed and one host detects the conflict
-on the next tick and yields).
+`<expires-at-epoch>` is renewed every tick to `now +
+cross-host-lease-ttl-seconds` (default: 1800 seconds = 30
+minutes; configurable). The TTL is deliberately MUCH longer
+than `2 × tick-interval-seconds` because a single tick can
+legitimately stretch on slow tracker / MCP / CI calls. Setting
+the lease TTL to twice the tick interval would let another
+host steal work during any long poll. The TTL must comfortably
+exceed worst-case poll + retry-backoff + per-task-timeout
+latency to avoid live-work theft.
+
+In addition to the per-tick refresh in the main loop, the
+dispatcher MAY renew leases more frequently from a separate
+thread / timer (every 60 seconds regardless of main-loop
+cadence) for hosts that anticipate long ticks. This is an
+optional optimization; the main-loop renewal is the baseline.
+
+Other hosts inspecting the object see the lease and skip if
+not yet expired. Expired leases are replaced atomically using
+compare-and-swap if the tracker supports it (Linear and GitHub
+do via `If-Match`-style ETags); for trackers that don't, the
+small read-modify-write race window is acceptable since two
+hosts whose ticks coincide both see the expired lease and the
+loser's lease write fails (or both succeed and one host
+detects the conflict on the next tick and yields).
 
 Lease released (label / field cleared) when the object reaches
 a terminal state (`verified` / `canceled`) or the dispatcher
@@ -412,10 +450,16 @@ non-self lease.
      identity that lack a fresh non-self lease (per "Cross-host
      coordination"); auto-adopt those that pass the lease
      check.
-   - Reconcile `slots/leases/`: for each existing lease file,
-     verify the recorded PID is still alive AND its
-     `pid-start-ns` matches; if either differs, the lease is
-     orphan and is cleaned up.
+   - Reconcile `slots/leases/`: per the lease lifecycle in
+     "Active-slot semaphore," delete `state: "reserved"`
+     leases unconditionally and verify `state: "active"` leases
+     against the live process table.
+   - **Reclaim `queue/in-progress/`**: atomically move every
+     file from `queue/in-progress/` back to `queue/incoming/`
+     so the next main-loop drain re-processes them. Each file
+     carries an `attempts` counter (in its sibling `.attempts`
+     file); files with `attempts >= 2` go to `queue/dead-letter/`
+     instead, with a reason of "exceeded retries on startup."
    - Start main loop.
 
 **Main loop** (runs every `tick-interval-seconds`, default 60):
@@ -716,7 +760,7 @@ The dispatcher's central decision logic, per tick:
 | PR P CI failed                                                     | Dispatch agent to diagnose and fix                                  | `implement-step` (variant `fix-ci`) |
 | PR P new actionable thread                                         | Dispatch agent to address it                                        | `respond-thread`   |
 | PR P meets ready-for-finished criteria (see "Finished detection" below) | Transition parent ticket to `finished`                          | n/a (scripted)     |
-| PR P merged                                                        | Transition parent ticket to `delivered` (scripted)                  | n/a (scripted)     |
+| PR P merged                                                        | If P was the last outstanding PR for the parent ticket per its PR-checklist, transition the ticket to `delivered` (scripted). Otherwise just check off P on the ticket's PR-checklist and continue working remaining PRs. | n/a (scripted)     |
 | Ticket T `delivered`, deploy completed                             | Dispatch verification                                               | `verify-ticket`    |
 | Verification succeeded                                             | Transition ticket to `verified`, run cleanup (scripted)             | n/a (scripted)     |
 | Verification failed (first time)                                   | Transition ticket to `in-progress`, dispatch fix                    | `implement-step` (variant `fix-verification`) |
@@ -763,18 +807,72 @@ depending on the agent's authentication mode for the PR
 - **Mode B (human-credentialed PR — agent shares the user's
   account).** No formal `approved` review can be submitted by
   the human reviewer (platform forbids self-review when the PR
-  author and reviewer are the same account). Trigger instead:
-  CI rollup is `passing`, every review thread is non-actionable,
-  AND the human-reviewer has emitted a terminal reaction
-  (`+1`, `rocket`) or text-token (`Done.`, `Shipped.`) on the
-  PR's most recent agent activity (per
+  author and reviewer are the same account).
   `agent-communication-protocol.md` §"Reading a review (Mode B,
-  inverse)"). Waiting for a formal `approved` state in Mode B
-  is a protocol violation; the dispatcher MUST NOT do it.
+  inverse)" prescribes that the agent must evaluate every
+  human comment as either a question to answer, an instruction
+  to act on, or already-resolved context to skip — there is NO
+  protocol requirement that humans use terminal reactions /
+  tokens. Waiting for a formal `approved` state in Mode B is a
+  protocol violation, and waiting strictly for a terminal
+  reaction would deadlock the workflow on a "looks good"
+  comment that didn't carry a `+1`.
+
+  The Mode B trigger is therefore: CI rollup is `passing`,
+  AND every review thread is non-actionable, AND the human
+  reviewer's most recent activity on the PR is **read as
+  resolved-context-or-approval** rather than a question /
+  instruction. Concretely:
+  - Terminal reaction (`+1`, `rocket`) on a recent agent
+    comment → finished.
+  - Text-token (`Done.`, `Shipped.`) on a recent agent
+    comment → finished.
+  - A new top-level human comment whose body the
+    `respond-thread` task (or its detection helper) classified
+    as approval-shaped (e.g., "looks good", "ship it", "lgtm")
+    → finished. Classification is via the same regex-first
+    helper used for cancellation-intent (with similar regex:
+    `lgtm`, `looks?\s*good`, `ship\s*it`, `approved`), with the
+    same opt-in LLM fallback for ambiguous cases (config:
+    `approval-intent-llm-fallback`).
+  - A new human comment that the agent has already classified
+    as a question or instruction → NOT finished; remains in
+    review iteration.
 
 Mode is determined per-PR by inspecting the PR author identity:
 if the PR author is a known bot identity (per protocol §"Mode A"
 detection), Mode A; else Mode B.
+
+### Multi-PR tickets
+
+`ticket-workflow-protocol.md` §"Multi-PR tickets" requires that
+a ticket only transition to `delivered` once **all PRs needed
+to satisfy its aims** are merged or deployed. Single-PR
+tickets are the simple case; multi-PR tickets need the
+dispatcher to track the PR set.
+
+The ticket's PR-checklist lives on the parent ticket itself
+(in the ticket body, distinct from each individual PR's plan
+checklist), as a markdown checklist of expected PRs:
+
+```
+## PRs
+
+- [ ] {short description of PR 1}
+- [ ] {short description of PR 2}
+- [ ] {short description of PR 3}
+```
+
+The ticket subagent (or `dispatch:pr` skill at registration
+time) is responsible for filling the PR-checklist. The
+dispatcher reads the PR-checklist on every ticket poll;
+checking off entries when the corresponding PR merges. The
+ticket transitions to `delivered` only when every PR-checklist
+entry is checked off AND no unchecked entries remain.
+
+If a single-PR ticket has no PR-checklist (no `## PRs`
+section), the first merged PR triggers `delivered` directly —
+the absence of the section signals "single PR is sufficient."
 
 ### Cancellation-intent detection
 
@@ -1223,19 +1321,48 @@ the local doesn't:
 
 ### Cycle detection
 
-When the dispatcher computes effective-blocking and finds a
-cycle, it transitions the affected ticket to
-`awaiting-external` (per protocol §"Dependencies"), posts a
-comment naming the cycle path, and skips the ticket on
-subsequent polls.
+`ticket-workflow-protocol.md` §"Dependencies" §"Cycles"
+prescribes that read-time cycle detection MUST surface the
+cycle as an error. It does NOT prescribe a role transition.
+
+The dispatcher therefore:
+
+1. Emits `ERROR` log entry with the cycle path.
+2. Posts a comment on each affected ticket (using the protocol
+   writer per "All dispatch-authored writes go through the
+   protocol writer") naming the cycle path and tagging a human.
+3. Skips the affected tickets on subsequent polls until the
+   cycle is resolved (an edge is removed) or the ticket is
+   canceled by a human.
+
+The dispatcher does NOT transition tickets autonomously on
+cycle detection — that is a state change the protocol does not
+authorize for this case. The human can of course transition
+the ticket themselves after seeing the posted comment.
 
 ### Verification failure
 
-First failure → re-dispatch `implement-step` with
-`fix-verification` variant. If that succeeds, retry verify.
-Second consecutive verification failure → transition ticket to
-`awaiting-external` per protocol §"Verification failure," post
-a summary comment.
+`ticket-workflow-protocol.md` §"Verification failure"
+prescribes the corrective transition `verified → in-progress`
+on a verification failure (i.e., a regression discovered after
+the verification artifact was already posted), retaining the
+artifact and adding a corrective comment.
+
+This dispatch design adopts a stricter **dispatch policy** for
+the case where verification fails BEFORE reaching `verified` —
+the verify-ticket task fails outright (returns failure to the
+dispatcher), so no `verified` transition was ever applied:
+
+1. **First failure** — re-dispatch `implement-step` with the
+   `fix-verification` variant; on success, re-dispatch
+   `verify-ticket`.
+2. **Second consecutive failure** — dispatcher policy: emit
+   `ERROR` log, post a summary comment on the ticket, and
+   transition the ticket to `awaiting-external` so a human can
+   intervene. This is dispatch-policy, NOT
+   protocol-prescribed; teams can override via configuration
+   if they want a different escalation rule (deferred to
+   implementation plan).
 
 ### Idle shutdown of an unwanted daemon
 
@@ -1289,24 +1416,66 @@ plugins/dispatch/
     defaults.yaml
 ```
 
-### Script contracts (deferred to implementation plan)
+### Script contracts
 
-This design names the scripts that do the heavy lifting
-(`queue-add.sh`, `ensure-daemon-running.sh`, the state helpers,
-the poll wrappers, etc.) but does not specify their full
-interfaces — argument grammar, exit codes, output contracts,
-atomicity guarantees, error behavior. Those contracts are
-written when the implementation plan is drafted (via
-`superpowers:writing-plans` after this design merges); each
-script is small enough that its contract is best decided
-alongside its first implementation rather than up-front.
+This design fully specifies the contracts for the scripts that
+make up the dispatcher's safety story (queue, lock, lease,
+state mutations). The non-safety scripts (poll wrappers,
+setup-pr.sh) have their detailed argument grammar and output
+shapes deferred to the implementation plan, but the safety
+contracts below are normative.
 
-The implementation plan MUST cover, per script: input
-arguments, expected stdout / stderr / exit codes, idempotency
-(or lack thereof), required filesystem locks, and behavior on
-each documented failure mode. The plan MUST also cover the
-queue's malformed-item / full-disk / permission-error
-behaviors against the queue protocol above.
+#### `queue-add.sh` contract
+
+| Aspect           | Contract                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input            | A single string body following the queue grammar (see "Queue protocol").                                                                                |
+| Atomicity        | MUST write to `~/.dispatch/queue/incoming/.tmp.<short-id>`, `fsync`, then atomic rename to `~/.dispatch/queue/incoming/NNNN-<short-id>.txt`.            |
+| Failure modes    | Returns non-zero on permission error / full disk / invalid grammar; the slash command surfaces the error to the user. Daemon never sees these.         |
+| Idempotency      | NOT idempotent. Each invocation enqueues a new item. Caller-side dedup (slash command-level) is the duplicate-detection mechanism.                     |
+| Side effects     | Creates exactly one file in `queue/incoming/`. No other state mutation.                                                                                 |
+
+#### `ensure-daemon-running.sh` contract
+
+| Aspect           | Contract                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input            | None.                                                                                                                                                   |
+| Atomicity        | MUST acquire `~/.dispatch/dispatcher.lock` via `flock --nonblock`. Lock acquisition is the only synchronization needed; spawn-on-success is safe.       |
+| Idempotency      | Idempotent — multiple concurrent invocations all succeed (one wins the lock and spawns the daemon, the rest see "lock held" and exit 0).                |
+| Failure modes    | Returns non-zero only if the spawn itself fails (rare). If lock is held → no-op exit 0.                                                                 |
+| Side effects     | Either no-op (if daemon alive) OR forks a daemon that holds `dispatcher.lock` for its lifetime.                                                         |
+
+#### Lease lifecycle (under `flock(slots/lock)`)
+
+| Operation                      | Atomicity guarantee                                                                                                                                   |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 — reserve              | Hold `slots/lock`, count leases, write reserved lease via temp+rename, release `slots/lock`. The slot count is consistent under the lock.             |
+| Phase 2 — populate post-fork   | NO lock; the dispatcher owns the lease file by `lease-id`. Re-write via temp+rename in the same directory.                                            |
+| Release on reap                | Hold `slots/lock`, delete the lease file, release `slots/lock`.                                                                                        |
+| Orphan cleanup at startup      | Hold `slots/lock`, iterate leases: delete `state: "reserved"` unconditionally; delete `state: "active"` if PID + pid-start-ns mismatch.               |
+
+#### Per-object state mutation (under `flock(locks/<object-id>.lock)`)
+
+State files in `~/.dispatch/projects/`, `tickets/`, `prs/` are
+mutated through helpers that ALWAYS:
+
+1. Hold the per-object `locks/<object-id>.lock`.
+2. Read the current state file via `read-then-validate`.
+3. Compute the new state (a function of current state + the
+   triggering event).
+4. Write via temp+rename.
+5. Release the lock.
+
+This prevents the dispatcher and a slash-command-driven
+mutation from clobbering each other on the same object.
+
+#### Deferred to implementation plan
+
+Argument grammar, exit code conventions, and stdout / stderr
+output formats for each script. Those are best decided
+alongside the first implementation. The contracts above
+specify the safety-critical behavior; the implementation plan
+fills in the surface details.
 
 ### Skill files
 

@@ -162,17 +162,45 @@ The `dispatch:pr` skill running in a user session enters the
 PR. Pre-PR scoping conversation in the session is allowed;
 post-PR conversation moves to the PR.
 
+### All dispatch-authored writes go through the protocol writer
+
+Every body-bearing comment authored by the dispatch plugin —
+whether produced by the dispatcher daemon (timeout nudges,
+escalation `ERROR` comments, state-change echoes,
+cross-host-conflict notes, milestone-review confirmations) or
+by a dispatched agent task — MUST be emitted via the same
+writer used by LLM tasks. That writer enforces, per
+`agent-communication-protocol.md` §"Wire format":
+
+- the machine marker (`<!-- agent-reply:<agent-id> -->` or
+  platform equivalent), with the dispatch plugin's stable
+  `agent-id` from `~/.dispatch/agent-id`, AND
+- the Mode A / Mode B visible marker as appropriate.
+
+A dispatcher-authored comment without the machine marker would
+be misclassified as human input by the next poll's
+thread-actionability filter, causing infinite-loop
+re-evaluation. There are no exceptions; even a one-line `ERROR`
+nudge passes through the writer.
+
 ## Persistence and state directory
 
 ### State directory layout
 
 ```
 ~/.dispatch/
-  dispatcher.pid               # PID of the running daemon
+  agent-id                     # stable agent identifier; persists across sessions / restarts / reboots
+  host-id                      # stable host identifier (per-machine; per-user)
+  dispatcher.pid               # OS pid of the running daemon (diagnostic only — see "Daemon liveness" below)
+  dispatcher.lock              # held via flock for the daemon's lifetime (the authoritative lifetime lock)
   dispatcher.log               # daemon stdout/stderr
   dispatcher.last-tick         # epoch-seconds of last main-loop iteration
   queue/
-    NNNN-<work-item>.txt       # one file per queued work item; numbered for FIFO
+    incoming/                  # writers create files here via temp+rename for atomicity
+      NNNN-<work-item>.txt     # one file per queued work item; numbered for FIFO
+    in-progress/               # daemon atomically moves files here while processing
+    processed/                 # processed items archived briefly for audit
+    dead-letter/               # malformed or repeatedly-failing items
   projects/
     <tracker>/<project-id>/
       claim                    # epoch-seconds when claimed; empty when unclaimed
@@ -200,19 +228,59 @@ post-PR conversation moves to the PR.
       last-poll                # epoch-seconds of last PR poll
   slots/
     cap                        # active-slot capacity (default 3)
-    held                       # newline-separated process-IDs currently holding a slot
+    leases/
+      <lease-id>.lease         # JSON: {task-id, object-id, pid, pid-start-ns, dispatched-at}
+    lock                       # held via flock during atomic slot acquire / release
   locks/
     <object-id>.lock           # short-held atomic locks for state mutations (flock)
 ```
 
 ### Daemon liveness
 
-The dispatcher's PID file (`~/.dispatch/dispatcher.pid`) and the
-mtime of `~/.dispatch/dispatcher.last-tick` jointly determine
-whether the daemon is alive. Slash commands check both: if the
-PID is gone or the last-tick is older than `2 ×
-tick-interval-seconds` (default 2 minutes), the daemon is
-presumed dead and the slash command respawns it.
+`~/.dispatch/dispatcher.lock`, held via `flock` for the daemon's
+entire lifetime, is the authoritative lifetime lock. The PID file
+(`dispatcher.pid`) and `dispatcher.last-tick` are diagnostic.
+
+Slash commands implement `ensure-daemon-running` as: try to
+acquire `dispatcher.lock` with `flock --nonblock`; if it fails,
+the daemon is alive (someone else holds the lock); if it
+succeeds, the daemon is dead — the slash command spawns a new
+daemon (which immediately re-acquires the lock from its child
+process) and the spawning shell drops its temporary lock.
+
+A long tick (slow `gh` call, hung MCP) does NOT make the
+dispatcher look dead — the lock is held continuously across
+ticks. The PID is recorded for `top` / `htop` visibility and
+includes `pid-start-ns` (procfs `/proc/<pid>/stat` field 22) so
+PID reuse is detectable.
+
+### Agent identity
+
+The dispatcher writes a stable `agent-id` to `~/.dispatch/agent-id`
+on first startup (default value: `dispatch-<host-id>-<random>`,
+user-overridable via config). This identifier is distinct from
+`session-id`:
+
+- **`agent-id`** is the stable identifier embedded in every
+  machine marker (`<!-- agent-reply:<agent-id> -->`) per
+  `agent-communication-protocol.md` §"Machine marker." Persists
+  across sessions, dispatcher restarts, and host reboots.
+  Identifies the dispatch plugin's writer to other agents and
+  to PR-status / thread-actionability filtering.
+- **`session-id`** is the claude session UUID for resume.
+  Per-object; rotates per `verified` / `canceled` (see
+  "Session-id tracking" below).
+
+All comment writes — by the dispatcher itself OR by dispatched
+agent tasks — MUST carry the same `agent-id` so other agents
+and tools can identify "this was written by the dispatch plugin"
+regardless of which session-id wrote it. The dispatcher passes
+`agent-id` to every dispatched task as an env var
+(`DISPATCH_AGENT_ID`).
+
+`host-id` is a separate stable identifier (per machine,
+persists across runs); used for cross-host lease coordination
+below.
 
 ### Session-id tracking
 
@@ -244,21 +312,63 @@ tracker on demand and not expected to survive a host restart.
 The persistent state in `~/.dispatch/` is the only permanent
 dispatch state.
 
+### Cache namespace
+
+The `<skill>` placeholder in `pr-status-protocol.md` §"Cache
+layout" is filled with `dispatch` for every dispatch sub-skill
+(`dispatch:pr`, `dispatch:respond`, `dispatch:verify`,
+`dispatch:review-milestone`). They share the namespace because
+they coordinate through the dispatcher: object claims are
+exclusive (only one task at a time runs against a given
+ticket / PR), so two dispatch sub-skills never write the same
+cache file simultaneously.
+
 ### Single dispatcher per host
 
-Only one dispatcher runs per host (per user). The PID file
-serves as the lock. Two parallel sessions on the same host
-share the same dispatcher; the cross-session conflict from the
-prior design (two long-lived in-session orchestrators racing)
-does not exist here.
+Only one dispatcher runs per host (per user). The
+`dispatcher.lock` flock serves as the lifetime lock. Two
+parallel sessions on the same host share the same dispatcher;
+the cross-session conflict from the prior design (two long-lived
+in-session orchestrators racing) does not exist here.
+
+### Cross-host coordination
 
 If multiple hosts are involved (the user has dev environments
-on multiple machines), each host has its own dispatcher, and
-tracker assignment is the cross-host source of truth (a ticket
-assigned to the agent identity on tracker is "claimed" globally
-even if no local claim exists). On startup, each dispatcher
-inspects the tracker for tickets / projects assigned to the
-agent identity and adopts any that lack a local claim.
+on several machines), tracker assignment alone is NOT a
+sufficient lease — two hosts can both see a ticket assigned to
+the shared agent identity, both claim it locally, and produce
+competing worktrees and branches. The design requires a
+**tracker-side exclusive lease** in addition to assignment.
+
+Per claimed object, the dispatcher writes a lease marker on the
+tracker:
+
+| Tracker | Mechanism                                                                                            |
+| ------- | ---------------------------------------------------------------------------------------------------- |
+| Linear  | A custom field (`Dispatched by`) on the issue / project, with value `<host-id>:<expires-at-epoch>`.  |
+| GitHub  | A label of the form `dispatched-by-<host-id>:<expires-at-epoch>` on the issue / PR.                  |
+| Asana   | A tag (or custom field) of the same form.                                                            |
+
+`<expires-at-epoch>` is renewed on every dispatcher tick to
+`now + 2 × tick-interval-seconds`. Other hosts inspecting the
+object see the lease and skip if not yet expired. Expired
+leases are replaced atomically using compare-and-swap if the
+tracker supports it (Linear and GitHub do via `If-Match`-style
+ETags); for trackers that don't, the small read-modify-write
+race window is acceptable since two hosts whose ticks happened
+to coincide both see the expired lease and the loser's lease
+write fails (or both succeed and one host detects the conflict
+on the next tick and yields).
+
+Lease released (label / field cleared) when the object reaches
+a terminal state (`verified` / `canceled`) or the dispatcher
+exits gracefully. Stale leases on host crash linger until the
+expiry; that's the bound on adoption latency for a crashed
+host's work.
+
+A dispatcher startup, before acquiring local claims, MUST query
+each candidate object's lease state and skip any with a fresh
+non-self lease.
 
 ## The dispatcher daemon
 
@@ -373,7 +483,7 @@ The dispatcher's central decision logic, per tick:
 | Plan fully checked off                                             | Run quality gates (`simplify` then Codex if available)              | `implement-step` (with task variant `quality-gate`) |
 | PR P CI failed                                                     | Dispatch agent to diagnose and fix                                  | `implement-step` (variant `fix-ci`) |
 | PR P new actionable thread                                         | Dispatch agent to address it                                        | `respond-thread`   |
-| PR P review approved AND CI green                                  | Transition parent ticket to `finished` (scripted, no LLM)           | n/a (scripted)     |
+| PR P meets ready-for-finished criteria (see "Finished detection" below) | Transition parent ticket to `finished`                          | n/a (scripted)     |
 | PR P merged                                                        | Transition parent ticket to `delivered` (scripted)                  | n/a (scripted)     |
 | Ticket T `delivered`, deploy completed                             | Dispatch verification                                               | `verify-ticket`    |
 | Verification succeeded                                             | Transition ticket to `verified`, run cleanup (scripted)             | n/a (scripted)     |
@@ -390,6 +500,33 @@ The dispatcher's central decision logic, per tick:
 
 The dispatcher's logic is mostly a state machine over these
 events. The vast majority of transitions don't involve an LLM.
+
+### Finished detection (Mode A vs Mode B)
+
+The transition `in-review → finished` uses different signals
+depending on the agent's authentication mode for the PR
+(`agent-communication-protocol.md` §"Modes"):
+
+- **Mode A (agent-credentialed PR — separate bot account).**
+  Trigger: `<reviews>` element from `pr-status-protocol.md`
+  shows a non-bot reviewer's latest review state is `approved`,
+  AND CI rollup is `passing`, AND every review thread is
+  non-actionable.
+- **Mode B (human-credentialed PR — agent shares the user's
+  account).** No formal `approved` review can be submitted by
+  the human reviewer (platform forbids self-review when the PR
+  author and reviewer are the same account). Trigger instead:
+  CI rollup is `passing`, every review thread is non-actionable,
+  AND the human-reviewer has emitted a terminal reaction
+  (`+1`, `rocket`) or text-token (`Done.`, `Shipped.`) on the
+  PR's most recent agent activity (per
+  `agent-communication-protocol.md` §"Reading a review (Mode B,
+  inverse)"). Waiting for a formal `approved` state in Mode B
+  is a protocol violation; the dispatcher MUST NOT do it.
+
+Mode is determined per-PR by inspecting the PR author identity:
+if the PR author is a known bot identity (per protocol §"Mode A"
+detection), Mode A; else Mode B.
 
 ### Cancellation-intent detection
 
@@ -470,12 +607,22 @@ queue-add.sh "ticket: $ID_OR_URL"
 echo "Queued: ticket $ID_OR_URL"
 ```
 
-```bash
-# /dispatch:pr — pseudocode (rare; auto-activation usually preferred)
-ensure-daemon-running.sh
-queue-add.sh "pr: $(git rev-parse --abbrev-ref HEAD)"
-echo "Queued: pr on current branch"
 ```
+# /dispatch:pr — special: NOT a thin queue-write shim
+# This command activates the dispatch:pr skill in the current
+# session (the explicit equivalent of the auto-activation path).
+# The skill captures intent, sets up worktree + draft PR, and
+# only then enqueues `pr: <pr-url>` for the dispatcher. The
+# slash command does NOT directly enqueue work — there is no
+# PR URL yet at slash-command time.
+```
+
+The other slash commands are thin queue-write shims because
+their work items can be expressed without LLM judgment.
+`/dispatch:pr` is an exception: capturing the plan, motivation,
+and verification conditions from the conversation requires the
+LLM, so the skill must run in-session before the dispatcher can
+take ownership.
 
 ```bash
 # /dispatch:status — pseudocode

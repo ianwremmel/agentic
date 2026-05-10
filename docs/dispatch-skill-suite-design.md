@@ -245,7 +245,7 @@ nudge passes through the writer.
       <lease-id>.lease         # JSON: {task-id, object-id, pid, pid-start-ns, dispatched-at}
     lock                       # held via flock during atomic slot acquire / release
   locks/
-    <object-id>.lock           # short-held atomic locks for state mutations (flock)
+    <safe-object-id>.lock      # short-held atomic locks for state mutations (flock); see "Object-id normalization"
 ```
 
 ### Operational logging integration
@@ -263,10 +263,19 @@ Claude session, so the design clarifies what fills that role:
   Tasks emit protocol log lines to their own session output
   per the protocol's normal rules.
 - **Correlation** — every dispatched task receives a
-  `DISPATCH_TASK_ID` env var (UUID). The daemon's log line for
-  the dispatch event includes this task id; the task's own
-  log lines include it via the standard fields. Tail-then-grep
-  by task id reconstructs the cross-process timeline.
+  `DISPATCH_TASK_ID` env var (UUID). The protocol §"Operational
+  logging" line format has no native `task-id` field, so the
+  task id rides in the message suffix as
+  `[task=<DISPATCH_TASK_ID>]`. Example log line from a
+  dispatched task:
+
+  ```
+  2026-05-10T14:23:01-04:00 TRANSITION ticket=https://… pr=https://… ticket-role=in-review pr-state=open | review requested from Copilot [task=8a1c…]
+  ```
+
+  The daemon's own log line for the dispatch event includes
+  the same task id in the same suffix form. Tail-then-grep by
+  task id reconstructs the cross-process timeline.
 
 The dispatcher's heartbeats (every 5 minutes per protocol §9)
 land in `dispatcher.log`; users tail that file to watch the
@@ -366,6 +375,36 @@ they coordinate through the dispatcher: object claims are
 exclusive (only one task at a time runs against a given
 ticket / PR), so two dispatch sub-skills never write the same
 cache file simultaneously.
+
+### Object-id normalization
+
+Object identifiers contain characters that are not safe as
+filenames: GitHub PR URLs include `/` and `:`, Linear ticket
+URLs include `/`, repo slugs include `/`. Object-ids in
+`~/.dispatch/` paths and in `locks/<safe-object-id>.lock`
+filenames MUST be normalized to a filename-safe form.
+
+The normalization rule is: take the canonical object URL or
+identifier, prepend a short type tag, and SHA-256 the result;
+use the first 12 hex characters as the safe id, with a
+human-readable suffix for greppability:
+
+```
+<type>-<sha256-prefix>-<short-slug>
+```
+
+Examples:
+
+| Object                                                              | Safe id                                |
+| ------------------------------------------------------------------- | -------------------------------------- |
+| `https://github.com/ianwremmel/agentic/pull/9`                      | `pr-7c3a8e2f4b91-ianwremmel-agentic-9` |
+| `https://linear.app/myteam/issue/DEV-123`                           | `ticket-fa2917e0d8a3-DEV-123`          |
+| `linear-project: My Project`                                        | `project-4e2f81bc7d09-my-project`      |
+
+The SHA-256 prefix avoids collisions; the suffix keeps `ls
+~/.dispatch/locks/` readable. Helper:
+`scripts/state/safe-object-id.sh <object-url>` performs the
+normalization (referenced from script contracts).
 
 ### Single dispatcher per host
 
@@ -1707,7 +1746,7 @@ semantics vary per setting; the table below classifies each:
 
 | Reload class       | Behavior                                                                                  | Settings in this class                                                                     |
 | ------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `immediate`        | Takes effect on the very next tick, no special handling.                                  | `tick-interval-seconds`, `idle-shutdown-seconds`, `wait-timeout-*`, `dispatch-pr-mode`, `pr-driven-default`, `default-reviewer`, `cancellation-intent-llm-fallback`. |
+| `immediate`        | Takes effect on the very next tick, no special handling.                                  | `tick-interval-seconds`, `idle-shutdown-seconds`, `wait-timeout-*`, `dispatch-pr-mode`, `pr-driven-default`, `default-reviewer`, `cancellation-intent-llm-fallback`, `approval-intent-llm-fallback`, `cross-host-lease-ttl-seconds`. |
 | `next-task-only`   | Affects only newly-dispatched tasks. In-flight tasks honor the value at their dispatch time. | `task-timeout-*` (changing while a task is running would otherwise prematurely time it out), `active-slot-cap` (lowering does not preempt in-flight tasks; the new value applies once existing leases drain). |
 | `restart-required` | Does NOT take effect until the dispatcher restarts. Logged as `INFO` if changed.          | `tracker-overrides` (mid-tick mapping changes would mis-classify in-flight objects), `agent-id`, `host-id`. |
 
@@ -1726,10 +1765,12 @@ Settings exposed:
 | `wait-timeout-ci-seconds`          | 3600 (1 hr)   | Dispatcher waits this long on a `pending` CI before posting nudge.|
 | `wait-timeout-review-seconds`      | 86400 (24 hr) | Initial human review response timeout.                            |
 | `wait-timeout-merge-seconds`       | 86400 (24 hr) | Human merge timeout after approval.                               |
-| `tracker-overrides`                | (empty)       | Per-tracker mapping overrides.                                    |
-| `pr-driven-default`                | true          | Whether unmarked repos are assumed PR-driven.                     |
-| `default-reviewer`                 | (none)        | Human reviewer to request when no other signal exists.            |
-| `cancellation-intent-llm-fallback` | false         | Whether to dispatch an LLM task to disambiguate ambiguous PR-close comments. |
+| `tracker-overrides`                | (empty)       | Per-tracker mapping overrides.                                                |
+| `pr-driven-default`                | true          | Whether unmarked repos are assumed PR-driven.                                 |
+| `default-reviewer`                 | (none)        | Human reviewer to request when no other signal exists.                        |
+| `cancellation-intent-llm-fallback` | true          | Whether to dispatch an LLM task to disambiguate ambiguous PR-close comments on parent-ticket invocations (default-enabled per round-3 fix; casual invocations don't use this). |
+| `approval-intent-llm-fallback`     | true          | Whether to dispatch an LLM task to disambiguate ambiguous human comments on Mode B PR review.                                  |
+| `cross-host-lease-ttl-seconds`     | 7200 (2 hr)   | TTL for cross-host tracker-side leases. Must comfortably exceed the longest per-task timeout.                                    |
 
 ### Tooling requirements
 

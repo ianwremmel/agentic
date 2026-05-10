@@ -281,8 +281,15 @@ user-overridable via config). This identifier is distinct from
   Identifies the dispatch plugin's writer to other agents and
   to PR-status / thread-actionability filtering.
 - **`session-id`** is the claude session UUID for resume.
-  Per-object; rotates per `verified` / `canceled` (see
-  "Session-id tracking" below).
+  Per-object. Rotation rules:
+  - On `verified` / `canceled`: the session is closed and the
+    session-id is moved to `session-history` for audit. A new
+    invocation against the same object would start fresh.
+  - On `retry-fresh` (second consecutive failure on a task):
+    the current session-id is rotated; the next attempt uses a
+    new session.
+  - Otherwise: reused across all dispatched tasks for the same
+    object so context accumulates.
 
 All comment writes — by the dispatcher itself OR by dispatched
 agent tasks — MUST carry the same `agent-id` so other agents
@@ -751,12 +758,21 @@ close). Detection is regex-first:
 - Otherwise: ambiguous → default to `available` (re-attempt is
   the conservative path).
 
+The regex is **best-effort**: it will mis-classify genuinely
+clever phrasings ("let's punt for now" reads as ambiguous; "no
+need to ship this" reads as ambiguous). The conservative
+default to `available` means false-cancellations are rare; the
+common failure mode is treating an intentional cancellation as
+"try again," which the next poll's human disposition (a
+follow-up comment, a re-cancel) corrects.
+
 For genuinely ambiguous comments where the regex can't decide,
 the dispatcher MAY dispatch a single short `respond-thread`
 task with a "classify cancellation intent" prompt, taking the
-LLM result as the decision. This is an opt-in fallback, not
-the default — keeping the regex-first rule reduces LLM cost
-on the common case.
+LLM result as the decision. This is an opt-in fallback
+(`cancellation-intent-llm-fallback: true`), not the default —
+keeping the regex-first rule reduces LLM cost on the common
+case.
 
 ### Ticket selection and ranking
 
@@ -850,12 +866,22 @@ take ownership.
 
 ```bash
 # /dispatch:status — pseudocode
-ensure-daemon-running.sh  # in case nothing's running
-FIFO=$(mktemp -u)
-mkfifo "$FIFO"
-queue-add.sh "status: $FIFO"
-cat "$FIFO"
-rm -f "$FIFO"
+# Uses a response file (not a FIFO) so a dead or hung daemon
+# doesn't block the slash command indefinitely.
+ensure-daemon-running.sh
+RESPONSE=$(mktemp -t dispatch-status.XXXXXX)
+queue-add.sh "status: $RESPONSE"
+# Wait for daemon to write, with a timeout
+deadline=$(($(date +%s) + 30))
+while [ ! -s "$RESPONSE" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+  sleep 0.5
+done
+if [ -s "$RESPONSE" ]; then
+  cat "$RESPONSE"
+else
+  echo "Status timeout — daemon may be unresponsive."
+fi
+rm -f "$RESPONSE"
 ```
 
 ```bash
@@ -1112,6 +1138,15 @@ host restart, it takes over the worktree **unconditionally**:
 - Branch state is reconciled by `git fetch + rebase` if
   divergence is detected and clearly the agent's own commits.
 
+This is a deliberate trade. Dirty state could in theory be
+human edits, partial generated output, conflict markers, or
+synced state from another host — and absorbing those into the
+next commit could ship garbage. The mitigation is the user's
+own pre-merge review (the human merges the PR; if the diff
+looks wrong, they don't merge). The alternative (escalate on
+dirty state) traded reliable recovery for fragility, and the
+user explicitly chose the unconditional-adoption path.
+
 ### Agent task timeout
 
 Per the table in "Per-task timeouts" above. First timeout
@@ -1220,6 +1255,25 @@ plugins/dispatch/
   config/
     defaults.yaml
 ```
+
+### Script contracts (deferred to implementation plan)
+
+This design names the scripts that do the heavy lifting
+(`queue-add.sh`, `ensure-daemon-running.sh`, the state helpers,
+the poll wrappers, etc.) but does not specify their full
+interfaces — argument grammar, exit codes, output contracts,
+atomicity guarantees, error behavior. Those contracts are
+written when the implementation plan is drafted (via
+`superpowers:writing-plans` after this design merges); each
+script is small enough that its contract is best decided
+alongside its first implementation rather than up-front.
+
+The implementation plan MUST cover, per script: input
+arguments, expected stdout / stderr / exit codes, idempotency
+(or lack thereof), required filesystem locks, and behavior on
+each documented failure mode. The plan MUST also cover the
+queue's malformed-item / full-disk / permission-error
+behaviors against the queue protocol above.
 
 ### Skill files
 

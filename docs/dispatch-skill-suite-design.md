@@ -664,12 +664,12 @@ respawned daemon's reconciliation rules:
 Each task type has a default timeout. When elapsed time >=
 timeout for a running task:
 
-| Task               | Default timeout | On exceed                                                                  |
-| ------------------ | --------------- | -------------------------------------------------------------------------- |
-| `implement-step`   | 1 hour          | Kill child, mark task timed-out. First timeout: re-dispatch once. Second timeout: post `ERROR` comment on PR, leave for human.                  |
-| `respond-thread`   | 30 min          | Same retry / escalate pattern.                                              |
-| `verify-ticket`    | 1 hour          | Same pattern; on second failure, transition ticket to `awaiting-external` per protocol §"Verification failure." |
-| `review-milestone` | 1 hour          | Kill, mark timed-out, post `ERROR` on milestone artifact, leave for human. |
+| Task               | Default timeout | On exceed                                                                                                                                                       |
+| ------------------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `implement-step`   | 1 hour          | Kill child, mark task timed-out. Apply retry semantics (`retry-resume` then `retry-fresh`) per "Retry semantics" below. After two failures, post `ERROR` comment on PR. |
+| `respond-thread`   | 30 min          | Same retry pattern.                                                                                                                                              |
+| `verify-ticket`    | 1 hour          | Same retry pattern. After two failures, the dispatcher transitions the ticket to `awaiting-external` (a dispatch policy choice — see "Verification failure" below). |
+| `review-milestone` | 1 hour          | Same retry pattern. After two failures, post `ERROR` on milestone artifact, leave for human.                                                                     |
 
 Timeouts catch genuinely-stuck agents (looping, hung tools,
 runaway implementations). The user does not need to monitor
@@ -890,9 +890,12 @@ queue-add.sh "shutdown"
 echo "Shutdown queued"
 ```
 
-The `ensure-daemon-running.sh` helper is idempotent: it checks
-the PID file + last-tick mtime, and only forks the dispatcher
-if it's not alive.
+The `ensure-daemon-running.sh` helper is idempotent per the
+"Daemon liveness" section above: it tries to acquire
+`dispatcher.lock` via `flock --nonblock`. Failure means a
+daemon is alive; success means it is not, and the helper forks
+a new one (which inherits the held lock). The PID file is
+diagnostic only.
 
 ## The `dispatch:pr` skill
 
@@ -1110,20 +1113,21 @@ parent.
 
 ### Daemon crash
 
-| Failure                  | Detection                                                  | Recovery                                                                          |
-| ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Daemon process killed    | PID file references nonexistent process; or last-tick is stale | Next slash-command invocation respawns the daemon; state is reloaded from `~/.dispatch/`. |
-| Host restart             | All processes dead; state dir intact                       | First slash command after restart respawns daemon, which re-adopts all claims by inspecting tracker assignments. |
+| Failure                  | Detection                                                          | Recovery                                                                          |
+| ------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| Daemon process killed    | `dispatcher.lock` becomes acquirable via `flock --nonblock`        | Next slash-command invocation respawns the daemon; state is reloaded from `~/.dispatch/`. |
+| Host restart             | All processes dead; state dir intact                               | First slash command after restart respawns daemon, which re-adopts all claims subject to cross-host lease checks. |
 
 In both cases, in-flight agent tasks (children of the dead
 daemon) become orphan processes. They MAY continue running and
 posting to PRs / tickets — that's fine; their writes follow
-the protocol. Their PIDs are cleared from `slots/held` on
-respawn (no live process matches), freeing the slots.
-
-If an orphan agent's PID is later reused by an unrelated
-process, the dispatcher's reap logic checks the process's
-start-time and command-line to avoid false reaping.
+the protocol. Their lease files in `~/.dispatch/slots/leases/`
+are reconciled on the new daemon's startup per the "Active-slot
+semaphore" rules: leases whose recorded `pid` + `pid-start-ns`
+no longer match a live process are deleted, freeing the slot.
+Leases that DO match a live process are adopted (the orphan
+agent is treated as live in-flight work, applying normal
+reaping).
 
 ### Worktree adoption
 
@@ -1293,13 +1297,13 @@ Each skill references the protocols by link, not duplicating.
 
 ### Slash commands
 
-| Command file          | Invocation                                  | What it does                                             |
-| --------------------- | ------------------------------------------- | -------------------------------------------------------- |
-| `commands/project.md` | `/dispatch:project <name>`                  | `ensure-daemon-running` + `queue-add "project: <name>"`  |
-| `commands/ticket.md`  | `/dispatch:ticket <id-or-url>`              | `ensure-daemon-running` + `queue-add "ticket: <id>"`     |
-| `commands/pr.md`      | `/dispatch:pr`                              | `ensure-daemon-running` + `queue-add "pr: <branch>"`     |
-| `commands/status.md`  | `/dispatch:status`                          | Show daemon state via FIFO                               |
-| `commands/shutdown.md`| `/dispatch:shutdown`                        | Queue shutdown                                           |
+| Command file          | Invocation                                  | What it does                                                                       |
+| --------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `commands/project.md` | `/dispatch:project <name>`                  | `ensure-daemon-running` + `queue-add "project: <name>"`                            |
+| `commands/ticket.md`  | `/dispatch:ticket <id-or-url>`              | `ensure-daemon-running` + `queue-add "ticket: <id>"`                               |
+| `commands/pr.md`      | `/dispatch:pr`                              | Activates the `dispatch:pr` skill in-session; the skill enqueues `pr: <pr-url>` after opening the draft PR. |
+| `commands/status.md`  | `/dispatch:status`                          | Writes status to a temp response file with a 30s timeout (see "Slash commands" pseudocode). |
+| `commands/shutdown.md`| `/dispatch:shutdown`                        | Queue shutdown                                                                     |
 
 Plugin-namespaced. No collision risk with other plugins.
 

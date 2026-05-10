@@ -131,11 +131,24 @@ spawned short-lived tasks.
 ### What the dispatcher does NOT do
 
 - It does not write code.
-- It does not interpret natural-language comments substantively.
+- It does not interpret natural-language comments substantively
+  (read-side judgment about whether to act on a comment, what
+  to reply, etc.). The cancellation-intent regex is the one
+  exception, and it has an opt-in LLM fallback for ambiguous
+  cases (see "Cancellation-intent detection" below).
 - It does not pick verification methods.
 - It does not run milestone reviews.
 
 All of those are dispatched to agent tasks.
+
+The dispatcher MAY invoke a **bounded cheap-model summarizer**
+when polling PR / ticket state per `pr-status-protocol.md`
+§"Summaries", because that protocol already specifies summaries
+of non-actionable threads via `claude -p` with a cheap model.
+This is a fixed-cost mechanical operation per non-actionable
+thread, not an open-ended judgment call — it does not violate
+the "no LLM" framing. The framing is about **judgment**, not
+about ever-touching-a-model.
 
 ### What the agent tasks do NOT do
 
@@ -376,85 +389,268 @@ non-self lease.
 
 **Startup** (triggered by a slash command's `ensure-daemon-running`):
 
-1. Acquire `~/.dispatch/locks/dispatcher.lock`.
-2. Check `dispatcher.pid` — if a live PID is already running
-   the dispatcher, exit (idempotent).
-3. Otherwise, fork into the background (`nohup` /
-   `setsid` / equivalent) and write the new PID.
-4. The dispatcher process initializes:
+1. Acquire `~/.dispatch/dispatcher.lock` via `flock --nonblock`.
+   If acquisition fails, another dispatcher is alive — exit
+   (idempotent).
+2. Fork into the background (`nohup` / `setsid` / equivalent),
+   passing the held lock file descriptor so the daemon retains
+   it across the fork.
+3. Write `dispatcher.pid` (`{pid, pid-start-ns}` for PID-reuse
+   detection); write `agent-id` and `host-id` if not already
+   set; touch `dispatcher.last-tick`.
+4. Initialize:
    - Read all of `~/.dispatch/projects/`, `tickets/`, `prs/`
      to seed in-memory state.
    - Inspect tracker(s) for objects assigned to the agent
-     identity; auto-adopt any not already claimed locally.
+     identity that lack a fresh non-self lease (per "Cross-host
+     coordination"); auto-adopt those that pass the lease
+     check.
+   - Reconcile `slots/leases/`: for each existing lease file,
+     verify the recorded PID is still alive AND its
+     `pid-start-ns` matches; if either differs, the lease is
+     orphan and is cleaned up.
    - Start main loop.
 
 **Main loop** (runs every `tick-interval-seconds`, default 60):
 
 1. Update `dispatcher.last-tick`.
-2. **Drain queue** — process every file in `queue/`:
-   - Each file is one of `project: <name>`, `ticket: <id>`,
-     `pr: <url>`, `shutdown`, `status: <reply-fifo>`.
-   - For project/ticket: claim and add to in-memory tracking.
-   - For pr: register the PR (link to ticket if applicable,
-     record session-id from the user-session origin).
-   - For shutdown / status: handle directly.
-   - Delete the queue file after processing.
-3. **Reap completed agent tasks** — for each PID in
-   `slots/held`, check if the process exited. If yes:
-   - Read its exit code and any task-output file.
-   - Update relevant state (`task-running`, last-progress).
-   - Free the slot.
+2. **Drain queue** — atomically process items in
+   `queue/incoming/`:
+   - For each file in `queue/incoming/` (sorted by name for
+     FIFO order), atomically rename it into
+     `queue/in-progress/`.
+   - Validate the item against the queue grammar (see "Queue
+     protocol" below). Malformed → move to `queue/dead-letter/`
+     with a reason file.
+   - Process the item:
+     - `project: <name>` / `ticket: <id-or-url>` /
+       `pr: <pr-url>` — acquire the cross-host lease, then
+       claim locally; add to in-memory tracking.
+     - `shutdown` — set the shutdown flag (handled at end of
+       tick).
+     - `status: <response-file>` — write the daemon's status
+       summary to the named file and `fsync`.
+   - On success, move the file to `queue/processed/` (kept
+     briefly for audit; aged out after 24 h).
+   - On unexpected error, leave the file in `queue/in-progress/`
+     for retry on the next tick; if it fails twice, move to
+     `dead-letter/`.
+3. **Reap completed agent tasks** — for each lease in
+   `slots/leases/`, check whether the recorded PID has exited
+   (matching `pid-start-ns`). For exits:
+   - Read the task's exit code and output file.
+   - **Reconcile partial completion** — re-read the affected
+     external state (PR body, ticket role, comment thread)
+     before declaring success / retry / escalate. Tasks are
+     idempotent; the dispatcher trusts external state, not
+     just the exit code.
+   - Update local state (`task-running`, last-progress).
+   - Atomically delete the lease file (releases the slot).
 4. **Per-project polls** — for each claimed project, poll the
    tracker (changed-since filter) for ticket-set changes,
-   update the actionable pool, evaluate dispatch.
+   update the actionable pool. Renew the project's cross-host
+   lease.
 5. **Per-ticket polls** — for each claimed ticket, poll the
    tracker for ticket-state changes (cancellation,
    reassignment, new blockers, actionable threads on the
-   ticket).
+   ticket). Renew the ticket's lease.
 6. **Per-PR polls** — for each claimed PR, fetch state per
    `pr-status-protocol.md`. Detect events (CI rollup change,
-   new actionable thread, merge, close, conflict).
-7. **Watchdog** — for each running agent task with elapsed time
-   >= per-task timeout, kill the child, log `ERROR`, mark task
-   timed-out, retry once or escalate.
-8. **Dispatch** — for each free slot AND each event needing
-   action, dispatch an agent task (FIFO across event types,
-   with resume-from-task-queue priority — see below).
-9. **Idle-shutdown check** — if no claimed work AND no
-   in-flight tasks AND `dispatcher.last-tick` minus
-   `last-active-time` > `idle-shutdown-seconds` (default 30
-   min), shut down gracefully.
+   new actionable thread, merge, close, conflict). Renew the
+   PR's lease.
+7. **Watchdog** — for each in-flight task lease with elapsed
+   time >= per-task timeout, kill the child, log `ERROR`, mark
+   task timed-out, retry once (per "Retry semantics" below) or
+   escalate.
+8. **Re-validate before dispatch** — apply changes from steps
+   4–6 to the in-memory event set, dropping any actions that
+   are no longer eligible (ticket was canceled, blocker was
+   added, claim was lost to a competing host's lease). This
+   step prevents stale-event dispatch.
+9. **Dispatch** — for each free slot AND each remaining
+   eligible event, dispatch an agent task. Resume-from-`WAIT`
+   takes priority over fresh dispatch.
+10. **Idle-shutdown check** — if no claimed work AND no
+    in-flight tasks AND `dispatcher.last-tick` minus
+    `last-active-time` > `idle-shutdown-seconds` (default
+    30 min), shut down gracefully.
 
 **Shutdown:**
 
-1. Stop accepting new queue items (atomically rename `queue/`
-   to `queue.shutdown/` so slash commands respawn a new daemon
-   for any subsequent work).
+1. Stop accepting new queue items: atomically rename
+   `queue/incoming/` to `queue/incoming.draining/` so slash
+   commands write to a freshly-created `incoming/` and respawn
+   a new daemon for those items.
 2. Wait for in-flight agent tasks to complete (bounded; kill
    after grace period).
-3. Persist final state to `~/.dispatch/`.
-4. Remove `dispatcher.pid`.
-5. Exit.
+3. Release all cross-host leases.
+4. Persist final state to `~/.dispatch/`.
+5. Drop the flock; remove `dispatcher.pid`.
+6. Exit.
 
 ### Active-slot semaphore
 
 The dispatcher maintains a single host-wide active-slot
-counter, default 3 (configurable via `slots/cap`). Held slots
-are tracked by child PID in `slots/held`.
+capacity, default 3 (configurable via the `active-slot-cap`
+config). Held slots are represented by **lease files** in
+`~/.dispatch/slots/leases/`, each containing JSON:
+
+```json
+{
+  "lease-id": "<uuid>",
+  "task-id": "<task-id>",
+  "task-type": "implement-step | respond-thread | verify-ticket | review-milestone",
+  "object-id": "<tracker>:<id>",
+  "pid": 12345,
+  "pid-start-ns": 12345678901234567,
+  "dispatched-at": 1700000000
+}
+```
 
 Lifecycle:
 
-- Dispatch an agent task → fork `claude` as a child, record
-  PID in `slots/held`, decrement available count.
-- Agent task exits (success, error, killed, timeout) → reap on
-  next tick, remove PID from `slots/held`, increment available
-  count.
-- Resume-from-task-queue priority: if both a "fresh dispatch"
-  and a "resume from waiting state" task are eligible for the
-  same free slot, the resume wins (better to finish in-flight
-  work than start new work).
+- **Acquire** — under `flock(slots/lock)`, count `*.lease`
+  files; if `< cap`, atomically write the new lease via
+  temp+rename. Then `fork()` the child. If the child fork
+  fails after the lease is written, the dispatcher
+  immediately deletes the lease (no leak). If the lease write
+  fails before fork, the dispatcher just doesn't dispatch —
+  no oversubscription.
+- **Release (normal)** — on reap, the dispatcher deletes the
+  lease file under `flock(slots/lock)`.
+- **Release (orphan recovery)** — at startup, every lease's
+  `pid` + `pid-start-ns` is verified against the live process
+  table; mismatches indicate orphaned leases (daemon crashed
+  during dispatch or post-fork) and are deleted.
+- **Resume-from-`WAIT` priority** — when a slot frees, the
+  dispatcher first checks the resume-queue for parked tasks
+  needing a slot back; if any, the oldest resume wins. New
+  dispatches only proceed when no resumes are pending.
 
 The cap is host-wide; multiple parallel projects share it.
+
+### Queue protocol
+
+The queue is the dispatcher's control plane and MUST be
+durable.
+
+**Enqueue.** Slash commands write to
+`~/.dispatch/queue/incoming/` via temp-file-plus-rename:
+
+```
+1. Pick file name: NNNN-<short-id>.txt where NNNN is
+   monotonically-increasing (zero-padded epoch-millis is fine).
+2. Write the body to ~/.dispatch/queue/incoming/.tmp.<short-id>.
+3. fsync the file.
+4. atomic rename to ~/.dispatch/queue/incoming/NNNN-<short-id>.txt.
+```
+
+**Grammar.** Each queue item is a single line:
+
+| Form                            | Semantics                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------------ |
+| `project: <name>`               | Claim and orchestrate the project.                                                         |
+| `ticket: <id-or-url>`           | Claim and dispatch the ticket.                                                             |
+| `pr: <pr-url>`                  | Register the PR (URL identifies repo + number); written by the `dispatch:pr` skill after the draft PR is opened. |
+| `shutdown`                      | Begin graceful shutdown at end of tick.                                                    |
+| `status: <response-file-path>`  | Write a status summary to the named file (path created by the slash command via mktemp).   |
+
+Items not matching the grammar go to `queue/dead-letter/` with a
+sibling `.reason` file.
+
+**Duplicate detection.** Identical work items submitted within
+30 seconds are deduplicated (same `object-id` and same intent
+type). Useful when a slash command is re-invoked accidentally.
+
+**Failure handling.**
+
+- Permission errors / full disk → the slash command surfaces
+  the error to the user immediately. The daemon doesn't see
+  these.
+- Daemon crash during processing → `queue/in-progress/` items
+  are retried on next startup; items that fail twice in a row
+  go to `queue/dead-letter/`.
+- Shutdown received via the queue → set the flag at the END of
+  the current tick so partially-processed work in earlier
+  steps completes.
+
+### Retry semantics
+
+When a dispatched task exits abnormally (timeout, non-zero
+exit, killed by watchdog), the dispatcher retries up to ONCE
+per object-event pair. The two retry modes:
+
+| Retry # | Mode                | Session                                  | Rationale                                                                                |
+| ------- | ------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 1       | `retry-resume`      | Resume the same `session-id`             | Most failures are transient (flaky test, intermittent CI). Resume keeps context.         |
+| 2       | `retry-fresh`       | Start a fresh session (rotate session-id) | If retry-resume failed, the session may be stuck (corrupted context, planning loop). Fresh session avoids reproducing the same failure. |
+
+After two consecutive failures, the dispatcher escalates per
+the per-task-timeout table — typically a comment on the
+affected PR / ticket and human attention.
+
+`retry-resume` writes a "previous attempt failed" preamble into
+the task prompt so the agent isn't blindly repeating itself.
+`retry-fresh` does NOT include the prior session's outputs;
+the fresh agent re-orients from scratch.
+
+### Idempotency and reconciliation
+
+Every dispatched task MUST be idempotent against repeated
+invocation:
+
+- `implement-step` is idempotent if applied to a fully-checked
+  plan: it re-runs the same step (commit-or-no-commit-needed)
+  and exits.
+- `respond-thread` is idempotent because the thread is marked
+  with a terminal reaction / token after the first successful
+  reply; subsequent invocations detect the marker and exit.
+- `verify-ticket` is idempotent because the verification
+  artifact comment is identifiable; re-runs detect the
+  existing artifact and exit (or replace it if newer).
+- `review-milestone` is idempotent because milestone reviews
+  are anchored on the milestone artifact; re-running is a
+  no-op if the artifact is fresh.
+
+On reap, the dispatcher reconciles task results against
+authoritative external state (PR body, ticket role, comment
+markers) before deciding success / retry. Partial-completion
+patterns:
+
+- Agent pushed commits but failed to update the PR body
+  checklist → dispatcher detects the unchecked plan items and
+  re-dispatches `implement-step`.
+- Agent posted a reply but failed to add the terminal reaction
+  → dispatcher detects the missing reaction and re-dispatches
+  `respond-thread` (which detects its own prior reply, just
+  adds the reaction, exits).
+- Agent ran verification successfully but the script crashed
+  before writing the local exit-success → dispatcher reads
+  the verification artifact comment from the ticket and
+  treats verification as completed.
+
+The general rule: external state (tracker / git remote) is the
+source of truth. Local exit codes are only used to decide
+whether to wait for the next task or escalate immediately.
+
+### Avoiding duplicate dispatch when an orphan task is alive
+
+A daemon respawn (after crash) may inherit lease files
+referencing dead PIDs (cleaned up at startup) AND active orphan
+processes that the prior daemon spawned and never reaped. The
+respawned daemon's reconciliation rules:
+
+1. Lease files with mismatched `pid-start-ns` → orphan; delete
+   lease, reclaim slot.
+2. Lease files with matching live `pid` AND `pid-start-ns` →
+   the orphan is still active; the new daemon adopts it
+   (treats as live in-flight work, applies normal reaping).
+3. Before dispatching a new task on an object, the dispatcher
+   inspects recent activity on the object: if a commit was
+   pushed in the last `2 × tick-interval-seconds` and there is
+   no live lease for it, an orphan agent is presumed to still
+   be working — defer dispatch one tick to give it time to
+   exit cleanly.
 
 ### Per-task timeouts (replaces the old watchdog)
 
@@ -498,8 +694,24 @@ The dispatcher's central decision logic, per tick:
 | PR closed without merge, comment is ambiguous                      | Default to `available` (conservative)                               | n/a (scripted)     |
 | Daemon detects stuck child (timeout exceeded)                      | Kill, retry once, escalate on second timeout                        | n/a (scripted)     |
 
-The dispatcher's logic is mostly a state machine over these
-events. The vast majority of transitions don't involve an LLM.
+The dispatcher's logic is a state machine, but the state
+machine is defined by the **protocol**, not by the dispatcher.
+`ticket-workflow-protocol.md` §"State transitions" enumerates
+the legal role transitions; the event table above is the
+mapping from observed external events to those transitions.
+The dispatcher's job is to detect the event, apply the
+protocol-specified transition, and dispatch the agent task (if
+any) that the transition requires. The vast majority of these
+transitions don't involve an LLM.
+
+Implementation note: the state machine is per-object (per
+project, per ticket, per PR). Each object's local state
+(`role`, `claim`, `task-running`, `session-id`, lease) is
+mutated under that object's `~/.dispatch/locks/<object-id>.lock`
+to prevent concurrent ticks racing on the same object — though
+since there's only one dispatcher per host, the locks mostly
+serve to defend against the dispatcher and a slash command
+mutating the same object simultaneously.
 
 ### Finished detection (Mode A vs Mode B)
 
@@ -573,11 +785,23 @@ not an in-session agent:
 2. If complete AND no in-flight subagents on this milestone,
    dispatch a `review-milestone` task.
 3. The `review-milestone` task produces an outcome comment on
-   the milestone artifact and may file follow-up tickets.
-4. After the task exits, the dispatcher checks milestone state
-   again. If newly-filed tickets put the milestone back into
-   structurally-incomplete, normal dispatch resumes. Otherwise,
-   advance to the next milestone.
+   the milestone artifact AND a structured result file at
+   `~/.dispatch/projects/<tracker>/<project-id>/milestone-review-result.json`
+   with fields: `goal-met` (bool), `follow-up-tickets`
+   (list of newly-filed ticket IDs), `advance-to` (next
+   milestone identifier or `null` if no further milestones).
+4. The dispatcher consumes this result transactionally on
+   reap: it reads the result file before re-polling the
+   milestone state. If `goal-met` is false OR
+   `follow-up-tickets` is non-empty, the milestone is treated
+   as structurally-incomplete (regardless of what a
+   pre-result-arrival poll might have shown) and normal
+   dispatch resumes. Otherwise the dispatcher advances the
+   milestone-state pointer to `advance-to` atomically.
+5. Reading the result file before applying the advancement
+   prevents the race where a follow-up ticket filed by the
+   review task hasn't shown up yet in a tracker poll, leading
+   the dispatcher to advance prematurely.
 
 ### Tracker resolution
 
@@ -1037,8 +1261,14 @@ Three layers, deepest-wins:
 3. **Repo overrides** — `<repo-root>/.dispatch/config.yaml`
    (in-repo, version-controlled).
 
-The dispatcher reloads the config on every tick, so overrides
-take effect quickly without a daemon restart.
+The dispatcher reloads the config on every tick. Reload
+semantics vary per setting; the table below classifies each:
+
+| Reload class       | Behavior                                                                                  | Settings in this class                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `immediate`        | Takes effect on the very next tick, no special handling.                                  | `tick-interval-seconds`, `idle-shutdown-seconds`, `wait-timeout-*`, `dispatch-pr-mode`, `pr-driven-default`, `default-reviewer`, `cancellation-intent-llm-fallback`. |
+| `next-task-only`   | Affects only newly-dispatched tasks. In-flight tasks honor the value at their dispatch time. | `task-timeout-*` (changing while a task is running would otherwise prematurely time it out), `active-slot-cap` (lowering does not preempt in-flight tasks; the new value applies once existing leases drain). |
+| `restart-required` | Does NOT take effect until the dispatcher restarts. Logged as `INFO` if changed.          | `tracker-overrides` (mid-tick mapping changes would mis-classify in-flight objects), `agent-id`, `host-id`. |
 
 Settings exposed:
 

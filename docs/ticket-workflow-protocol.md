@@ -5,8 +5,8 @@ any agent and any tool MUST share when coordinating tracked work
 across PRs and tickets. It is a protocol specification, not an
 implementation guide: it describes what writers emit, what readers
 accept, and what the abstract states mean across trackers, but stays
-silent on skill choreography, polling cadence, and similar
-concerns.
+silent on skill choreography, the agent's operational driver, and
+similar concerns.
 
 Read alongside `agent-communication-protocol.md` (how to write into
 a comment stream) and `pr-status-protocol.md` (how to read PR
@@ -28,9 +28,9 @@ supported tracker maps onto, so skills can reason about "what's
 available for me to start?" or "is this ticket effectively
 blocked?" without caring which tracker holds the data. It also
 codifies the operational norms that any agent doing tracked work
-MUST follow — the communication restriction, the heartbeat and
-log format, the decomposition rule — so multiple agents
-collaborating on the same project produce a uniform audit trail.
+MUST follow — the communication restriction, the log format,
+the decomposition rule — so multiple agents collaborating on the
+same project produce a uniform audit trail.
 
 ## Scope
 
@@ -41,15 +41,14 @@ The protocol covers:
   abstract vocabulary
 - legal state transitions and the rules around corrective and
   cancel transitions
-- dependency semantics, including effective-blocking and refresh
-  efficiency
+- dependency semantics, including effective-blocking
 - milestone semantics, including structural completion and the
   review-before-advance rule
 - definition-of-done semantics, including the verification artifact
 - the agent-side communication restriction once assigned, and the
   routing rule for human input
-- operational norms: heartbeat cadence, log line format,
-  state-change comment format, and the decomposition rule
+- operational norms: log line format, state-change comment format,
+  and the decomposition rule
 
 It does not cover:
 
@@ -57,7 +56,8 @@ It does not cover:
   order, how to verify, how to run a milestone review)
 - the storage location for team override mappings (an
   implementation concern of the consuming plugin)
-- polling cadence or backoff strategy
+- the agent's operational driver (daemon, polling loop, event
+  handler, etc.)
 
 ## Roles and groups
 
@@ -318,17 +318,6 @@ A (verified) → B (in-progress) → C
                     ─ C is blocked: A doesn't, but B does
 ```
 
-### Refresh efficiency
-
-Skills MUST recompute effective-blocking when relevant ticket
-state changes upstream. Polling refreshes MUST be efficient: the
-skill SHOULD use the tracker's changed-since / updated-since
-filter (Linear `updatedAt`, GitHub `since=`, Asana
-`modified_since`) and refresh only the slice of the dependency
-graph touching changed tickets, rather than re-reading every
-dependency on every poll. A full graph reload is permitted only on
-first read or on explicit cache invalidation.
-
 ### Cycles
 
 Dependency cycles are illegal. Skills MUST detect cycles at write
@@ -563,10 +552,10 @@ request to the first venue that exists, in this precedence order:
 In all three cases, the agent MUST tag at least one human in the
 comment so the platform notifies them. The comment MUST follow
 `agent-communication-protocol.md` (machine marker plus
-mode-appropriate visible marker). The agent then enters a polling
-state: monitoring the chosen venue per the read-side rules of that
-protocol, and emitting heartbeats per "Operational logging" until
-the request is resolved.
+mode-appropriate visible marker). The work then enters a wait
+state, logged per "Operational logging" (`WAIT`); monitoring of
+the chosen venue follows the read-side rules of
+`agent-communication-protocol.md` until the request is resolved.
 
 ### Resolution
 
@@ -594,12 +583,12 @@ awaited.
 Every operational log entry has a primary venue and an optional
 tracker echo:
 
-- **Session transcript** (always). Heartbeats and state-change
-  entries land here. Parseable by anyone tailing the session.
+- **Session transcript** (always). Every log entry lands here.
+  Parseable by anyone tailing the session.
 - **Ticket or PR comment** (state changes only). When a state
   change occurs, the agent posts an additional comment on the
   primary venue (PR if one exists, else ticket) summarizing the
-  transition. Heartbeats are NOT echoed to the tracker; that
+  transition. Other log kinds are NOT echoed to the tracker; that
   would spam.
 
 ### Line format (session transcript)
@@ -616,7 +605,7 @@ Field semantics:
 | Field           | Format                                                                            |
 | --------------- | --------------------------------------------------------------------------------- |
 | `<timestamp>`   | RFC 3339 / ISO 8601 with timezone offset, second precision                        |
-| `<kind>`        | One of: `HEARTBEAT`, `TRANSITION`, `WAIT`, `RESUME`, `BLOCK`, `INFO`, `ERROR`     |
+| `<kind>`        | One of: `TRANSITION`, `WAIT`, `RESUME`, `BLOCK`, `INFO`, `ERROR`                  |
 | `<ticket-link>` | Full URL to the ticket. `-` if no ticket assigned to this work.                   |
 | `<pr-link>`     | Full URL to the PR. `-` if no PR exists yet.                                      |
 | `<role>`        | The protocol role, e.g. `in-progress`, `in-review`. `-` if no ticket.             |
@@ -627,10 +616,9 @@ Field semantics:
 
 | Kind         | When to emit                                                                       |
 | ------------ | ---------------------------------------------------------------------------------- |
-| `HEARTBEAT`  | Every five minutes while assigned. Confirms liveness.                              |
 | `TRANSITION` | Whenever the agent transitions a ticket's role.                                    |
-| `WAIT`       | When entering a polling state for human input or external condition.               |
-| `RESUME`     | When exiting a `WAIT` state because the awaited condition was met.                 |
+| `WAIT`       | When the work transitions to awaiting a response or external condition.            |
+| `RESUME`     | When the awaited response arrives or condition is met and active work resumes.     |
 | `BLOCK`      | When filing a new blocking ticket because work is out of scope.                    |
 | `INFO`       | Substantive non-state-change events: subtask creation, reassignment, etc.          |
 | `ERROR`      | Tracker errors, verification failures, and any condition the agent surfaces but does not immediately fail on. |
@@ -645,21 +633,17 @@ Example:
 2026-05-09T14:23:01-04:00 TRANSITION ticket=https://linear.app/foo/issue/DEV-123 pr=https://github.com/o/r/pull/42 ticket-role=in-review pr-state=open | review requested from Copilot
 ```
 
-### Heartbeat cadence
+### WAIT entries
 
-While assigned, the agent MUST emit a `HEARTBEAT` log entry every
-five minutes. While in a `WAIT` state, heartbeats MUST also
-include the awaited venue and the awaited outcome in the message:
-
-```
-2026-05-09T14:28:01-04:00 HEARTBEAT ticket=… pr=… ticket-role=in-review pr-state=open | waiting on PR comment thread #2 (review feedback)
-```
-
-Heartbeats outside `WAIT` state need only confirm liveness:
+A `WAIT` entry's message MUST include the awaited venue and the
+awaited outcome:
 
 ```
-2026-05-09T14:28:01-04:00 HEARTBEAT ticket=… pr=… ticket-role=in-progress pr-state=draft | implementing
+2026-05-09T14:31:00-04:00 WAIT ticket=… pr=… ticket-role=in-review pr-state=open | awaiting human reply on PR comment thread #2 (scope question)
 ```
+
+The corresponding `RESUME` entry SHOULD reference the same venue
+so the wait/resume pair is greppable.
 
 ### State-change comment format (tracker echo)
 

@@ -47,6 +47,7 @@ The protocol covers:
   plan comment)
 - the resume rule for an existing PR
 - the rules governing plan updates and reviewer responses
+- the pre-push review requirement for significant changes
 - the gating conditions between CI, Copilot review, and human
   review
 - the monitoring requirement after the agent steps back
@@ -286,6 +287,77 @@ A reply that does neither is non-conforming. The intent is to
 make every review iteration auditable: a reader scanning the
 thread can tell, for each reviewer comment, what the agent did
 and where to verify it.
+
+## Pre-push review
+
+Before pushing a commit that contains **significant** changes,
+the agent MUST run two pre-push reviews and triage their
+findings before the push lands.
+
+### What counts as "significant"
+
+A push is significant when it contains substantive code edits
+— changes that affect behavior, structure, or interface. The
+following pushes are NOT significant and are exempt from
+pre-push review:
+
+- The empty `chore: open PR [skip ci]` commit from PR-open
+  step 1.
+- Pushes containing only documentation, comments, or
+  formatting changes.
+- Pushes containing only trivial fixups — typo corrections, a
+  one-line lint fix, etc.
+
+The agent uses judgment on borderline cases. The default on
+uncertainty is to run the reviews.
+
+### Required reviews
+
+The agent MUST run both of:
+
+1. **Self-simplification review.** A pass that looks at the
+   pending change for opportunities to simplify, consolidate
+   with existing code, or remove unnecessary complexity. The
+   canonical implementation is the `simplify` skill; an
+   equivalent local convention satisfies the requirement.
+2. **Adversarial review by a distinct reviewer.** A pass by a
+   reviewer that is **not** the agent producing the change —
+   typically a different model or a different agent role —
+   examining the change for defects, missed cases, and
+   incorrect assumptions. The canonical pattern is invoking a
+   Codex-based review; any equivalent cross-reviewer pattern
+   satisfies the requirement. The intent is that the same
+   reasoning process does not both produce and approve the
+   change.
+
+### Local overrides
+
+If the repository's `CLAUDE.md` (or equivalent durable
+instruction file) recommends specific pre-push review steps
+that serve the same role — e.g. a project-specific linter, a
+mandatory test suite, a team-specified review skill — those
+steps replace the corresponding required review above. The
+agent MUST still run two reviews in the spirit defined here
+(one self-simplification, one adversarial); local guidance
+chooses the concrete tools.
+
+### Triage requirement
+
+Findings from either review MUST be triaged before the push
+lands. For each finding the agent either:
+
+- **Acts on it** — amends the pending change to address the
+  finding before pushing, OR
+- **Dismisses it** — records a one-line rationale (in the
+  commit message body, a note appended to the pinned plan
+  comment, or another auditable venue) for why the finding
+  does not apply.
+
+Silently ignoring a finding is non-conforming. Pushing without
+having triaged at least the surfaced findings is non-
+conforming. The agent MAY choose to address findings in
+follow-up commits within the same push, but the choice MUST be
+explicit and recorded.
 
 ## CI gates and reviewer progression
 

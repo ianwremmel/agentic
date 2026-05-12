@@ -287,10 +287,38 @@ Key points:
   session-id capture).
 
 The daemon waits for the runner to exit before marking the event
-handled. A runner exit code other than zero is logged but does
-not re-trigger automatically — the next real event for the task,
-or a subsequent crash-recovery restart, is what wakes the agent
-up again.
+handled.
+
+### Non-zero exits
+
+A non-zero exit is not a no-op: the next external event may
+never arrive (the agent's last action may have been the only
+thing that would have produced one), so silently waiting risks
+stalling the task forever. The daemon handles non-zero exits in
+two tiers:
+
+1. **Hard-coded triage.** A small set of exit conditions has
+   fixed daemon behavior — the runner binary was not found,
+   the runner reported a usage error, the prompt template
+   failed to resolve, the runner OOM'd. These produce a logged
+   failure and either a clean abort (config error: stop
+   accepting events for this task until the user fixes the
+   config) or an immediate retry with backoff (transient
+   resource issue).
+2. **Triage prompt.** For every other non-zero exit, the daemon
+   synthesizes a `runner-error` event carrying the exit code,
+   the tail of the runner's stdout/stderr, and the original
+   event payload. The runner is re-invoked (resuming the same
+   session id) against the `runner-error` prompt template,
+   whose job is to interpret what went wrong, decide whether
+   the agent can recover on its own, and — if not — engage the
+   human per `agent-communication-protocol.md` (e.g. a PR
+   comment or ticket comment asking for input). The triage
+   prompt explicitly may NOT silently swallow the failure.
+
+The triage prompt is overridable through the same prompt-resolution
+order as any other event, so a repo or user can tune what the
+agent says to the human on failure.
 
 ## Prompts
 
@@ -358,6 +386,7 @@ The initial set of event kinds the daemon dispatches on:
 | `heartbeat`        | Internal — fired on the heartbeat cadence so `do-work-protocol.md`'s monitoring      |
 |                    | requirement produces log lines even when no external event has arrived               |
 | `daemon-restart`   | Synthetic — fired after crash recovery to resume a session that was live at crash    |
+| `runner-error`     | Synthetic — fired when the runner exits non-zero outside the hard-coded triage set   |
 
 New event kinds may be added later. The taxonomy is the daemon's
 public surface for prompt overrides; renaming an existing kind is

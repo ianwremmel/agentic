@@ -22,7 +22,7 @@ references them rather than duplicating.
 This protocol exists to ensure three things hold whenever an
 agent changes code:
 
-- **Agents don't pollute the main work tree.** The user's
+- **Agents don't pollute the main worktree.** The user's
   primary checkout stays clean; agent work happens in
   isolated worktrees so concurrent sessions don't step on
   each other or on the user.
@@ -220,25 +220,29 @@ checklist of the steps the agent intends to execute,
 sufficient for a human to audit the agent's intended scope at a
 glance.
 
+**Framing.** The comment body follows
+`agent-communication-protocol.md` end-to-end — the
+`agent-reply` machine marker is the sole leading marker,
+followed (in Mode B) by the sparkle wrap around the body.
+
 **Identification.** The comment MUST be findable for later
 editing. If the platform supports comment pinning (or an
 equivalent first-class "highlight this comment" mechanism), the
 agent MUST pin it. On platforms without pinning — GitHub PR
 comments included — the agent MUST embed a plan-specific
-machine marker in the comment body in addition to the standard
-agent-reply marker from `agent-communication-protocol.md`:
+sentinel inside the wrapped body, distinct from and not
+displacing the leading `agent-reply` marker:
 
 ```
 <!-- agent-plan:<agent-id> -->
 ```
 
-The plan marker is a distinct sentinel from `agent-reply`; both
-appear on the plan comment (one identifies it as agent-
-authored, the other identifies it as the plan).
-
-**Framing.** The comment body itself follows
-`agent-communication-protocol.md` end-to-end — machine marker
-plus mode-appropriate sparkle wrap.
+Placing the plan sentinel inside the body preserves the
+`agent-communication-protocol.md` wire format (single leading
+machine marker plus optional sparkle wrap) so existing
+parsers continue to work; the plan sentinel is an additional
+sentinel readers scan for to identify the plan comment, not a
+second leading marker.
 
 ## Resuming on an existing PR
 

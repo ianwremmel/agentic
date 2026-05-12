@@ -1,8 +1,8 @@
 # Do-Work Protocol
 
-This document defines the on-the-wire behavior any agent MUST
-follow when it changes code in a repository governed by a
-pull-request workflow. It is a protocol specification, not an
+This document defines the behavior any agent MUST follow when
+it changes code in a repository governed by a pull-request
+workflow. It is a protocol specification, not an
 implementation guide: it describes the artifacts an agent emits
 (worktree, empty commit, draft PR, pinned plan, reviewer
 requests), the order they appear in, and the conditions that
@@ -19,22 +19,23 @@ references them rather than duplicating.
 
 ## Why this exists
 
-Whenever an agent changes code in a repository, the act of
-doing so produces side effects that other humans and agents
-must be able to observe and respond to: a branch, a pull
-request, a review request, comments responding to reviewers,
-state changes on a linked ticket. Without a shared protocol,
-every skill that touches code re-invents these side effects in
-slightly different ways — different branch layouts, different
-PR-open ceremonies, different rules about when to ask for
-review — and the audit trail becomes unreadable.
+This protocol exists to ensure three things hold whenever an
+agent changes code:
 
-This protocol fixes those side effects to a uniform shape. Any
-agent doing code work in a PR-driven repository produces the
-same artifacts in the same order, gated by the same conditions,
-so a human (or another agent) auditing a PR can tell at a
-glance what stage the work is at and what is expected to
-happen next.
+- **Agents don't pollute the main work tree.** The user's
+  primary checkout stays clean; agent work happens in
+  isolated worktrees so concurrent sessions don't step on
+  each other or on the user.
+- **Work items go through the appropriate quality gates.**
+  Every change passes pre-push review, CI, and the
+  reviewer-progression stages in a uniform order, so nothing
+  reaches a human reviewer that hasn't already been examined
+  by the available automation.
+- **Humans are not engaged while automation is still in
+  play.** The protocol holds human review until automated
+  signals (CI, Copilot, adversarial pre-push review) have
+  done their work, so humans only see PRs whose remaining
+  questions actually require human judgment.
 
 ## Scope
 
@@ -87,11 +88,12 @@ branch per the repository's own conventions.
 ### No-CI repositories
 
 If a repository has no continuous-integration system
-configured, this protocol does not apply. The CI gates defined
-below are load-bearing; an agent cannot satisfy them in a repo
-where no check rollup exists. Such repositories MUST either
-configure CI, declare themselves non-PR-driven, or accept that
-the do-work protocol is a no-op for them.
+configured, the CI gates defined below are treated as if
+green: the agent proceeds as though the check rollup had
+passed. The rest of the protocol — worktree isolation,
+PR-open sequence, pre-push review, reviewer progression,
+monitoring, termination — still applies. The agent does not
+fabricate check runs; it simply does not wait on them.
 
 ### Platform
 
@@ -105,52 +107,61 @@ Enterprise, in which case the Copilot stage is skipped.
 
 ### Requirement
 
-Before making any code change, the agent MUST be operating
-inside a git worktree dedicated to the work it is about to do.
-The intent is to isolate the agent's edits from the user's
-main checkout and from any other concurrent agent work.
-
-The requirement is satisfied if either of the following holds:
+The agent MUST end up operating inside a git worktree
+dedicated to the work it is about to do before it changes any
+code. Creating a new worktree is one way to satisfy this; it
+is not the only way. The requirement is already satisfied
+when:
 
 - The agent is already in a worktree created for this work
-  (e.g. resumed from a prior session).
+  (e.g. resumed from a prior session, or invoked inside one
+  by the user).
 - The repository is a single-branch-only repository where
-  worktrees do not provide isolation (no other branches exist
-  and none are expected).
+  worktrees do not provide meaningful isolation (no other
+  branches exist and none are expected).
 
-Otherwise the agent MUST create a worktree before proceeding.
+When neither applies, the agent creates a worktree before
+proceeding. The intent is to isolate the agent's edits from
+the user's main checkout and from other concurrent agent
+work, not to mandate a particular ceremony.
 
 ### Path convention
 
-New worktrees MUST be created under:
+The default location for a newly-created worktree is:
 
 ```
-~/.worktree/<owner>/<repo>/<branch>-<random>
+~/.worktree/<owner>/<repo>/<branch>
 ```
 
-- `<owner>` and `<repo>` are taken from the repository's origin
-  URL.
+- `<owner>` and `<repo>` are taken from the repository's
+  origin URL.
 - `<branch>` is the branch name the worktree checks out.
-- `<random>` is a short random suffix (4–8 characters) that
-  disambiguates concurrent worktrees on the same branch and
-  makes the path unique even if the same branch is checked out
-  twice across sessions.
 
-The random suffix means there is no deterministic path to a
-worktree. Agents that need to find an existing worktree for a
-branch MUST consult `git worktree list` rather than guessing
-the path.
+This is a default, not a mandate. A repository's `CLAUDE.md`
+(or equivalent durable instruction file) MAY override the
+location. Existing worktrees created under other conventions
+are fine and SHOULD be reused in place — the agent locates
+them via `git worktree list`, not by guessing the path.
+
+Branch names typically include a short random suffix to
+avoid colliding with existing branches in the repository
+(`feature/foo-aB3x` rather than `feature/foo`). That suffix
+is a property of the branch name itself; the worktree path
+inherits it naturally. The protocol does not prescribe the
+branch naming convention beyond requiring collision
+avoidance.
 
 ### Reuse and cleanup
 
 When the agent resumes work on a branch that already has a
-worktree under the convention above, it MUST reuse that
-worktree rather than creating a new one. Multiple worktrees on
-the same branch are forbidden.
+worktree (at any location), it MUST reuse that worktree
+rather than creating a new one. Multiple worktrees on the
+same branch are forbidden.
 
-Cleanup is implementation-defined. The protocol does not
-require the worktree to be removed when the PR closes, but
-skills SHOULD prune stale worktrees as a housekeeping concern.
+When the PR closes (merged or otherwise), the agent MUST
+remove the worktree it created for that PR. Worktrees not
+created by the agent (e.g. one the user invoked it inside)
+are left alone.
 
 ## PR-open sequence
 
@@ -169,16 +180,19 @@ commit MUST be preserved for the life of the PR; the agent MUST
 NOT amend or squash it locally. Whether it survives merge is
 the repository's merge-strategy concern, not the agent's.
 
-The empty commit is the protocol's load-bearing marker that the
-PR was opened by an agent following this protocol. Tooling MAY
-rely on its presence and exact message to detect protocol-
-governed PRs.
+The empty commit is the protocol's marker that the PR was
+opened by an agent following this protocol. Tooling MAY rely
+on its presence and exact message to detect protocol-governed
+PRs.
 
 ### Step 2 — Draft PR
 
 The agent MUST push the work branch and open a draft pull
-request against the repository's default branch. The PR body
-MUST contain, at minimum, these three sections in this order:
+request against the appropriate base branch — typically the
+repository's default branch, but a different base when the
+work belongs in a stacked-diff sequence or is otherwise
+targeted at a non-default branch. The PR body MUST contain,
+at minimum, these three sections in this order:
 
 1. **Motivation** — why the work is being done. User-facing
    problem statement, expected outcome.
@@ -410,10 +424,28 @@ repo-dependent. The protocol does not prescribe a selection
 mechanism; CODEOWNERS, ticket assigner, configured per-repo
 reviewer, or another convention may all be acceptable. The
 agent MUST identify a specific human (or set of humans) to
-request, MUST NOT request review from itself, and MUST follow
+engage, MUST NOT request review from itself, and MUST follow
 `agent-communication-protocol.md`'s rules on alternative
 credentials if the platform restricts who may request which
 kinds of review.
+
+**Engagement venue.** Where the agent and the human share
+credentials (Mode B per
+`agent-communication-protocol.md`), GitHub's review-request
+mechanism cannot be used — the agent would be requesting
+review from itself. In that case the agent engages the human
+through whichever of the following venues is available:
+
+- A PR comment tagging the human and stating that the PR is
+  ready for review.
+- A ticket assigned to the human with a link to the PR.
+- A log line to the CLI (in interactive sessions) indicating
+  the PR is ready and naming the expected reviewer.
+
+The agent picks the venue most likely to actually reach the
+human in the current environment; in long-running automated
+sessions the PR or ticket comment is preferred over a CLI
+log.
 
 ### Stage 3 — Iteration
 
@@ -424,6 +456,15 @@ above. The iteration loop is **driven by actionability** — the
 agent continues iterating as long as any thread or annotation
 on the PR is actionable per `pr-status-protocol.md`, and stops
 iterating when none is.
+
+The agent has leeway to judge whether a Copilot (or other
+automated reviewer) comment is relevant in the situation.
+Copilot frequently surfaces nits and stylistic preferences
+that are not material to the change at hand; dismissing such
+comments with a brief rationale is conforming behavior per
+the reviewer-responses rule. The agent SHOULD give human
+comments more deference than automated ones; the bar to
+dismiss a human comment is higher.
 
 The protocol does not cap iteration count or impose a deadline.
 

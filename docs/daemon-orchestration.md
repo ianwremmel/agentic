@@ -118,19 +118,30 @@ pointer needed to resume.
 
 The daemon's state directory is:
 
-```
-~/.local/state/dispatch/         (Linux, per XDG_STATE_HOME)
-~/Library/Application Support/dispatch/   (macOS)
-```
+- **Linux:** `$XDG_STATE_HOME/dispatch` when `XDG_STATE_HOME` is
+  set; otherwise `~/.local/state/dispatch`.
+- **macOS:** `~/Library/Application Support/dispatch`.
 
 Inside it:
 
 ```
 daemon.pid               # exclusive lock + PID
 daemon.log               # rolling log
-tasks/<id>.json          # one file per task, atomically replaced
-events/<ts>-<id>.json    # event spool (drained on startup)
+tasks/<encoded-id>.json  # one file per task, atomically replaced
+events/<ts>-<encoded-id>.json  # event spool (drained on startup)
 ```
+
+#### Filename encoding
+
+Canonical task IDs (e.g. `github:owner/repo#123`,
+`linear:TEAM-456`) contain `:`, `/`, and `#`, which are not safe
+filename characters. The daemon encodes a canonical ID into a
+filename by percent-encoding every byte that is not in
+`[A-Za-z0-9._-]`, lower-case. `github:owner/repo#123` becomes
+`github%3Aowner%2Frepo%23123`, which round-trips deterministically
+and contains no path separators. The encoded form is used only
+in filenames; the canonical ID is preserved verbatim inside the
+JSON.
 
 ### Crash recovery
 
@@ -387,6 +398,9 @@ The initial set of event kinds the daemon dispatches on:
 |                    | requirement produces log lines even when no external event has arrived               |
 | `daemon-restart`   | Synthetic — fired after crash recovery to resume a session that was live at crash    |
 | `runner-error`     | Synthetic — fired when the runner exits non-zero outside the hard-coded triage set   |
+| `pr-coalesced`     | Synthetic — fired when two or more PR-side events are discovered on the same tick    |
+|                    | or accumulated into a mutable follow-up; carries the combined event list             |
+| `ticket-coalesced` | Synthetic — same as `pr-coalesced` but for ticket-side base events                   |
 
 New event kinds may be added later. The taxonomy is the daemon's
 public surface for prompt overrides; renaming an existing kind is
@@ -411,10 +425,23 @@ can surface multiple changes for the same task at once — for
 example, a Copilot review and a CI failure that landed during
 the same poll window. These are NOT delivered as separate
 events. The daemon combines all changes discovered on one tick
-into a single coalesced event payload, picks the most specific
-applicable prompt template (e.g. `pr-coalesced` rather than
-either `pr-review` or `ci-finished`), and invokes the runner
-once. `pr-status-protocol.md`'s actionability rules let the
+into a single coalesced event payload and invokes the runner
+once.
+
+**Event-kind selection.** The mapping from a set of base events
+to the coalesced event kind is deterministic:
+
+- One base event → that base event's kind (no coalescing).
+- Two or more base events, all on the same side (PR-side or
+  ticket-side) → `pr-coalesced` or `ticket-coalesced`
+  respectively.
+- A mixed set spanning both sides → `pr-coalesced` (PR-side wins
+  because it carries the worktree-bearing context the agent
+  needs to act).
+
+The coalesced payload always lists every original base event so
+the agent (and any override prompt) can inspect what was
+combined. `pr-status-protocol.md`'s actionability rules let the
 agent reason about a combined PR state without the daemon
 having to fan changes out into separate handlers.
 
@@ -479,8 +506,19 @@ produces noise.
 
 `dispatch daemon start` does, in order:
 
-1. Take the exclusive PID lock at `<state>/daemon.pid`. Refuse
-   to start if another daemon holds it.
+1. Acquire the daemon lock. The lock combines an OS-level
+   exclusive file lock (`flock(LOCK_EX | LOCK_NB)` on Linux,
+   equivalent on macOS) with the recorded PID inside
+   `<state>/daemon.pid`. The acquire sequence is: attempt
+   `LOCK_NB`; if it fails, the holding process is alive — refuse
+   to start. If the lock is free but the file exists from a
+   prior crash (stale lockfile), read the PID, confirm via
+   `kill -0` that no process by that PID is running (or, if one
+   is, that it is not a dispatch daemon by checking its argv),
+   then overwrite the file with the current PID and take the
+   lock. The OS lock is the source of truth — the PID file
+   exists only to give human operators a readable pointer. Stale
+   lockfiles do not block startup; concurrent live daemons do.
 2. Verify required CLIs are present and authenticated (see
    "Required CLIs" below). Refuse to start on failure.
 3. Rehydrate tasks from `<state>/tasks/`.

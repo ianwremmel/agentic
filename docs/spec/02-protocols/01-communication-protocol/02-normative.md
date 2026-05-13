@@ -216,35 +216,23 @@ Reactions carry no body and therefore require neither marker.
 
 ### Requesting a review
 
-Some platforms restrict certain review types to human accounts. GitHub only
-allows human users to request a Copilot review, not bot accounts. When an agent
-in Mode A needs to request such a review, it MAY obtain alternative credentials
-(a token belonging to a human user, granted for the purpose). The specifics are
-a platform- and deployment-level concern.
+An agent MUST NOT request a review from the same account it is authenticated as.
 
-An agent MUST NOT request a review from the same account it is authenticated
-as. Most platforms reject self-review requests; even where they do not, the
-result is meaningless.
+An agent in Mode A MAY obtain alternative human-user credentials to request a
+review type the platform restricts to human accounts (e.g. Copilot review on
+GitHub).
 
 ### Leaving a review (Mode B)
 
-In Mode B the agent shares a user account with a human. Most platforms forbid
-that user from submitting an Approve or Request-changes review on their own PR.
-The agent therefore MUST NOT submit Approve or Request-changes reviews on PRs
+An agent in Mode B MUST NOT submit Approve or Request-changes reviews on PRs
 authored under its current credentials. It MUST submit Comment-style reviews
-instead.
-
-Each comment the agent writes inside such a review is a question or request for
-action directed at the human. The agent MUST apply the same read-side and
-terminal-signal rules to any subsequent replies.
+instead. The read-side and terminal-signal rules apply to all replies within
+such a review.
 
 ### Reading a review (Mode B, inverse)
 
-When a human reviews a PR authored by the agent under the same account, the
-human also cannot submit Approve or Request-changes reviews. The agent therefore
-MUST NOT wait for a formal Request-changes review state on its own PRs. Every
-comment the human leaves — review comment, inline comment, or top-level PR
-comment — MUST be evaluated as either a question to answer or an implicit
-change request to act on. Treating the absence of a Request-changes state as
-"no changes requested" is a conformance violation.
+An agent MUST NOT treat the absence of a formal Request-changes review state as
+"no changes requested" on PRs it authored in Mode B. Every comment the account's
+human leaves — review comment, inline comment, or top-level PR comment — MUST
+be evaluated as either a question to answer or an implicit change request.
 

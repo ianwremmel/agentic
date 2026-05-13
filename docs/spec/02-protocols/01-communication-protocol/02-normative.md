@@ -248,22 +248,3 @@ comment — MUST be evaluated as either a question to answer or an implicit
 change request to act on. Treating the absence of a Request-changes state as
 "no changes requested" is a conformance violation.
 
-## State diagram
-
-The following diagram shows the lifecycle of a single comment thread from the
-agent's perspective.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Unseen : new comment arrives
-    Unseen --> Evaluating : agent polls / event fires
-    Evaluating --> NonActionable : newest comment is own terminal post\nor platform resolved
-    Evaluating --> Actionable : human replied, or own post non-terminal
-    Actionable --> Acting : agent decides to respond
-    Acting --> NonActionable : agent posts terminal signal
-    Acting --> Actionable : agent posts non-terminal signal (eyes)
-    NonActionable --> Evaluating : new comment arrives in thread
-    NonActionable --> [*] : PR / ticket closed
-    NonActionable --> Cached : agent caches thread
-    Cached --> Evaluating : new comment invalidates cache
-```

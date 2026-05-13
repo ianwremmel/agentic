@@ -119,3 +119,24 @@ feedback. The do-work protocol (§2.4) handles this in detail.
 
 In Mode A (dedicated bot account), the human and the agent have separate
 identities and neither restriction applies.
+
+## Thread lifecycle
+
+The diagram below illustrates the lifecycle of a single comment thread from the
+agent's perspective. The formal rules behind each transition are defined in
+§2.1.2 (read-side rules and terminal signals).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unseen : new comment arrives
+    Unseen --> Evaluating : agent polls / event fires
+    Evaluating --> NonActionable : newest comment is own terminal post\nor platform resolved
+    Evaluating --> Actionable : human replied, or own post non-terminal
+    Actionable --> Acting : agent decides to respond
+    Acting --> NonActionable : agent posts terminal signal
+    Acting --> Actionable : agent posts non-terminal signal (eyes)
+    NonActionable --> Evaluating : new comment arrives in thread
+    NonActionable --> [*] : PR / ticket closed
+    NonActionable --> Cached : agent caches thread
+    Cached --> Evaluating : new comment invalidates cache
+```

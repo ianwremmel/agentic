@@ -17,8 +17,11 @@ layer:
 - **§2.4 Do-Work Protocol** — the rules any agent must follow when changing
   code: worktree isolation, the PR-open sequence, pre-push review, CI and
   reviewer gating, and termination.
-- **§3 CLI and Daemon** — the `dispatch` binary: every command, the daemon
-  process model, the spawn contract for agent sessions, and the event taxonomy.
+- **§3.1 Daemon** — the daemon process model, spawn contract for agent
+  sessions, event taxonomy, and prompt template system.
+- **§3.2 Commands** — the full `dispatch` CLI command reference, including the
+  interaction commands the protocols depend on (e.g., `create-comment`,
+  `request-review`).
 
 ## What this spec does not cover
 
@@ -32,15 +35,13 @@ layer:
 
 ## How to read this spec
 
-Each section has two files:
+Sections contain some combination of **narrative** material (context, rationale,
+annotated examples, and design intent) and **normative** material (formal
+requirements, wire formats, state machines, and tables).
 
-- **Narrative** (`01-narrative.md`) — context, rationale, annotated examples,
-  and design intent. Read this to understand *why* requirements exist.
-- **Normative** (`02-normative.md`) — formal requirements, wire formats, state
-  machines, and tables. Read this to understand *what* must be implemented.
-
-The normative file is authoritative. When a narrative explanation and a
-normative rule appear to conflict, the normative rule governs.
+Read narrative material to understand *why* requirements exist. Read normative
+material to understand *what* must be implemented. When they conflict, normative
+requirements govern.
 
 ## Conformance language
 
@@ -108,15 +109,17 @@ graph TD
     PSP["§2.2 PR Status Protocol<br/><i>how to read PR state</i>"]
     TWP["§2.3 Ticket Workflow Protocol<br/><i>lifecycle vocabulary &amp; logging</i>"]
     DWP["§2.4 Do-Work Protocol<br/><i>worktree → draft PR → CI → merge</i>"]
-    CLI["§3 CLI / Daemon<br/><i>operational driver</i>"]
+    DMN["§3.1 Daemon<br/><i>operational driver</i>"]
+    CMD["§3.2 Commands<br/><i>CLI primitives</i>"]
 
     DWP --> ACP
     DWP --> PSP
     DWP --> TWP
-    CLI --> ACP
-    CLI --> PSP
-    CLI --> TWP
-    CLI --> DWP
+    DMN --> ACP
+    DMN --> PSP
+    DMN --> TWP
+    DMN --> DWP
+    DMN --> CMD
     PSP --> ACP
     TWP --> ACP
 ```

@@ -155,13 +155,8 @@ Non-actionable threads still inform the agent's understanding of the broader
 conversation and MUST remain available as context. They do not require a new
 reply or reaction.
 
-### Caching
-
-Non-actionable threads MAY be kept in a local cache (scoped to the PR or
-ticket) and loaded on demand rather than re-fetched every poll. The cache MUST
-preserve thread content verbatim. Cache invalidation is the implementor's
-responsibility; the most critical case is a thread becoming actionable again due
-to a new comment.
+The cache layout and invalidation rules for non-actionable thread content are
+defined in §2.2.2 §Cache layout.
 
 ## Terminal signals
 

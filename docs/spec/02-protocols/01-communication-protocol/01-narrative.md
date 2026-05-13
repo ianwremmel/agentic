@@ -102,23 +102,17 @@ has been decided* so it only acts on things that need a new decision.
 
 On GitHub, you cannot approve or request changes on a pull request you authored.
 This restriction applies to the account, not the person — so in Mode B, where
-the agent and the human share an account, the constraint applies in both
-directions:
+the agent and the human share an account, the human **cannot formally approve or
+request changes** on PRs the agent authored. Any feedback the human leaves will
+be Comment-style review comments.
 
-- The agent **cannot approve or request changes** on PRs authored by the human,
-  because it shares the author's account. It can only leave Comment-style
-  reviews.
-- The human **cannot formally approve or request changes** on PRs the agent
-  authored using the same account. Any feedback the human leaves will be
-  Comment-style review comments.
-
-The practical consequence: agents in Mode B must not wait for a formal
-"Request changes" review state on their own PRs — it will never arrive. Every
+The practical consequence: an agent in Mode B must not wait for a formal
+"Request changes" review state on its own PRs — it will never arrive. Every
 comment the human leaves, review or otherwise, must be treated as substantive
 feedback. The do-work protocol (§2.4) handles this in detail.
 
 In Mode A (dedicated bot account), the human and the agent have separate
-identities and neither restriction applies.
+identities and this restriction does not apply.
 
 ## Thread lifecycle
 

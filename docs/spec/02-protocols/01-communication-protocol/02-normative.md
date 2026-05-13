@@ -222,13 +222,6 @@ An agent in Mode A MAY obtain alternative human-user credentials to request a
 review type the platform restricts to human accounts (e.g. Copilot review on
 GitHub).
 
-### Leaving a review (Mode B)
-
-An agent in Mode B MUST NOT submit Approve or Request-changes reviews on PRs
-authored under its current credentials. It MUST submit Comment-style reviews
-instead. The read-side and terminal-signal rules apply to all replies within
-such a review.
-
 ### Reading a review (Mode B, inverse)
 
 An agent MUST NOT treat the absence of a formal Request-changes review state as

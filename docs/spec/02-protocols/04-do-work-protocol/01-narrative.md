@@ -51,7 +51,8 @@ is the property — isolation — not the ceremony.
 Opening the PR against an empty commit (with `[skip ci]`) rather than against the
 first real commit avoids a common trap: CI runs against a half-finished
 implementation and the PR starts its lifecycle in a red state for reasons
-unrelated to the final code.
+unrelated to the final code — and wastes CI capacity on code we know can't work
+yet.
 
 The empty commit is also a stable marker. Tooling can detect protocol-governed
 PRs by checking for this exact commit at the base of the PR branch; it identifies

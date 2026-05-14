@@ -69,15 +69,19 @@ On startup, the daemon MUST:
 
 ### Runner configuration
 
-The runner is configured in `~/.config/dispatch/config.toml`:
+The runner is configured in `~/.config/dispatch/config.json`
+(implementation-defined format; JSON shown as example):
 
-```toml
-[runner]
-binary          = "claude"
-permissions     = "bypass"
-resume_flag     = "--resume"
-session_id_capture = "stdout-jsonline"
-extra_args      = ["--dangerously-skip-permissions"]
+```json
+{
+  "runner": {
+    "binary": "claude",
+    "permissions": "bypass",
+    "resume_flag": "--resume",
+    "session_id_capture": "stdout-jsonline",
+    "extra_args": ["--dangerously-skip-permissions"]
+  }
+}
 ```
 
 The daemon MUST NOT hardcode `claude` as the binary. Any compatible runner
@@ -100,9 +104,10 @@ satisfying the spawn contract MUST be accepted.
   and persist it on the task record.
 - On every **subsequent spawn**, the daemon MUST pass the resume flag and the
   stored session ID.
-- The working directory MUST be the task's worktree. If no worktree exists yet,
-  the prompt for the triggering event MUST be `bootstrap`, which is responsible
-  for creating it.
+- The working directory MUST be the task's worktree. The daemon MUST create the
+  worktree before invoking the runner. If no worktree exists for a new task, the
+  daemon creates it as part of processing the `bootstrap` event, before the
+  runner is spawned.
 - The event payload MUST be written as a JSON file under `events/` and passed by
   path, not on the command line.
 - Stdio MUST be captured to `daemon.log` with a task-id prefix. The runner has
@@ -215,13 +220,13 @@ For each event source, the daemon MUST use the least-expensive available strateg
 
 Dynamic polling intervals:
 
-| Stage                              | Default base interval |
-| ---------------------------------- | --------------------- |
-| Awaiting Copilot review            | 30 s                  |
-| Awaiting CI on an active head      | 60 s                  |
-| Awaiting human reviewer            | 5 min                 |
-| Awaiting ticket transition         | 5 min                 |
-| Idle (monitoring only)             | 15 min                |
+| Stage                              | Default interval                           |
+| ---------------------------------- | ------------------------------------------ |
+| Awaiting Copilot review            | 30 s                                       |
+| Awaiting CI on an active head      | 60 s once, then 5 min                      |
+| Awaiting human reviewer            | 5 min                                      |
+| Awaiting ticket transition         | 5 min                                      |
+| Idle (monitoring only)             | 15 min                                     |
 
 The daemon SHOULD tighten the interval near known high-likelihood transition
 points. Intervals MUST be data-driven, not constant.

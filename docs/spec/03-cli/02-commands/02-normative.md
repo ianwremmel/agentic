@@ -1,4 +1,4 @@
-# §3.2.2 — Commands: Normative
+# §3.2.2 — Commands: Normative (Daemon and Task Commands)
 
 All `dispatch` commands exit 0 on success and non-zero on error. Errors are
 written to stderr; structured output is written to stdout.
@@ -15,8 +15,8 @@ Start the daemon process.
 dispatch daemon start [--foreground]
 ```
 
-| Flag          | Meaning                                         |
-| ------------- | ----------------------------------------------- |
+| Flag           | Meaning                                         |
+| -------------- | ----------------------------------------------- |
 | `--foreground` | Run in the foreground; do not detach from TTY.  |
 
 Behavior per §3.1.2 §Lifecycle §Start. Exits non-zero if the PID lock is held
@@ -95,6 +95,9 @@ if the event kind is unknown or no override exists.
 
 ## Task commands
 
+All task commands that create a new task automatically launch the daemon if it is
+not already running.
+
 ### `dispatch tasks list`
 
 List all tasks the daemon is monitoring.
@@ -106,184 +109,70 @@ dispatch tasks list
 Output: one line per task with id, current role (from last heartbeat), and last
 heartbeat timestamp.
 
-### `dispatch tasks add`
+### `dispatch add-ticket`
 
-Register a PR or ticket for the daemon to monitor.
+Register a single ticket for the daemon to monitor and work on.
 
 ```
-dispatch tasks add <url>
+dispatch add-ticket <url-or-id>
 ```
 
-`<url>` is a full URL to a GitHub PR or a supported ticket tracker issue. The
-daemon creates a task record and immediately fires a `bootstrap` event if no
-worktree exists. Exits non-zero if the URL is not recognized or the task already
-exists.
+`<url-or-id>` is a full URL or a tracker-native ID (e.g. `DEV-123`) for a
+supported ticket tracker issue. The daemon creates a task record, creates the
+worktree, and immediately fires a `bootstrap` event.
+
+If the daemon is not running, it is started automatically before the task is
+added. Exits non-zero if the ticket is not recognized or the task already exists.
+
+### `dispatch add-project`
+
+Register a project for the daemon to monitor. The daemon fetches the project's
+dependency graph and determines which tickets to work on.
+
+```
+dispatch add-project <url-or-id>
+```
+
+`<url-or-id>` is a full URL or a tracker-native project identifier. The daemon
+creates task records for eligible tickets (those in the `available` role with no
+remaining blockers), creating worktrees and firing `bootstrap` events as needed.
+
+If the daemon is not running, it is started automatically before the project is
+added. Exits non-zero if the project is not recognized.
+
+### `dispatch add-pr`
+
+Register an existing pull request for the daemon to monitor.
+
+```
+dispatch add-pr <url>
+```
+
+`<url>` is a full URL to a GitHub PR. The daemon creates a task record and resumes
+monitoring from the current PR state. The daemon MUST NOT open a new PR or create
+a new empty commit for a task registered with `add-pr`.
+
+If the daemon is not running, it is started automatically. Exits non-zero if the
+PR URL is not recognized or the task already exists.
 
 ### `dispatch tasks remove`
 
 Stop monitoring a task.
 
 ```
-dispatch tasks remove <url>
+dispatch tasks remove <url-or-id>
 ```
 
 Terminates any live runner for the task (SIGTERM), removes the task record, and
-removes the worktree if the daemon created it. The worktree is not removed if it
-was not created by the daemon. Exits non-zero if the task is not found.
+removes the worktree if the daemon created it. Worktrees not created by the
+daemon are left alone. Exits non-zero if the task is not found.
 
 ### `dispatch tasks show`
 
 Show the full task record for a single task.
 
 ```
-dispatch tasks show <url>
+dispatch tasks show <url-or-id>
 ```
 
 Prints the task record as JSON. Exits non-zero if the task is not found.
-
----
-
-## Interaction commands
-
-These commands are invoked by agent sessions to perform platform writes and reads
-in compliance with §2.1 and §2.2.
-
-### `dispatch create-comment`
-
-Post a new top-level comment on a PR or ticket, applying the §2.1 wire format.
-
-```
-dispatch create-comment \
-    --repo <owner/repo> \
-    (--pr <number> | --issue <number>) \
-    --body <text> \
-    --agent-id <id>
-```
-
-| Flag         | Meaning                                                          |
-| ------------ | ---------------------------------------------------------------- |
-| `--repo`     | Repository in `<owner>/<repo>` form. REQUIRED.                   |
-| `--pr`       | PR number. Mutually exclusive with `--issue`.                    |
-| `--issue`    | Issue number. Mutually exclusive with `--pr`.                    |
-| `--body`     | Comment body (opaque to the command). REQUIRED.                  |
-| `--agent-id` | Agent identifier placed in the machine marker. REQUIRED.         |
-
-The command automatically prepends the machine marker (`<!-- agent-reply:<id> -->`)
-and applies the Mode B sparkle wrapper when the authenticated account is
-human-credentialed per §2.1.2 §Mode detection. The caller MUST NOT include the
-marker or sparkle wrapper in `--body`.
-
-Exits non-zero if the target does not exist, credentials are insufficient, or
-mode detection fails with no default.
-
-### `dispatch reply-to-thread`
-
-Post a reply in an existing PR review thread or ticket comment thread.
-
-```
-dispatch reply-to-thread \
-    --repo <owner/repo> \
-    --thread-id <id> \
-    --body <text> \
-    --agent-id <id>
-```
-
-| Flag          | Meaning                                                           |
-| ------------- | ----------------------------------------------------------------- |
-| `--repo`      | Repository in `<owner>/<repo>` form. REQUIRED.                    |
-| `--thread-id` | Platform-stable thread identifier. REQUIRED.                      |
-| `--body`      | Reply body. REQUIRED.                                             |
-| `--agent-id`  | Agent identifier placed in the machine marker. REQUIRED.          |
-
-Applies §2.1 wire format identically to `create-comment`.
-
-### `dispatch react`
-
-Add a reaction to a comment.
-
-```
-dispatch react \
-    --repo <owner/repo> \
-    --comment-id <id> \
-    --reaction (+1 | -1 | rocket | eyes)
-```
-
-| Flag           | Meaning                                               |
-| -------------- | ----------------------------------------------------- |
-| `--repo`       | Repository in `<owner>/<repo>` form. REQUIRED.        |
-| `--comment-id` | Platform-stable comment identifier. REQUIRED.         |
-| `--reaction`   | One of `+1`, `-1`, `rocket`, `eyes`. REQUIRED.        |
-
-Reactions carry no body and require neither machine marker nor sparkle wrapper
-per §2.1.2 §Writing rules. The command MUST NOT add them.
-
-### `dispatch request-review`
-
-Request a review on a PR.
-
-```
-dispatch request-review \
-    --repo <owner/repo> \
-    --pr <number> \
-    --reviewer <login> \
-    [--reviewer <login> ...]
-```
-
-| Flag         | Meaning                                                                 |
-| ------------ | ----------------------------------------------------------------------- |
-| `--repo`     | Repository in `<owner>/<repo>` form. REQUIRED.                          |
-| `--pr`       | PR number. REQUIRED.                                                    |
-| `--reviewer` | Login to request. May be repeated. At least one REQUIRED.               |
-
-The command MUST enforce §2.1.2 §Review rules: it MUST refuse to request a
-review from the authenticated account itself. Exits non-zero if any reviewer is
-the authenticated account.
-
-On platforms where review-request from the current account is restricted (Mode B,
-GitHub), the command MUST surface an actionable error message.
-
-### `dispatch pr-status`
-
-Emit the §2.2 XML document for a PR and update the disk cache.
-
-```
-dispatch pr-status \
-    --repo <owner/repo> \
-    --pr <number> \
-    --agent-id <id> \
-    [--skill <skill>]
-```
-
-| Flag         | Meaning                                                                                  |
-| ------------ | ---------------------------------------------------------------------------------------- |
-| `--repo`     | Repository in `<owner>/<repo>` form. REQUIRED.                                           |
-| `--pr`       | PR number. REQUIRED.                                                                     |
-| `--agent-id` | Calling agent's identity, used to classify thread actionability. REQUIRED.               |
-| `--skill`    | Skill name, used as the cache namespace. Defaults to the agent ID if omitted.            |
-
-Behavior per §2.2.2. Emits the `<pr-status>` XML document on stdout. Populates
-and updates the disk cache. Exits non-zero if the PR does not exist or
-credentials are insufficient.
-
-### `dispatch ack-annotation`
-
-Mark an annotation as non-actionable by writing the §2.2 `.ack` marker.
-
-```
-dispatch ack-annotation \
-    --repo <owner/repo> \
-    --pr <number> \
-    --annotation-id <id> \
-    [--skill <skill>]
-```
-
-| Flag             | Meaning                                                              |
-| ---------------- | -------------------------------------------------------------------- |
-| `--repo`         | Repository in `<owner>/<repo>` form. REQUIRED.                       |
-| `--pr`           | PR number. REQUIRED.                                                 |
-| `--annotation-id`| Platform-stable annotation identifier. REQUIRED.                     |
-| `--skill`        | Skill name used as the cache namespace. Defaults to the agent ID.    |
-
-Creates `annotations/<annotation-id>.ack` in the §2.2 cache directory for the
-given PR. Exits non-zero if the cache directory does not exist (run `pr-status`
-first).

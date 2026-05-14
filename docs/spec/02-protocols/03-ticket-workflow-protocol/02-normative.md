@@ -105,8 +105,13 @@ If an issue is closed but its Project Status is not in the `completed` or
 | Incomplete / Committed            | `unstarted` | `available`         |
 | Incomplete / In Progress          | `started`   | `in-progress`       |
 | Incomplete / In Review            | `started`   | `in-review`         |
-| Incomplete / Complete             | `started`   | `delivered`         |
-| Complete (top-level)              | `completed` | `verified`          |
+| Complete (native or custom field) | `completed` | `verified`          |
+
+When a task's custom field is set to Complete, Asana automation typically marks
+the native task Complete simultaneously. These transitions MUST be treated as a
+single atomic event mapping to `verified`. There is no distinct `delivered` state
+in default Asana; teams that need it MUST add a custom-field option and map it in
+a team override.
 
 Teams that need `finished` or `canceled` on Asana MUST add custom-field options
 and map them in a team override.
@@ -213,28 +218,45 @@ depend on a ticket on another tracker.
 
 ### Membership
 
-A ticket belongs to at most one milestone at a time. Where a tracker permits
-multi-milestone assignment, the team config MUST elect a primary-milestone field;
-skills MUST use only that field and MUST treat all others as informational.
+On most trackers, a ticket belongs to at most one milestone at a time. In Asana,
+a task may belong to multiple projects and may therefore block multiple milestones
+simultaneously — this is permitted and expected. On other trackers, where a
+tracker permits multi-milestone assignment, the team config MUST elect a
+primary-milestone field; implementations MUST use only that field and MUST treat
+all others as informational.
 
-### Structural completion
+### Ready for review
 
-A milestone is **structurally complete** when every ticket in it is in the
-`completed` group (`verified`) or the `canceled` group (`canceled`).
+A milestone is **ready for review** when it has no remaining blockers: every
+ticket in the milestone is in the `verified` or `canceled` group, and no
+unresolved ticket (in any group other than `verified` or `canceled`) is a direct
+or transitive dependency of any ticket in the milestone.
 
 ### Milestone review
 
-When a milestone reaches structural completion, a milestone review SHOULD run
-before the next milestone is started. The review outcome MUST be recorded as a
-comment on the designated review artifact (a Linear project update, a GitHub
-Milestone closure comment, or an Asana milestone-task comment). Skills dispatching
-work MUST check both structural completion and review completion before advancing
-to the next milestone.
+When a milestone is ready for review, a milestone review MUST run before the
+next milestone is started. The review answers two questions:
+
+1. **Was the milestone goal achieved?**
+2. **Is follow-up work needed?**
+
+If the review determines follow-up work is needed, the reviewer MUST file those
+tickets in the **current** milestone. Filing follow-up tickets in the current
+milestone prevents transition to the next milestone. The implementation resumes
+work on the follow-up tickets within the current milestone, and a new milestone
+review runs once they are complete.
+
+The review outcome MUST be recorded as a comment on the designated review
+artifact (a Linear project update, a GitHub Milestone closure comment, or an
+Asana milestone-task comment). Implementations dispatching work MUST verify that
+the current milestone is both ready for review AND has a recorded review outcome
+before advancing to the next milestone.
 
 ### Trackers without milestones
 
 If no milestone mechanism is available, the protocol's milestone semantics do not
-apply and skills MUST treat the entire ticket pool as one implicit milestone.
+apply and implementations MUST treat the entire ticket pool as one implicit
+milestone.
 
 ## Definition of Done
 
@@ -385,8 +407,12 @@ tracker's native subtask mechanism, and MUST operate on subtasks individually.
 The parent ticket MUST remain in `in-progress` until all subtasks reach
 `verified` or `canceled`. The subtask creation MUST be logged as `INFO`.
 
-**Out-of-scope blocker** — the agent MUST file a new ticket for the blocker, MUST
-link it as a `blocks` edge to the current ticket per §Dependencies, and MUST tag
-a human. The parent ticket MAY remain in `in-progress` if non-blocked work
-remains, or MUST transition to `awaiting-external` (or `paused` if unavailable)
-if no progress can be made. The blocker filing MUST be logged as `BLOCK`.
+**Out-of-scope blocker** — the agent MUST file a new ticket for the blocker and
+MUST link it as a `blocks` edge to the current ticket per §Dependencies. The
+agent then switches to working on the blocker ticket (or another unblocked ticket
+in the queue). When the blocker is resolved, the agent returns to the original
+ticket. Tagging a human is required only when the blocker requires a human
+decision that cannot be made autonomously. The parent ticket MAY remain in
+`in-progress` if other non-blocked work remains, or MUST transition to
+`awaiting-external` (or `paused` if unavailable) if all remaining work is
+blocked. The blocker filing MUST be logged as `BLOCK`.

@@ -62,10 +62,11 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 
 ### §3.2 — Commands
 
-| File                                                  | Contents                                                  |
-| ----------------------------------------------------- | --------------------------------------------------------- |
-| [01-narrative.md](03-cli/02-commands/01-narrative.md) | Role of the command layer; interaction vs daemon commands |
-| [02-normative.md](03-cli/02-commands/02-normative.md) | Full reference for all dispatch CLI commands              |
+| File                                                                    | Contents                                                   |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [01-narrative.md](03-cli/02-commands/01-narrative.md)                   | Role of the command layer; interaction vs daemon commands   |
+| [02-normative.md](03-cli/02-commands/02-normative.md)                   | Daemon, prompt, and task management commands               |
+| [03-interaction-commands.md](03-cli/02-commands/03-interaction-commands.md) | Interaction primitives (create-comment, react, etc.)   |
 
 ---
 
@@ -75,4 +76,5 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | ---------- | ------------------------------------------------------------ |
 | 2026-05-12 | Initial spec structure                                       |
 | 2026-05-13 | Added §1; split §3 into daemon and commands                  |
-| 2026-05-13 | Added §2.1–§2.4, §3.1–§3.2; retired all pre-spec source docs |
+| 2026-05-13 | Added §2.1–§2.4, §3.1–§3.2; retired all pre-spec source docs  |
+| 2026-05-14 | Review feedback: §2.2 adds comments channel, checks precedence; §2.3 fixes milestones and Asana; §2.4 fixes review gating; §3 refactors commands |

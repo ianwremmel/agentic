@@ -24,9 +24,9 @@ The agent MUST NOT fabricate check runs.
 
 ### Platform scope
 
-This version covers GitHub (github.com and GitHub Enterprise). Copilot review
-may be unavailable on GitHub Enterprise; where it is, the Copilot stage is
-skipped per Stage 1 below.
+This version covers GitHub (github.com and GitHub Enterprise). On some GitHub
+Enterprise installations Copilot review is unavailable; where Copilot review is
+unavailable, Stage 1 is skipped per §Stage 1 below.
 
 ## Worktree
 
@@ -48,11 +48,12 @@ proceeding.
 The default path for a new worktree is:
 
 ```
-~/.worktree/<owner>/<repo>/<branch>
+~/.worktrees/<owner>/<repo>/<branch>
 ```
 
-A repository's `CLAUDE.md` MAY override this location. The agent MUST locate
-existing worktrees via `git worktree list`, not by path guessing.
+Any local context (`CLAUDE.md` or equivalent durable instruction file in the
+repository or user's home directory) MAY override this location. The agent MUST
+locate existing worktrees via `git worktree list`, not by path guessing.
 
 ### Reuse and cleanup
 
@@ -158,11 +159,12 @@ and triage their findings before the push lands.
 
 ### What counts as significant
 
-A push is significant when it contains substantive code edits that affect
-behavior, structure, or interface. The following are NOT significant:
+A push is significant when it contains substantive edits that affect behavior,
+structure, interface, or the substance of documentation. The following are NOT
+significant:
 
 - The `chore: open PR [skip ci]` empty commit.
-- Pushes containing only documentation, comments, or formatting changes.
+- Pushes containing only inline code comments or whitespace/formatting changes.
 - Pushes containing only trivial fixups (typo corrections, one-line lint fixes).
 
 On uncertainty, the agent MUST default to treating the push as significant.
@@ -204,7 +206,8 @@ findings are triaged is non-conforming.
 
 ### Stage 1 — Draft → Copilot review
 
-The agent MAY request Copilot review when BOTH of the following hold:
+Once BOTH of the following hold, the agent MUST request Copilot review (if
+Copilot is available):
 
 1. The agent is confident the changes are ready for review.
 2. The current PR head has achieved a green CI rollup at least once since the
@@ -216,7 +219,7 @@ skipped and the agent proceeds directly to the Stage 2 gating condition.
 
 ### Stage 2 — Copilot review → Human review
 
-The agent MAY request human review when ALL of the following hold:
+Once ALL of the following hold, the agent MUST request human review:
 
 1. The current PR head has a green CI rollup.
 2. No Copilot thread on the PR is actionable per §2.2.
@@ -231,14 +234,18 @@ The agent MUST follow §2.1 rules on alternative credentials if the platform
 restricts which accounts may request which review types.
 
 **Engagement in Mode B.** When the agent shares credentials with the human (Mode
-B per §2.1), GitHub's review-request mechanism cannot be used. The agent MUST
-instead engage the human through the first available venue:
+B per §2.1), GitHub's review-request mechanism cannot be used, and a PR comment
+tagging the human will not trigger a platform notification (the agent and human
+share the same account). The agent MUST instead engage the human through the
+first available venue that can reach them:
 
-1. A PR comment tagging the human, stating the PR is ready for review.
-2. A ticket assigned to the human with a link to the PR.
-3. A log entry to the CLI session naming the PR and expected reviewer.
+1. A ticket comment on the associated tracker (Linear, Asana, GitHub Issues)
+   tagging the human. Because the human has a separate account on the tracker,
+   platform notifications fire normally.
+2. An implementation-defined out-of-band channel (Slack, email, etc.) specified
+   in the repository or user configuration.
 
-In long-running automated sessions, venues 1 or 2 are preferred over venue 3.
+In long-running automated sessions, venue 1 is preferred.
 
 ### Stage 3 — Iteration
 

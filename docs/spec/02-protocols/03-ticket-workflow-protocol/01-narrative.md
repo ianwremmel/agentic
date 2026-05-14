@@ -6,16 +6,16 @@ Ticketing systems disagree about state. GitHub Issues has two states (open /
 closed). Linear has five top-level groups plus customizable substates. Asana has
 two top-level states plus customizable custom-field options.
 
-Without a shared abstraction, every skill branches on tracker type and hardcodes
-state names — brittle and unportable. This protocol defines an abstract role
-vocabulary that every supported tracker maps onto, so skills can ask "what's
-available to pick up?" or "is this ticket blocked?" without caring which tracker
-holds the data.
+Without a shared abstraction, every agent or tool branches on tracker type and
+hardcodes state names — brittle and unportable. This protocol defines an abstract
+role vocabulary that every supported tracker maps onto, so implementations can
+ask "what's available to pick up?" or "is this ticket blocked?" without caring
+which tracker holds the data.
 
-The protocol also codifies the operational norms any agent doing tracked work
-must follow — the communication restriction, the log format, the decomposition
-rule — so multiple agents collaborating on the same project produce a consistent
-audit trail.
+The protocol also codifies the operational norms any implementation doing tracked
+work must follow — the communication restriction, the log format, the
+decomposition rule — so multiple agents collaborating on the same project produce
+a consistent audit trail.
 
 ## Two-tier vocabulary: groups and roles
 
@@ -28,16 +28,16 @@ done?"
 
 **Roles** are refinements within a group. They answer finer questions: "is this
 in code review or waiting on CI?" "has it been deployed but not yet verified?"
-Skills that need precision use roles; skills doing broad dispatch can use groups
-alone.
+Implementations that need precision use roles; those doing broad dispatch can use
+groups alone.
 
 ### Why `paused` and `awaiting-external` sit in `backlog`
 
 Both involve work that was previously started but is not currently progressing.
-That might seem like they belong in `started`, but from a dispatching agent's
-perspective the lifecycle question is "is this ticket currently moving?" — both
-states answer no. Placing them in `backlog` keeps the dispatching logic simple:
-anything not in `started` is not currently in flight.
+That might seem like they belong in `started`, but from a dispatching perspective
+the lifecycle question is "is this ticket currently moving?" — both states answer
+no. Placing them in `backlog` keeps the dispatching logic simple: anything not in
+`started` is not currently in flight.
 
 Prior history is preserved in the tracker's transition log; the protocol doesn't
 need to encode it as state.
@@ -70,39 +70,47 @@ are out of scope; a work item on one tracker cannot block a work item on another
 ## Milestones
 
 A milestone groups tickets with a shared completion goal. The protocol doesn't
-define its own milestone primitive — it consumes whatever the tracker provides
-(Linear Project, GitHub Milestone, Asana Section).
+define its own milestone primitive — it consumes whatever the tracker provides.
+In Linear, milestones are tracked within a Project (Linear Projects *have*
+Milestones; a Project is not itself a milestone). GitHub has a native Milestone
+feature on repositories. In Asana, a Milestone is a special task type, distinct
+from regular tasks and from Projects (which organize tasks but are not milestones
+themselves).
 
-A milestone is **structurally complete** when every ticket is in `verified` or
-`canceled`. Structural completion is a precondition for review, not a synonym for
-done: a milestone review must still run before the team advances to the next
-milestone. The review answers whether the milestone goal was achieved and whether
-follow-up work needs scheduling.
+A milestone is **ready for review** when it has no remaining blockers: every
+ticket in the milestone is in `verified` or `canceled`, and no unresolved ticket
+blocks any milestone ticket. A milestone review must run before the team
+advances, even when structurally complete. The review answers whether the
+milestone goal was achieved and whether follow-up work needs scheduling.
 
 ## Definition of Done
 
 `verified` means the change was validated against the aims stated on the ticket.
-The method is content-specific:
+Most tickets have acceptance criteria that can be evaluated directly; the examples
+below are illustrative, not exhaustive:
 
 - A CI change is verified when the default branch's CI passes after merge.
 - A production code change is verified by exercising it in production.
 - A documentation change is verified by checking the rendered output.
 - A refactor is verified by confirming no behavioral regressions.
 
-A transition into `verified` must be accompanied by a comment recording what was
+The key principle: simply merging code does not constitute verification. Every
+ticket's stated aims must be evaluated, not just its associated PR merged. A
+transition into `verified` must be accompanied by a comment recording what was
 verified, how it was verified, and what (if anything) was not. This artifact is
 the audit trail; verification failures don't erase it, they add to it.
 
 ## Communication restriction
 
-Once an agent is assigned a tracked work item it stops soliciting responses
-through the session. All requests for human input go through the ticket or PR
-instead. The rule exists to keep the audit trail in the tracker, not scattered
-across sessions that may not be observable by other agents or team members.
+Once an implementation is assigned a tracked work item it stops soliciting
+responses through the session. All requests for human input go through the ticket
+or PR instead. The rule exists to keep the audit trail in the tracker, not
+scattered across sessions that may not be observable by other agents or team
+members.
 
-When the agent genuinely needs human input it can't resolve, it posts a comment
-on the PR (if one exists), the ticket (if a PR doesn't exist), or opens a new
-ticket. It tags a human so the platform notifies them, then waits.
+When input is genuinely needed, post a comment on the PR (if one exists), the
+ticket (if a PR doesn't exist), or open a new ticket. Tag a human so the platform
+notifies them, then wait.
 
 Sessions started without an assignment — interactive scoping, exploratory
 questions, ad-hoc analysis — are not subject to the restriction.
@@ -143,14 +151,16 @@ Rationale: implementation complete, requesting review
 ## Decomposition
 
 When assigned work turns out to be larger than a single coherent unit, or cannot
-be completed without out-of-scope work, the agent decomposes rather than
+be completed without out-of-scope work, the implementation decomposes rather than
 stretching the ticket:
 
 - **Too large** — file subtasks linked as children, work on them individually.
   The parent stays in `in-progress` until all subtasks finish.
-- **Out-of-scope blocker** — file a new ticket for the blocker, link it as a
-  `blocks` edge, and tag a human. The parent either stays in `in-progress` (if
-  other work remains) or parks in `awaiting-external`.
+- **Out-of-scope blocker** — file a new ticket for the blocker and link it as a
+  `blocks` edge to the current ticket. The implementation works on the blocker
+  (or switches to another unblocked ticket), then returns to the original once
+  the blocker is resolved. Tagging a human is appropriate when the blocker
+  requires a human decision.
 
 Both cases are logged (`BLOCK` for an out-of-scope blocker, `INFO` for subtask
 creation) so the event is traceable.

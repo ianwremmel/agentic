@@ -1,58 +1,74 @@
 # §2.2.1 — PR Status Protocol: Narrative
 
-## The polling problem
+## Why agents must not read PR state directly
 
-When an agent polls a pull request it needs answers to the same questions every
-time: have any checks failed? are there actionable comments? does it have merge
-conflicts? has Copilot reviewed it? has a human reviewed it?
+When an agent needs PR state it has three obvious paths: call the platform API
+via MCP, shell out to the platform CLI, or invoke a dedicated status command.
+The first two paths share a common failure mode.
 
-Getting those answers by calling a platform API directly has two costs. The
-first is latency and context: raw API responses are large, contain far more than
-the agent needs, and burn context window on every poll. The second is
-stochasticity: different API calls can observe slightly different snapshots of a
-fast-moving PR, so the agent might act on an inconsistent view — for example,
-seeing a thread as unresolved after it was already resolved.
+**MCP tool calls burn context on every use.** A raw GitHub API response for a
+PR with a dozen inline threads and ten CI checks can easily run thousands of
+tokens — most of it irrelevant fields the agent will never act on. Multiply that
+by the polling interval and the context window fills quickly.
 
-The PR Status Protocol solves both by moving the expensive platform reads into a
-deterministic script that emits a single compact XML document. The script does
-one coherent snapshot of the PR state, writes the heavy content (full thread
-text, annotation bodies) to stable paths on disk, and hands the agent a small
-XML summary that answers all the polling questions at once. The agent reads the
-XML and follows the disk paths only for threads it actually needs to act on.
+**Direct CLI invocation has the same problem.** `gh pr view --json everything`
+produces the same bloated output. The agent still has to parse it, find the
+signal in the noise, and carry that context through its working window.
+
+**Agents forget to follow the right patterns as context grows.** As a session
+accumulates context, agents are more likely to skip steps or apply rules
+inconsistently — falling back to ad-hoc API calls rather than using the
+established status command, leading to inconsistent snapshots and missed
+actionability rules.
+
+The PR Status Protocol addresses all three by moving platform reads into a
+dedicated command (`dispatch pr-status`) that emits a single compact XML
+document. The command does one coherent snapshot of the PR state, writes the
+heavy content (full thread text, annotation bodies) to stable paths on disk, and
+hands the caller a small XML summary that answers all the polling questions at
+once. The caller reads the XML and follows the disk paths only for threads it
+actually needs to act on.
 
 ## Two-layer design
 
 The output has two layers:
 
 **XML summary (stdout)** — small, always read. Contains the check rollup,
-merge-conflict flag, reviewer list, and a `<thread>` or `<annotation>` element
-for every item on the PR. Actionable items are listed bare (no body — the agent
-reads the cache file). Non-actionable items carry a one-to-three-sentence
-summary so the agent can skim them without loading the full content.
+merge-conflict flag, reviewer list, a `<comment>` element for top-level PR
+comments, and a `<thread>` or `<annotation>` element for every review thread and
+annotation on the PR. Actionable items are listed bare (no body — the agent reads
+the cache file). Non-actionable items carry a one-to-three-sentence summary so
+the agent can skim them without loading the full content.
 
-**Disk cache (per-PR directory)** — heavy, read on demand. Each thread and
-annotation is stored verbatim at a stable path keyed by platform ID. Non-
-actionable items also have a `.summary.md` alongside. The cache persists across
-sessions; the script updates it incrementally rather than fetching everything on
-every run.
+**Disk cache (per-PR directory)** — heavy, read on demand. Each comment, thread,
+and annotation is stored verbatim at a stable path keyed by platform ID.
+Non-actionable items also have a `.summary.md` alongside. The cache persists
+across sessions; the script updates it incrementally rather than fetching
+everything on every run.
 
 This split keeps the agent's working context small on quiet PRs (few actionable
 items, lots of summaries to skim) while still giving it full thread content when
 it needs to act.
 
-## Annotations vs threads
+## Comments, annotations, and threads
 
-Threads (PR inline review comments and top-level comment threads) have a
-platform-level resolution mechanism: GitHub's "Resolve" button, Linear's thread
-close, and so on. The protocol can use that to determine non-actionability.
+Three distinct item types appear on a PR.
 
-Annotations (code-scanning alerts, linter outputs surfaced as PR annotations)
-do not. Platforms don't offer a "mark this annotation as reviewed" mechanism.
-So the protocol uses a local `.ack` marker file: when an agent has inspected an
-annotation and decided no action is needed, it writes `<annotation-id>.ack` to
-the cache. Future runs see the file and classify the annotation as
-non-actionable. The annotation simply stops appearing in XML output when a new
-commit obsoletes it on the platform side.
+**Top-level comments** form a flat chronological stream on the PR itself. Any
+participant can post; they do not nest. These are covered by the same
+actionability rules as threads (§2.1.2 §"Thread-aware filtering").
+
+**Review threads** are inline review comments anchored to a file and line number.
+They can be replied to, forming nested threads, and have a platform-level
+resolution mechanism (GitHub's "Resolve" button, etc.) that the protocol uses to
+determine non-actionability.
+
+**Annotations** (code-scanning alerts, linter outputs surfaced as PR annotations)
+have no platform-level acknowledgement mechanism. The protocol uses a local `.ack`
+marker file: when an agent has inspected an annotation and decided no action is
+needed, it writes `<annotation-id>.ack` to the cache. Future runs see the file
+and classify the annotation as non-actionable. The annotation simply stops
+appearing in XML output when a new commit obsoletes it on the platform side.
 
 ## Summaries and cheap models
 
@@ -64,20 +80,20 @@ alongside the cache file. They are only regenerated when the underlying content
 changes — the script detects this with a content hash — so a quiet PR pays no
 re-summarization cost between polls.
 
-## How a skill uses the output
+## How a caller uses the output
 
-A skill that needs to act on PR state:
+Any agent or tool that needs to act on PR state invokes `dispatch pr-status`,
+passing its own identity so the command can determine which threads the calling
+agent wrote. The output follows this pattern:
 
-1. Invokes the status script, passing its own identity so the script can
-   determine which threads the calling agent wrote.
-2. Reads the XML from stdout.
-3. Iterates `<thread actionable="true">` elements and loads each cache file to
-   read the full thread.
-4. Iterates `<annotation actionable="true">` elements similarly.
-5. Checks `<checks state="...">` for CI rollup and `<merge-conflicts>` for
+1. Read the XML from stdout.
+2. Iterate `<comment actionable="true">` and `<thread actionable="true">` elements
+   and load each cache file to read the full content.
+3. Iterate `<annotation actionable="true">` elements similarly.
+4. Check `<checks state="...">` for CI rollup and `<merge-conflicts>` for
    conflicts.
-6. Checks `<reviews>` for Copilot and human review state.
-7. Skims `<summary>` text on non-actionable items for context.
+5. Check `<reviews>` for Copilot and human review state.
+6. Skim `<summary>` text on non-actionable items for context.
 
-The skill never calls the platform API directly for this data. All platform
-reads go through the status script, which owns the cache.
+The caller never reads platform state directly. All platform reads go through
+`dispatch pr-status`, which owns the cache.

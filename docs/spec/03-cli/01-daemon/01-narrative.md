@@ -71,6 +71,29 @@ templates (it more clearly delimits data from instruction); Markdown is accepted
 for parity with existing work. Templates support mustache-style placeholders
 (`{{event.author}}`).
 
+## Relationship to §2.4
+
+§2.4 (Do-Work Protocol) describes what an agent session is required to do when
+changing code: worktree setup, PR-open sequence, pre-push review, reviewer
+progression, monitoring, and termination. §3.1 (this section) describes the
+orchestration layer above that.
+
+The split works like this:
+
+- **The daemon handles**: worktree creation, task lifecycle on disk, event
+  routing to the right session, concurrency limits, crash recovery, and heartbeat
+  firing. When a new task arrives, the daemon creates the worktree before spawning
+  any runner — the runner is never responsible for worktree creation.
+
+- **The agent session handles**: actual code changes, pre-push review, PR body
+  and plan comment content, reviewer responses, and actionability judgments.
+
+§2.4 reads as the contract an agent session must honor regardless of what invoked
+it (interactive or daemon-driven). §3.1 reads as the contract the daemon must
+honor to reliably deliver events to those sessions. The daemon doesn't replace
+§2.4's requirements; it provides the infrastructure that makes them feasible
+across long-running work.
+
 ## Crash recovery
 
 If the daemon crashes mid-run, it picks up where it left off. On restart:

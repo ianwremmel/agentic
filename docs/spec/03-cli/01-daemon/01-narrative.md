@@ -73,7 +73,7 @@ for parity with existing work. Templates support mustache-style placeholders
 
 ## Relationship to §2.4
 
-§2.4 (Do-Work Protocol) describes what an agent session is required to do when
+§2.4 (Delivery Protocol) describes what an agent session is required to do when
 changing code: worktree setup, PR-open sequence, pre-push review, reviewer
 progression, monitoring, and termination. §3.1 (this section) describes the
 orchestration layer above that.

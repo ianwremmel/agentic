@@ -42,12 +42,12 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | [01-narrative.md](02-protocols/03-ticket-workflow-protocol/01-narrative.md) | Tracker diversity, abstract vocabulary rationale                 |
 | [02-normative.md](02-protocols/03-ticket-workflow-protocol/02-normative.md) | Role/group tables, state machine, log format, decomposition rule |
 
-### §2.4 — Do-Work Protocol
+### §2.4 — Delivery Protocol
 
-| File                                                                | Contents                                                 |
-| ------------------------------------------------------------------- | -------------------------------------------------------- |
-| [01-narrative.md](02-protocols/04-do-work-protocol/01-narrative.md) | Design goals, stage overview, automation-first rationale |
-| [02-normative.md](02-protocols/04-do-work-protocol/02-normative.md) | Worktree rules, PR-open sequence, CI gates, termination  |
+| File                                                                    | Contents                                                 |
+| ----------------------------------------------------------------------- | -------------------------------------------------------- |
+| [01-narrative.md](02-protocols/04-delivery-protocol/01-narrative.md)   | Design goals, stage overview, automation-first rationale |
+| [02-normative.md](02-protocols/04-delivery-protocol/02-normative.md)   | Worktree rules, PR-open sequence, CI gates, termination  |
 
 ---
 

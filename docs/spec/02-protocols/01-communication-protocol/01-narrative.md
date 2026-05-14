@@ -109,7 +109,7 @@ be Comment-style review comments.
 The practical consequence: an agent in Mode B must not wait for a formal
 "Request changes" review state on its own PRs — it will never arrive. Every
 comment the human leaves, review or otherwise, must be treated as substantive
-feedback. The do-work protocol (§2.4) handles this in detail.
+feedback. The Delivery Protocol (§2.4) handles this in detail.
 
 In Mode A (dedicated bot account), the human and the agent have separate
 identities and this restriction does not apply.

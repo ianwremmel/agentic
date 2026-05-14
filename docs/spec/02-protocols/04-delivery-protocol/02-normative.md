@@ -1,4 +1,4 @@
-# §2.4.2 — Do-Work Protocol: Normative
+# §2.4.2 — Delivery Protocol: Normative
 
 ## Applicability
 

@@ -268,8 +268,12 @@ records all three of the following:
 1. **What was verified** — stated against the ticket's aims.
 2. **How it was verified** — the concrete method (URL of the green build, the
    production request exercised, the rendered output, etc.).
-3. **What was not verified** — any aim not covered by this verification step,
-   with links to follow-up tickets if applicable.
+3. **What was not verified** — intentionally deferred items that are out of scope
+   for this ticket, each with a follow-up ticket already filed.
+
+If any in-scope aim was not successfully verified, the ticket MUST NOT transition
+to `verified`. It MUST instead return to `in-progress` with a comment explaining
+what remains and what remediation is planned.
 
 The comment MUST follow §2.1 (machine marker plus mode-appropriate visible marker).
 

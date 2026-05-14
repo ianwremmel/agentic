@@ -14,7 +14,7 @@ layer:
 - **§2.3 Ticket Workflow Protocol** — the abstract lifecycle vocabulary shared
   across all supported ticket trackers, and the operational norms (logging,
   communication restriction, decomposition) agents must follow.
-- **§2.4 Do-Work Protocol** — the rules any agent must follow when changing
+- **§2.4 Delivery Protocol** — the rules any agent must follow when changing
   code: worktree isolation, the PR-open sequence, pre-push review, CI and
   reviewer gating, and termination.
 - **§3.1 Daemon** — the daemon process model, spawn contract for agent
@@ -108,7 +108,7 @@ graph TD
     ACP["§2.1 Agent Communication Protocol<br/><i>what to write &amp; how to mark it</i>"]
     PSP["§2.2 PR Status Protocol<br/><i>how to read PR state</i>"]
     TWP["§2.3 Ticket Workflow Protocol<br/><i>lifecycle vocabulary &amp; logging</i>"]
-    DWP["§2.4 Do-Work Protocol<br/><i>worktree → draft PR → CI → merge</i>"]
+    DWP["§2.4 Delivery Protocol<br/><i>worktree → draft PR → CI → merge</i>"]
     DMN["§3.1 Daemon<br/><i>operational driver</i>"]
     CMD["§3.2 Commands<br/><i>CLI primitives</i>"]
 

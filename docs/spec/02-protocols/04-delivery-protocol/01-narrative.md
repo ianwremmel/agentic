@@ -1,8 +1,8 @@
-# §2.4.1 — Do-Work Protocol: Narrative
+# §2.4.1 — Delivery Protocol: Narrative
 
 ## Design goals
 
-The do-work protocol exists to ensure three things hold whenever an agent
+The Delivery Protocol exists to ensure three things hold whenever an agent
 changes code:
 
 1. **Agents don't pollute the main worktree.** The user's primary checkout stays

@@ -54,8 +54,7 @@ An account is Mode A if **either** of the following holds:
 ### Default
 
 **If the identity lookup fails or the result is ambiguous, the writer MUST
-default to Mode B.** Adding a sparkle wrapper to a bot account is harmless;
-omitting it from a human account is a protocol violation.
+default to Mode B.**
 
 ## Wire format
 

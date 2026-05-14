@@ -45,12 +45,10 @@ a CI failure — are combined into a single coalesced event and delivered to the
 agent once. This avoids the agent receiving a cascade of single-event invocations
 when it only needs to know about the current state of the PR.
 
-When a change arrives while the agent is already running, the daemon doesn't
-interrupt it. Instead, it accumulates the incoming changes into a pending
-follow-up record. When the current invocation exits, the daemon immediately
-spawns the follow-up with everything that arrived. For session-invalidating events
-(PR closure, force-push), the daemon may preempt the running session rather than
-waiting.
+When a change arrives while the agent is running, the daemon accumulates it into
+a pending follow-up and spawns a follow-up session on exit. For
+session-invalidating events (PR closure, force-push), the daemon may preempt the
+running session immediately instead.
 
 ## Prompt system
 

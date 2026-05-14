@@ -6,14 +6,11 @@ When an agent needs PR state it has three obvious paths: call the platform API
 via MCP, shell out to the platform CLI, or invoke a dedicated status command.
 The first two paths share a common failure mode.
 
-**MCP tool calls burn context on every use.** A raw GitHub API response for a
-PR with a dozen inline threads and ten CI checks can easily run thousands of
-tokens — most of it irrelevant fields the agent will never act on. Multiply that
-by the polling interval and the context window fills quickly.
-
-**Direct CLI invocation has the same problem.** `gh pr view --json everything`
-produces the same bloated output. The agent still has to parse it, find the
-signal in the noise, and carry that context through its working window.
+**Direct platform reads burn context on every use.** Whether through MCP tool
+calls or a CLI invocation like `gh pr view --json`, a raw API response for a PR
+with a dozen threads and ten CI checks easily runs thousands of tokens — mostly
+irrelevant fields the agent will never act on. Multiply by the polling interval
+and the context window fills quickly.
 
 **Agents forget to follow the right patterns as context grows.** As a session
 accumulates context, agents are more likely to skip steps or apply rules

@@ -34,13 +34,9 @@ groups alone.
 ### Why `paused` and `awaiting-external` sit in `backlog`
 
 Both involve work that was previously started but is not currently progressing.
-That might seem like they belong in `started`, but from a dispatching perspective
-the lifecycle question is "is this ticket currently moving?" — both states answer
-no. Placing them in `backlog` keeps the dispatching logic simple: anything not in
-`started` is not currently in flight.
-
-Prior history is preserved in the tracker's transition log; the protocol doesn't
-need to encode it as state.
+From a dispatching perspective the question is "is this ticket currently moving?"
+— both states answer no. Placing them in `backlog` keeps the dispatching logic
+simple: anything not in `started` is not currently in flight.
 
 ## State machine
 

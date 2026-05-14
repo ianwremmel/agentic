@@ -20,7 +20,7 @@ This creates two distinct problems:
    a way to recognize them, it re-evaluates everything every time — leading to
    feedback loops and duplicate replies.
 
-The protocol solves both problems with two markers: a **machine-readable marker**
+The protocol solves both problems with two markers: a **machine marker**
 embedded in every agent post (addresses problem 2) and a **visible sparkle
 wrapper** around posts made under human credentials (addresses problem 1).
 
@@ -95,8 +95,8 @@ finished with this; don't re-examine it." A human reply after that signal
 removes the "finished" status — the thread becomes live again and the agent
 re-evaluates it.
 
-The key insight: the agent is not ignoring its prior posts. It is tracking *what
-has been decided* so it only acts on things that need a new decision.
+The agent is not ignoring its prior posts — it is tracking what has been decided
+so it only acts on things that need a new decision.
 
 ## The review challenge in Mode B
 

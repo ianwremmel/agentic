@@ -148,7 +148,7 @@ The daemon handles runner non-zero exits in two tiers:
 Renaming an existing event kind is a breaking change. New event kinds MAY be
 added.
 
-## Concurrency
+## Concurrency limits
 
 The daemon MUST enforce:
 

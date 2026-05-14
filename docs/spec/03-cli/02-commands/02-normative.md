@@ -95,8 +95,8 @@ if the event kind is unknown or no override exists.
 
 ## Task commands
 
-All task commands that create a new task automatically launch the daemon if it is
-not already running.
+Task commands that create a new task MUST launch the daemon automatically if it
+is not running.
 
 ### `dispatch tasks list`
 

@@ -167,7 +167,8 @@ significant:
 - Pushes containing only inline code comments or whitespace/formatting changes.
 - Pushes containing only trivial fixups (typo corrections, one-line lint fixes).
 
-On uncertainty, the agent MUST default to treating the push as significant.
+If the agent cannot definitively classify a push as non-significant, it MUST
+treat it as significant.
 
 ### Required reviews
 
@@ -199,15 +200,16 @@ For each finding from either review, the agent MUST either:
   appended note on the plan comment, or another auditable venue) for why the
   finding does not apply.
 
-Silently ignoring a finding is non-conforming. Pushing before all surfaced
-findings are triaged is non-conforming.
+Triage is complete when every surfaced finding has either been acted on
+(evidenced by the amended change) or dismissed with a recorded rationale.
+Silently ignoring a finding is non-conforming. Pushing before triage is complete
+is non-conforming.
 
 ## CI gates and reviewer progression
 
 ### Stage 1 — Draft → Copilot review
 
-Once BOTH of the following hold, the agent MUST request Copilot review (if
-Copilot is available):
+Once BOTH of the following hold, the agent MUST request Copilot review:
 
 1. The agent is confident the changes are ready for review.
 2. The current PR head has achieved a green CI rollup at least once since the
@@ -279,7 +281,7 @@ ticket use `ticket=-` in the log format.
 
 ## Termination
 
-The do-work protocol terminates — the agent stops monitoring and exits — when
+The Delivery Protocol terminates — the agent stops monitoring and exits — when
 EITHER of the following occurs:
 
 - **PR closes.** The PR is merged or closed without merging.

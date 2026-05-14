@@ -27,9 +27,10 @@
 | `verified`          | `completed` | Required      | Validated against the ticket's stated aims; verification method recorded on the ticket.    |
 | `canceled`          | `canceled`  | Required      | Abandoned. Not done; will not be done.                                                     |
 
-**Required** — a tracker mapping MUST tag at least one native state with this
-role. **Recommended** — SHOULD exist; skills degrade gracefully if absent.
-**Optional** — base workflows do not depend on it.
+**Required** — implementations MUST map at least one native state to this role.
+**Recommended** — implementations SHOULD map a native state to this role; base
+workflows degrade gracefully if absent. **Optional** — base workflows do not
+require this role.
 
 ### Tagging rule
 
@@ -109,18 +110,17 @@ If an issue is closed but its Project Status is not in the `completed` or
 
 When a task's custom field is set to Complete, Asana automation typically marks
 the native task Complete simultaneously. These transitions MUST be treated as a
-single atomic event mapping to `verified`. There is no distinct `delivered` state
-in default Asana; teams that need it MUST add a custom-field option and map it in
-a team override.
+single atomic event mapping to `verified`.
 
-Teams that need `finished` or `canceled` on Asana MUST add custom-field options
-and map them in a team override.
+The default Asana mapping has no `delivered`, `finished`, or `canceled` role; the
+lifecycle collapses directly from `in-review` to `verified`. Teams that need any
+of these roles MUST add custom-field options and map them in a team override.
 
 ### Cross-tracker note on `finished`
 
-Only Linear and GitHub Projects v2 natively express `finished`. On trackers
-without `finished`, skills MUST collapse `in-review → finished → delivered` into
-`in-review → delivered` and MUST NOT emit a `finished` transition.
+Only Linear and GitHub Projects v2 natively express `finished`; on other
+trackers, skills MUST collapse to `in-review → delivered` and MUST NOT emit a
+`finished` transition.
 
 ## State transitions
 
@@ -188,6 +188,9 @@ A ticket is **effectively blocked** if it has a dependency edge to any ancestor
 whose role is not in `{verified, canceled}`. The relation is transitive: a ticket
 is effectively blocked if **any** ancestor on **any** path is effectively
 blocking.
+
+Skills MUST evaluate the effective-blocking rule before treating a ticket as
+eligible for work.
 
 ### Cycles
 
@@ -285,10 +288,11 @@ PRs MUST NOT trigger a `delivered` transition.
 
 ### Verification failure
 
-If verification fails after a transition to `verified`, the corrective is
-`verified → in-progress`. The original verification artifact comment MUST NOT be
-deleted or modified; the corrective transition comment explains what failed and
-what the remediation will be.
+If the agent cannot produce evidence satisfying all three criteria above, or if
+evidence already recorded is later determined to be invalid, the corrective
+transition is `verified → in-progress`. The original verification artifact
+comment MUST NOT be deleted or modified; a new corrective-transition comment
+MUST explain what failed and what the remediation will be.
 
 ## Communication restriction
 

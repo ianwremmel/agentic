@@ -54,9 +54,9 @@ implementation and the PR starts its lifecycle in a red state for reasons
 unrelated to the final code — and wastes CI capacity on code we know can't work
 yet.
 
-The empty commit is also a stable marker. Tooling can detect protocol-governed
-PRs by checking for this exact commit at the base of the PR branch; it identifies
-agent-authored PRs without requiring a separate metadata store.
+The empty commit is also a stable detection marker: the `[skip ci]` message at
+the base of the PR branch identifies agent-authored PRs without requiring a
+separate metadata store.
 
 ## Why the plan lives in a comment, not the PR body
 
@@ -72,12 +72,10 @@ of the work.
 
 ## Automation-first reviewer progression
 
-The protocol enforces an ordering: Copilot before humans. This isn't a claim that
-Copilot is better than human reviewers; it's a practical acknowledgement that
-automated review is cheap, fast, and scalable. Running it first filters out the
-class of defects it catches well (common bugs, style violations, obvious
-oversights) so human reviewers can focus on the class of questions it cannot
-answer (architecture, product judgment, organizational context).
+The protocol enforces an ordering: Copilot before humans. Automated review is
+cheap, fast, and scalable; running it first filters the defects it catches well
+(bugs, style, obvious oversights) so human reviewers can focus on the judgment
+calls it cannot answer (architecture, product decisions, organizational context).
 
 The CI gate before each handoff serves the same purpose: there's no point asking
 a reviewer — automated or human — to look at code that doesn't compile or whose
@@ -88,9 +86,7 @@ tests are failing.
 Before pushing significant changes, the agent runs two reviews:
 
 1. **Self-simplification** — looks for opportunities to reduce complexity,
-   consolidate with existing code, or remove unnecessary additions. The agent
-   isn't always the best judge of its own verbosity; a dedicated simplification
-   pass catches what the implementation pass missed.
+   consolidate with existing code, or remove unnecessary additions.
 
 2. **Adversarial review** — a pass by a distinct reviewer (a different model, a
    different agent role) that examines the change for defects and missed cases.

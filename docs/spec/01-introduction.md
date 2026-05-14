@@ -55,9 +55,9 @@ to deviate. **MAY** denotes optional behavior.
 ### Agent identity and modes
 
 An agent session runs under credentials that identify either a dedicated
-bot/service account or a human user's account. This single fact — "who does
-the platform think is writing?" — determines the **mode** for all writes the
-agent makes in that session:
+bot/service account or a human user's account. This single fact about the
+account — "who does the platform think is writing?" — determines the **mode**
+for all writes the agent makes in that session:
 
 - **Mode A** — the account is recognized as a bot or service. The byline
   already tells readers the author is not human; no additional visual marker

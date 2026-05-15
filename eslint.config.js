@@ -10,7 +10,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ["src/**/*.ts"],
+    files: ["src/**/*.mts", "scripts/**/*.{mjs,mts}"],
     languageOptions: {
       parser: tsparser,
       parserOptions: {

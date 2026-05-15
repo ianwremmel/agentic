@@ -89,13 +89,34 @@ subdirectories exist as scaffolding only.
 
 ## Working on the `dispatch` CLI (root TypeScript project)
 
+The CLI uses **Node's native TypeScript support** (Node ≥ 22.6 with
+`--experimental-strip-types`; ≥ 23.6 has it on by default). There is no
+compile step — `.mts` source files are run directly by Node, and
+`tsc --noEmit` is used purely for type-checking.
+
+**Source-file conventions:**
+
+- All TypeScript source files use the `.mts` extension (ESM). Do not
+  introduce `.ts` or `.cts` files.
+- Relative imports between source files include the explicit `.mts`
+  extension (`tsconfig.json` sets `allowImportingTsExtensions: true`).
+- Type-erasure only: anything that survives type-stripping must be valid
+  JS. `tsconfig.json` enforces this with `erasableSyntaxOnly: true` —
+  enums, parameter-property shorthand, and namespaces are out; use plain
+  `const` objects, explicit assignments, and modules instead.
+- Tests use **Node's built-in test runner** (`node:test` + `node:assert/strict`).
+  Do not add `vitest`, `jest`, `mocha`, or other third-party runners.
+
+**Commands:**
+
 - Install deps: `npm install`
 - Type-check: `npm run typecheck`
 - Lint: `npm run lint`
 - Format: `npm run format` (check-only: `npm run format:check`)
-- Unit tests: `npm run test` (Vitest)
-- Build (bundling lands in #17, SEA pipeline in #18; today this just runs
-  `tsc --noEmit`).
+- Unit tests: `npm test`
+- Bundle/SEA: see #17 / #18 — esbuild is used **only** to produce the
+  single CommonJS file that Node 22 SEA requires as `main`; it is not a
+  general build step.
 
 ## Do not
 

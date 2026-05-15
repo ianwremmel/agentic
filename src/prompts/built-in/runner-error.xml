@@ -1,0 +1,14 @@
+<prompt event="runner-error" version="0">
+  <role>dispatch</role>
+  <instructions>
+    Stub default template for the <event-kind>runner-error</event-kind> event. This is the
+    built-in prompt loaded when no project override exists. Refined in
+    follow-up tickets.
+  </instructions>
+  <event>
+    <kind>runner-error</kind>
+    <task-id>{{task_id}}</task-id>
+    <timestamp>{{timestamp}}</timestamp>
+    <payload>{{payload}}</payload>
+  </event>
+</prompt>

@@ -26,6 +26,7 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -142,6 +143,54 @@ async function ensureNodeBinary(/** @type {Target} */ t) {
   return cacheBinary;
 }
 
+/**
+ * Build the `assets` map embedded in the SEA blob. Keys are SEA asset names
+ * (e.g. `prompts/built-in/heartbeat.xml`), values are absolute paths to the
+ * checked-in template files. Mirrors `builtinPromptAssetMap()` in
+ * `src/prompts/index.mts` — both are derived from the canonical
+ * `EVENT_KINDS` list so a missing template fails the build early.
+ */
+function collectAssets() {
+  // EVENT_KINDS is the single source of truth (src/state/event.mts). We
+  // grep it out of the .mts file rather than importing the module: at this
+  // point in the pipeline the bundle hasn't been produced yet and we don't
+  // want `npm run sea` to depend on `--experimental-strip-types`.
+  const eventModule = readFileSync(
+    resolve(root, "src/state/event.mts"),
+    "utf8",
+  );
+  const block = eventModule.match(
+    /EVENT_KINDS: readonly EventKind\[\] = \[([\s\S]*?)\] as const;/,
+  );
+  if (!block) {
+    throw new Error(
+      "[sea] could not locate EVENT_KINDS in src/state/event.mts",
+    );
+  }
+  const kinds = [...block[1].matchAll(/"([a-z][a-z0-9-]*)"/g)].map((m) => m[1]);
+  if (kinds.length === 0) {
+    throw new Error("[sea] EVENT_KINDS parsed as empty");
+  }
+  /** @type {Record<string, string>} */
+  const assets = {};
+  const missing = [];
+  for (const kind of kinds) {
+    const key = `prompts/built-in/${kind}.xml`;
+    const absPath = resolve(root, "src", "prompts", "built-in", `${kind}.xml`);
+    if (!existsSync(absPath)) {
+      missing.push(key);
+    } else {
+      assets[key] = absPath;
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[sea] missing built-in prompt template(s) for event kind(s): ${missing.join(", ")}`,
+    );
+  }
+  return assets;
+}
+
 async function generateSeaBlob() {
   // The SEA blob format is tied to the Node major version: a blob produced
   // by node 24 will not boot when injected into a node 22 binary. So we
@@ -155,12 +204,14 @@ async function generateSeaBlob() {
 
   const seaConfigPath = resolve(distDir, "sea-config.json");
   const blobPath = resolve(distDir, "dispatch.blob");
+  const assets = collectAssets();
   const seaConfig = {
     main: bundlePath,
     output: blobPath,
     disableExperimentalSEAWarning: true,
     useSnapshot: false,
     useCodeCache: false,
+    assets,
   };
   writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2));
   execFileSync(generatorNode, ["--experimental-sea-config", seaConfigPath], {

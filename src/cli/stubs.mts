@@ -7,6 +7,7 @@ import { DispatchError, ExitCode } from "./errors.mts";
 import { daemonStart } from "./daemon-start.mts";
 import { daemonStatus } from "./daemon-status.mts";
 import { daemonStop } from "./daemon-stop.mts";
+import { promptsList } from "./prompts-list.mts";
 import type { CommandHandler } from "./types.mts";
 
 function notImplemented(name: string): CommandHandler {
@@ -24,7 +25,7 @@ export const stubs = {
   daemonStop,
   daemonStatus,
 
-  promptsList: notImplemented("prompts list"),
+  promptsList,
   promptsCopy: notImplemented("prompts copy"),
   promptsDiff: notImplemented("prompts diff"),
 

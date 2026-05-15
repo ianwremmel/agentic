@@ -82,7 +82,15 @@ export const commands: readonly CommandSpec[] = [
   {
     name: "prompts list",
     summary: "List event kinds and the winning template for each.",
-    flags: [],
+    flags: [
+      {
+        name: "format",
+        kind: "string",
+        description: "Output format: tsv (default) or table.",
+        choices: ["tsv", "table"],
+        default: "tsv",
+      },
+    ],
     positionals: [],
     handler: stubs.promptsList,
   },

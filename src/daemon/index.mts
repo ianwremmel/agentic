@@ -14,6 +14,21 @@ export {
   type AcquireResult,
 } from "./pid-lock.mts";
 export {
+  AWAITING_CI_LONG_MS,
+  DEFAULT_INTERVALS_MS,
+  PollScheduler,
+  hintsFromTask,
+  inferStage,
+  intervalForStage,
+  type IntervalOptions,
+  type PollingStage,
+  type SchedulerOptions,
+  type StageHints,
+  type TickFn,
+  type TimerFns,
+  type TimerHandle,
+} from "./poll-scheduler.mts";
+export {
   STREAM_TAIL_BYTES,
   triageRunnerExit,
   type RunnerExit,

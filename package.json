@@ -19,7 +19,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "npm run bundle && node --test --experimental-strip-types 'src/**/*.test.mts'"
+    "test": "npm run bundle && node --test --experimental-strip-types 'src/**/*.test.mts'",
+    "test:wrapper": "sh plugins/dispatch/tests/dispatch.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

@@ -1,0 +1,14 @@
+# SHA-256 checksums for the dispatch binaries published by the release
+# workflow (#20). One line per release target. Lines beginning with `#`
+# and blank lines are ignored by the wrapper. Format:
+#
+#     <sha256-hex>  dispatch-<os>-<arch>
+#
+# The placeholder zero-hashes below are replaced atomically by the
+# release workflow before tagging a new VERSION. The wrapper treats a
+# zero-hash as an explicit error so an un-released version cannot
+# silently fetch an unverified binary.
+0000000000000000000000000000000000000000000000000000000000000000  dispatch-darwin-arm64
+0000000000000000000000000000000000000000000000000000000000000000  dispatch-darwin-x64
+0000000000000000000000000000000000000000000000000000000000000000  dispatch-linux-arm64
+0000000000000000000000000000000000000000000000000000000000000000  dispatch-linux-x64

@@ -37,6 +37,9 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Wrapper shell tests
+        run: npm run test:wrapper
+
       - name: Bundle (esbuild → dist/dispatch.cjs)
         run: npm run bundle
 

@@ -1,0 +1,205 @@
+#!/bin/sh
+# dispatch — wrapper that downloads the right native binary for this
+# host on first use and execs it. POSIX sh; works under bash and zsh.
+#
+# Resolution order:
+#   1. Read VERSION (committed text file next to this script).
+#   2. Detect OS + arch via uname.
+#   3. Look up the expected SHA-256 in checksums.txt.
+#   4. If the cached binary at the user cache dir is missing OR its
+#      SHA-256 doesn't match, download from the GitHub release for the
+#      pinned version, verify, chmod, and atomically rename into place.
+#   5. exec the cached binary with the user's arguments.
+#
+# Flags / env:
+#   --dispatch-clean-cache   Purge $DISPATCH_CACHE_DIR (or the default
+#                            per-OS cache root) and exit 0. Must come
+#                            before any non-dispatch flags.
+#   DISPATCH_CACHE_DIR       Override the cache root.
+#   DISPATCH_DOWNLOAD_URL    Override the release URL prefix used to
+#                            download a missing binary. Useful for
+#                            tests; defaults to the GitHub release URL
+#                            for the pinned VERSION.
+#   DISPATCH_SKIP_DOWNLOAD   When set to a non-empty value, fail
+#                            instead of attempting a network fetch.
+#                            Used by the test harness.
+#
+# Exit codes:
+#   0   success / clean-cache succeeded
+#   64  usage error (e.g. unknown OS/arch)
+#   65  missing VERSION file
+#   66  missing or malformed checksums.txt entry
+#   67  download failed
+#   68  checksum mismatch
+#   69  cached binary is not executable after install
+
+set -eu
+
+resolve_script_dir() {
+    src=$1
+    while [ -L "$src" ]; do
+        dir=$(cd -P "$(dirname "$src")" && pwd)
+        src=$(readlink "$src")
+        case $src in
+            /*) ;;
+            *) src=$dir/$src ;;
+        esac
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+
+SCRIPT_DIR=$(resolve_script_dir "$0")
+VERSION_FILE=$SCRIPT_DIR/VERSION
+CHECKSUMS_FILE=$SCRIPT_DIR/checksums.txt
+
+die() {
+    code=$1
+    shift
+    printf 'dispatch: %s\n' "$*" >&2
+    exit "$code"
+}
+
+detect_target() {
+    uname_s=$(uname -s 2>/dev/null || echo unknown)
+    uname_m=$(uname -m 2>/dev/null || echo unknown)
+    case $uname_s in
+        Darwin) os=darwin ;;
+        Linux) os=linux ;;
+        *) die 64 "unsupported OS: ${uname_s} (supported: Darwin, Linux)" ;;
+    esac
+    case $uname_m in
+        x86_64 | amd64) arch=x64 ;;
+        arm64 | aarch64) arch=arm64 ;;
+        *) die 64 "unsupported architecture: ${uname_m} (supported: x86_64, arm64)" ;;
+    esac
+    printf '%s-%s' "$os" "$arch"
+}
+
+cache_root() {
+    if [ -n "${DISPATCH_CACHE_DIR:-}" ]; then
+        printf '%s' "$DISPATCH_CACHE_DIR"
+        return
+    fi
+    case $(uname -s) in
+        Darwin) printf '%s' "${HOME}/Library/Caches/dispatch" ;;
+        *)
+            if [ -n "${XDG_CACHE_HOME:-}" ]; then
+                printf '%s' "${XDG_CACHE_HOME}/dispatch"
+            else
+                printf '%s' "${HOME}/.cache/dispatch"
+            fi
+            ;;
+    esac
+}
+
+sha256_of() {
+    file=$1
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    else
+        die 67 "neither sha256sum nor shasum is available"
+    fi
+}
+
+expected_sha_for() {
+    target=$1
+    [ -f "$CHECKSUMS_FILE" ] || die 66 "missing checksums file: ${CHECKSUMS_FILE}"
+    line=$(grep -E "[[:space:]]+dispatch-${target}\$" "$CHECKSUMS_FILE" | grep -v '^[[:space:]]*#' | head -n 1 || true)
+    if [ -z "$line" ]; then
+        die 66 "no checksum entry for target dispatch-${target} in ${CHECKSUMS_FILE}"
+    fi
+    sha=$(printf '%s' "$line" | awk '{print $1}')
+    case $sha in
+        0000000000000000000000000000000000000000000000000000000000000000)
+            die 66 "checksum for dispatch-${target} is a placeholder zero-hash; this VERSION has not been released yet"
+            ;;
+    esac
+    case $sha in
+        *[!0-9a-fA-F]*) die 66 "malformed checksum for dispatch-${target}: ${sha}" ;;
+    esac
+    len=$(printf '%s' "$sha" | wc -c | tr -d ' ')
+    if [ "$len" != 64 ]; then
+        die 66 "malformed checksum (${len} chars, want 64) for dispatch-${target}"
+    fi
+    printf '%s' "$sha"
+}
+
+download_to() {
+    url=$1
+    dst=$2
+    if [ -n "${DISPATCH_SKIP_DOWNLOAD:-}" ]; then
+        die 67 "download disabled by DISPATCH_SKIP_DOWNLOAD (would fetch ${url})"
+    fi
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 -o "$dst" "$url" || die 67 "curl failed for ${url}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$dst" "$url" || die 67 "wget failed for ${url}"
+    else
+        die 67 "neither curl nor wget is available to download ${url}"
+    fi
+}
+
+clean_cache() {
+    root=$(cache_root)
+    if [ -d "$root" ]; then
+        rm -rf "$root"
+        printf 'dispatch: cleared cache at %s\n' "$root" >&2
+    else
+        printf 'dispatch: cache already clean (%s)\n' "$root" >&2
+    fi
+}
+
+main() {
+    if [ "${1:-}" = "--dispatch-clean-cache" ]; then
+        clean_cache
+        exit 0
+    fi
+
+    [ -f "$VERSION_FILE" ] || die 65 "missing VERSION file: ${VERSION_FILE}"
+    version=$(sed -n '1p' "$VERSION_FILE" | tr -d ' \r\n\t')
+    [ -n "$version" ] || die 65 "VERSION file is empty: ${VERSION_FILE}"
+
+    target=$(detect_target)
+    expected_sha=$(expected_sha_for "$target")
+
+    cache=$(cache_root)
+    cache_dir=$cache/$version
+    binary=$cache_dir/dispatch-$target
+
+    needs_install=1
+    if [ -x "$binary" ]; then
+        actual_sha=$(sha256_of "$binary")
+        if [ "$actual_sha" = "$expected_sha" ]; then
+            needs_install=0
+        fi
+    fi
+
+    if [ "$needs_install" -eq 1 ]; then
+        url_prefix=${DISPATCH_DOWNLOAD_URL:-https://github.com/ianwremmel/agentic/releases/download/dispatch-v${version}}
+        url=$url_prefix/dispatch-$target
+
+        mkdir -p "$cache_dir"
+        tmp=$cache_dir/.dispatch-$target.$$.download
+        trap 'rm -f "$tmp"' EXIT INT TERM HUP
+
+        download_to "$url" "$tmp"
+
+        actual_sha=$(sha256_of "$tmp")
+        if [ "$actual_sha" != "$expected_sha" ]; then
+            rm -f "$tmp"
+            die 68 "checksum mismatch for dispatch-${target}: expected ${expected_sha}, got ${actual_sha}"
+        fi
+
+        chmod +x "$tmp"
+        mv -f "$tmp" "$binary"
+        trap - EXIT INT TERM HUP
+    fi
+
+    [ -x "$binary" ] || die 69 "cached binary is not executable: ${binary}"
+
+    exec "$binary" "$@"
+}
+
+main "$@"

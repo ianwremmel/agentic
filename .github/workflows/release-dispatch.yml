@@ -1,0 +1,179 @@
+name: release-dispatch
+
+# Cuts a release whenever a tag matching dispatch-v* is pushed:
+#   1. Build all four SEA binaries from a single Linux runner.
+#   2. Compute SHA-256 for each.
+#   3. Create a GitHub Release named after the tag and upload the four
+#      binaries as assets.
+#   4. Open a follow-up PR titled
+#      "chore(dispatch): bump bin/VERSION + checksums for dispatch-v<version>"
+#      that updates plugins/dispatch/bin/VERSION and
+#      plugins/dispatch/bin/checksums.txt to point at this release.
+#
+# Cutting a release:
+#
+#   npm version --tag-version-prefix=dispatch-v <patch|minor|major>
+#   git push --follow-tags
+#
+# The bump PR is intentionally a second step so the in-tree wrapper
+# never points at an in-flight release.
+
+on:
+  push:
+    tags:
+      - "dispatch-v*"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: build + upload + open bump PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      # The push event for a tag detaches HEAD at the tag commit; we
+      # also need the tag itself fetched so release notes can find the
+      # previous release tag.
+      - name: Fetch tag
+        run: git fetch --tags origin "${GITHUB_REF_NAME}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Cache dist/.node (downloaded node binaries)
+        uses: actions/cache@v4
+        with:
+          path: dist/.node
+          key: dist-node-22.13.0-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            dist-node-22.13.0-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#dispatch-v}"
+          if [ -z "${version}" ] || [ "${tag}" = "${version}" ]; then
+            echo "Tag ${tag} does not match dispatch-v* pattern" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          # Check out the tag itself so npm run build uses the tagged
+          # tree, not main.
+          git checkout --detach "${tag}"
+
+      - name: Build all SEA targets
+        run: npm run build
+
+      - name: Compute checksums
+        id: sums
+        run: |
+          set -euo pipefail
+          cd dist
+          {
+            for t in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+              sha=$(sha256sum "dispatch-${t}" | awk '{print $1}')
+              printf '%s  dispatch-%s\n' "${sha}" "${t}"
+            done
+          } > checksums.txt
+          cat checksums.txt
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          prev=$(git tag --list 'dispatch-v*' --sort=-v:refname | grep -v "^${tag}\$" | head -n 1 || true)
+          {
+            if [ -n "${prev}" ]; then
+              echo "## Changes since ${prev}"
+              echo
+              git log --pretty=format:'- %s (%h)' "${prev}..${tag}"
+              echo
+            else
+              echo "## Initial release"
+              echo
+            fi
+            echo
+            echo "## Checksums"
+            echo
+            echo '```'
+            cat dist/checksums.txt
+            echo '```'
+            echo
+            echo "## Install"
+            echo
+            echo "The dispatch plugin's bin/dispatch wrapper downloads and verifies the binary for your host automatically once \`plugins/dispatch/bin/VERSION\` is bumped to \`${{ steps.meta.outputs.version }}\` on \`main\` (auto-PR follows this release)."
+          } > release-notes.md
+
+      - name: Create release + upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            dist/dispatch-darwin-arm64 \
+            dist/dispatch-darwin-x64 \
+            dist/dispatch-linux-arm64 \
+            dist/dispatch-linux-x64
+
+      - name: Open bump PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="chore/dispatch-bump-${VERSION}"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # Re-anchor to main so the PR diff is just the bump.
+          git fetch origin main
+          git checkout -B "${branch}" origin/main
+
+          printf '%s\n' "${VERSION}" > plugins/dispatch/bin/VERSION
+
+          {
+            echo "# SHA-256 checksums for the dispatch binaries published by the release"
+            echo "# workflow (.github/workflows/release-dispatch.yml). Automatically rewritten"
+            echo "# for dispatch-v${VERSION}. Format:"
+            echo "#"
+            echo "#     <sha256-hex>  dispatch-<os>-<arch>"
+            echo
+            grep -vE '^[[:space:]]*(#|$)' dist/checksums.txt
+          } > plugins/dispatch/bin/checksums.txt
+
+          git add plugins/dispatch/bin/VERSION plugins/dispatch/bin/checksums.txt
+          git commit -m "chore(dispatch): bump bin/VERSION + checksums for dispatch-v${VERSION}
+
+Automatically generated by .github/workflows/release-dispatch.yml in
+response to the dispatch-v${VERSION} tag."
+
+          git push --force-with-lease --set-upstream origin "${branch}"
+
+          # If a PR already exists for this branch (re-run scenario),
+          # `gh pr create` will fail; tolerate that.
+          gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "chore(dispatch): bump bin/VERSION + checksums for dispatch-v${VERSION}" \
+            --body "Auto-generated by the release-dispatch workflow for [\`dispatch-v${VERSION}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/dispatch-v${VERSION}).
+
+Updates the in-tree wrapper config so \`plugins/dispatch/bin/dispatch\` resolves to the just-published binaries. Merge after sanity-checking the release page." \
+            || echo "PR for ${branch} already exists; updated branch in place."

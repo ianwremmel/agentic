@@ -113,10 +113,48 @@ compile step — `.mts` source files are run directly by Node, and
 - Type-check: `npm run typecheck`
 - Lint: `npm run lint`
 - Format: `npm run format` (check-only: `npm run format:check`)
-- Unit tests: `npm test`
-- Bundle/SEA: see #17 / #18 — esbuild is used **only** to produce the
+- Unit tests: `npm test` (runs `npm run bundle` first, then
+  `node --test --experimental-strip-types 'src/**/*.test.mts'`)
+- Wrapper tests: `npm run test:wrapper` (POSIX-sh test of the
+  plugin's `bin/dispatch` shim)
+- Bundle only: `npm run bundle` (esbuild is used **only** to produce the
   single CommonJS file that Node 22 SEA requires as `main`; it is not a
-  general build step.
+  general build step)
+- Host-arch SEA binary: `npm run build:host` (writes
+  `dist/dispatch-<linux|darwin>-<x64|arm64>`)
+- All four SEA binaries: `npm run sea` or `npm run build`
+
+## Cutting a `dispatch` release
+
+The `release-dispatch` workflow (`.github/workflows/release-dispatch.yml`)
+publishes binaries and opens a follow-up "bump" PR whenever a
+`dispatch-v*` tag is pushed.
+
+1. Pick the new version with `npm`'s helper (it bumps `package.json`,
+   creates a commit, and creates a tag):
+   ```
+   npm version --tag-version-prefix=dispatch-v patch   # or minor/major
+   ```
+2. Push the tagged commit:
+   ```
+   git push --follow-tags
+   ```
+3. The workflow builds all four SEA targets, creates a GitHub Release
+   named after the tag with the binaries as assets, and opens a PR
+   titled `chore(dispatch): bump bin/VERSION + checksums for
+   dispatch-v<version>`. Review and merge that PR to point the
+   in-tree wrapper at the new release.
+
+The bump PR is intentionally separate so `plugins/dispatch/bin/`
+never points at an unpublished release. The wrapper rejects the
+placeholder zero-hash, so an un-released VERSION cannot silently
+fetch an unverified binary.
+
+> [!NOTE]
+> The release workflow uses the default `GITHUB_TOKEN` for both the
+> release upload and the bump PR. This requires the repo setting
+> **Settings → Actions → General → Workflow permissions → Allow
+> GitHub Actions to create and approve pull requests** to be enabled.
 
 ## Do not
 

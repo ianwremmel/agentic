@@ -35,7 +35,7 @@ const FIXED_NOW = "2026-05-15T18:00:00.000Z";
 describe("recoverFromCrash", () => {
   it("returns zero report on a clean (empty) state", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 
@@ -53,7 +53,7 @@ describe("recoverFromCrash", () => {
 
   it("rehydrates tasks and replays events oldest-first", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 
@@ -89,7 +89,7 @@ describe("recoverFromCrash", () => {
 
   it("synthesizes daemon-restart for every task with live_runner_pid", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 
@@ -115,7 +115,7 @@ describe("recoverFromCrash", () => {
 
   it("queues the synthesized daemon-restart on the spool", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 
@@ -138,7 +138,7 @@ describe("recoverFromCrash", () => {
 
   it("clears live_runner_pid after synthesizing the restart event", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 
@@ -158,7 +158,7 @@ describe("recoverFromCrash", () => {
 
   it("propagates last_known_stage from the task record when present", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 
@@ -184,7 +184,7 @@ describe("recoverFromCrash", () => {
 
   it("reports task IDs needing watch re-attachment", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 
@@ -207,7 +207,7 @@ describe("recoverFromCrash", () => {
 
   it("simulates kill -9: live runner + queued events + re-recovery is idempotent for state", async () => {
     const root = tmpRoot();
-    await ensureStateLayout(root);
+    await ensureStateLayout({ root });
     const taskStore = new TaskStore({ root });
     const eventSpool = new EventSpool({ root });
 

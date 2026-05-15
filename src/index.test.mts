@@ -7,19 +7,22 @@ describe("dispatch entrypoint", () => {
     assert.match(getVersion(), /^\d+\.\d+\.\d+/);
   });
 
-  it("prints `dispatch <version>` and exits 0", () => {
+  it("returns SUCCESS (0) on no-args (prints top-level help)", async () => {
     const writes: string[] = [];
-    const original = process.stdout.write.bind(process.stdout);
+    const originalOut = process.stdout.write.bind(process.stdout);
+    const originalErr = process.stderr.write.bind(process.stderr);
     process.stdout.write = ((chunk: unknown) => {
       writes.push(String(chunk));
       return true;
     }) as typeof process.stdout.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
     try {
-      const code = main([]);
+      const code = await main([]);
       assert.equal(code, 0);
-      assert.equal(writes.join(""), `dispatch ${getVersion()}\n`);
+      assert.match(writes.join(""), /Usage: dispatch <command>/);
     } finally {
-      process.stdout.write = original;
+      process.stdout.write = originalOut;
+      process.stderr.write = originalErr;
     }
   });
 });

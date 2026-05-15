@@ -19,6 +19,7 @@ export default [
       },
       globals: {
         ...globals.node,
+        NodeJS: "readonly",
       },
     },
     plugins: {
@@ -27,6 +28,10 @@ export default [
     rules: {
       ...tseslint.configs.recommended.rules,
       "no-console": "off",
+      // TypeScript handles redeclaration checks; ESLint's `no-redeclare`
+      // misfires on the standard `const X = {...} as const; type X = ...`
+      // dual-declaration pattern used for string-enum-like exit codes.
+      "no-redeclare": "off",
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },

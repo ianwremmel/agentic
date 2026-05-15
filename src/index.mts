@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { run } from "./cli/run.mts";
+
 export function getVersion(): string {
   // Injected by esbuild at bundle time (see scripts/bundle.mjs). When running
   // unbundled (Node's native TS support, tests, dev), fall back to reading
@@ -15,10 +17,10 @@ export function getVersion(): string {
   return pkg.version;
 }
 
-export function main(argv: readonly string[] = process.argv.slice(2)): number {
-  void argv;
-  process.stdout.write(`dispatch ${getVersion()}\n`);
-  return 0;
+export async function main(
+  argv: readonly string[] = process.argv.slice(2),
+): Promise<number> {
+  return run({ argv, version: getVersion() });
 }
 
 const isDirectRun = (() => {
@@ -35,5 +37,15 @@ const isDirectRun = (() => {
 })();
 
 if (isDirectRun) {
-  process.exit(main());
+  main().then(
+    (code) => process.exit(code),
+    (err: unknown) => {
+      // Last-ditch guard: run() should never throw, but if it does we
+      // still need to surface something useful.
+      process.stderr.write(
+        `dispatch: fatal: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      process.exit(1);
+    },
+  );
 }

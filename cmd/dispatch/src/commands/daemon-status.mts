@@ -1,9 +1,9 @@
 import { statSync } from "node:fs";
 
-import { parseFlags } from "../cli/parse-args.js";
-import { isProcessAlive, readExistingPid } from "../daemon/pidlock.js";
-import { statePaths } from "../daemon/state-dir.js";
-import { CliError } from "../util/errors.js";
+import { parseFlags } from "../cli/parse-args.mts";
+import { isProcessAlive, readExistingPid } from "../daemon/pidlock.mts";
+import { statePaths } from "../daemon/state-dir.mts";
+import { CliError } from "../util/errors.mts";
 
 export async function daemonStatus(argv: string[]): Promise<number> {
   parseFlags(argv, {});

@@ -1,8 +1,8 @@
 import { mkdir } from "node:fs/promises";
 
-import { openLogger, type DaemonLogger } from "./log.js";
-import { acquirePidLock, type AcquiredLock } from "./pidlock.js";
-import { statePaths, type StatePaths } from "./state-dir.js";
+import { openLogger, type DaemonLogger } from "./log.mts";
+import { acquirePidLock, type AcquiredLock } from "./pidlock.mts";
+import { statePaths, type StatePaths } from "./state-dir.mts";
 
 export interface RunDaemonOptions {
   foreground: boolean;

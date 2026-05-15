@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { daemonStart } from "./commands/daemon-start.js";
-import { daemonStatus } from "./commands/daemon-status.js";
-import { daemonStop } from "./commands/daemon-stop.js";
-import { CliError, UsageError } from "./util/errors.js";
+import { daemonStart } from "./commands/daemon-start.mts";
+import { daemonStatus } from "./commands/daemon-status.mts";
+import { daemonStop } from "./commands/daemon-stop.mts";
+import { CliError, UsageError } from "./util/errors.mts";
 
 const USAGE = `Usage: dispatch <command> [...args]
 

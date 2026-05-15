@@ -1,6 +1,6 @@
 import { parseArgs as nodeParseArgs, type ParseArgsConfig } from "node:util";
 
-import { UsageError } from "../util/errors.js";
+import { UsageError } from "../util/errors.mts";
 
 export type FlagSchema = NonNullable<ParseArgsConfig["options"]>;
 

@@ -2,11 +2,11 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { parseFlags } from "../cli/parse-args.js";
-import { isProcessAlive, readExistingPid } from "../daemon/pidlock.js";
-import { runDaemon } from "../daemon/run.js";
-import { statePaths } from "../daemon/state-dir.js";
-import { CliError } from "../util/errors.js";
+import { parseFlags } from "../cli/parse-args.mts";
+import { isProcessAlive, readExistingPid } from "../daemon/pidlock.mts";
+import { runDaemon } from "../daemon/run.mts";
+import { statePaths } from "../daemon/state-dir.mts";
+import { CliError } from "../util/errors.mts";
 
 const FLAGS = {
   foreground: { type: "boolean" as const },

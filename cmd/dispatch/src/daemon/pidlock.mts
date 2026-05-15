@@ -2,7 +2,7 @@ import { closeSync, openSync, readFileSync, writeSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { CliError } from "../util/errors.js";
+import { CliError } from "../util/errors.mts";
 
 export interface AcquiredLock {
   readonly path: string;

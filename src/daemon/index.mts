@@ -48,6 +48,23 @@ export {
   type PreemptedResult,
 } from "./preempt.mts";
 export {
+  buildBaseProbes,
+  formatFailures,
+  verifyRequiredClis,
+  type CliProbe,
+  type PreflightFailure,
+  type PreflightReport,
+  type ProbeOutcome,
+  type ProbeRunner,
+} from "./preflight.mts";
+export {
+  runDaemonStart,
+  type AcquireLockOutcome,
+  type DaemonStartDeps,
+  type DaemonStartOptions,
+  type DaemonStartReport,
+} from "./start.mts";
+export {
   drain,
   ingest,
   pendingCount,

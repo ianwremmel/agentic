@@ -130,13 +130,13 @@ describe("run()", () => {
   it("invokes the stub handler and returns GENERIC (1) with a formatted error", async () => {
     const s = streams();
     const code = await run({
-      argv: ["daemon", "status"],
+      argv: ["prompts", "list"],
       stdout: s.stdout,
       stderr: s.stderr,
       version: V,
     });
     assert.equal(code, ExitCode.GENERIC);
-    assert.match(s.err(), /^dispatch: daemon status: /);
+    assert.match(s.err(), /^dispatch: prompts list: /);
   });
 
   it("enforces prompts copy --repo XOR --home (USAGE 2)", async () => {

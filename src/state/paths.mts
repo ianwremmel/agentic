@@ -52,6 +52,8 @@ export interface StateLayout {
   root: string;
   /** `<root>/daemon.pid` — single-instance lock file. */
   pidFile: string;
+  /** `<root>/daemon.sock` — unix-domain IPC socket. */
+  sockFile: string;
   /** `<root>/daemon.log` — append-only daemon log. */
   logFile: string;
   /** `<root>/tasks` — one JSON per task, keyed by encoded ID. */
@@ -70,6 +72,7 @@ export function layoutForRoot(root: string): StateLayout {
   return {
     root,
     pidFile: join(root, "daemon.pid"),
+    sockFile: join(root, "daemon.sock"),
     logFile: join(root, "daemon.log"),
     tasksDir,
     eventsDir,

@@ -42,6 +42,8 @@ import { acquirePidLock } from "../daemon/pid-lock.mts";
 import { PollScheduler } from "../daemon/poll-scheduler.mts";
 import { buildBaseProbes, type CliProbe, type ProbeRunner } from "../daemon/preflight.mts";
 import { runDaemonStart } from "../daemon/start.mts";
+import { startIpcServer } from "../daemon/ipc.mts";
+import type { DaemonStatusSnapshot } from "../daemon/status.mts";
 
 /** Default probe runner: spawn argv[0] argv[1..]; capture exit code. */
 function defaultProbeRunner(): ProbeRunner {
@@ -117,6 +119,26 @@ export const daemonStart: CommandHandler = async (parsed, ctx) => {
           // created later are armed by the runner-spawn wiring.
           void taskStore.list().then((tasks) => {
             for (const t of tasks) scheduler?.setTask(t);
+          });
+          // Start the IPC status server. Errors here surface to the
+          // orchestrator's catch block, which releases the PID lock.
+          void startIpcServer({
+            sockFile: layout.sockFile,
+            getStatus: async (): Promise<DaemonStatusSnapshot> => {
+              const tasks = await taskStore.list();
+              return {
+                tasks,
+                counters: {
+                  eventsHandled: 0,
+                  runnersSpawned: 0,
+                  watchHandlesAlive: 0,
+                  pendingFollowups: tasks.filter(
+                    (t) =>
+                      t.pending_followup !== null && t.pending_followup !== undefined,
+                  ).length,
+                },
+              };
+            },
           });
         },
         detach: () => {

@@ -58,6 +58,20 @@ export {
   type ProbeRunner,
 } from "./preflight.mts";
 export {
+  ipcRequest,
+  startIpcServer,
+  IpcConnectError,
+  type IpcRequest,
+  type IpcResponse,
+  type IpcServerDeps,
+  type IpcServerHandle,
+} from "./ipc.mts";
+export {
+  formatStatusTSV,
+  type DaemonStatusCounters,
+  type DaemonStatusSnapshot,
+} from "./status.mts";
+export {
   runDaemonStop,
   DEFAULT_STOP_POLL_MS,
   DEFAULT_STOP_TIMEOUT_MS,

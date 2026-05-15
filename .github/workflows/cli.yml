@@ -1,0 +1,91 @@
+name: cli
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded PR runs so reviews always see the latest result.
+concurrency:
+  group: cli-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: lint + typecheck + test + bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node major is pinned in scripts/sea.mjs (NODE_VERSION = 22.13.0).
+      # The verify job uses the matching major to keep the bundle ABI
+      # consistent with the SEA target.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Bundle (esbuild → dist/dispatch.cjs)
+        run: npm run bundle
+
+      # Smoke-check the bundle so a broken esbuild output fails CI even
+      # without going through the full SEA pipeline.
+      - name: Smoke-run bundle
+        run: node dist/dispatch.cjs
+
+  sea-host:
+    name: host-arch SEA binary (smoke)
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # The SEA pipeline downloads target node tarballs into
+      # dist/.node/<version>/<platform>-<arch>/. Cache that directory so
+      # repeated runs only re-download when the pinned Node version
+      # changes.
+      - name: Cache dist/.node (downloaded node binaries)
+        uses: actions/cache@v4
+        with:
+          path: dist/.node
+          key: dist-node-22.13.0-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            dist-node-22.13.0-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build host-arch SEA binary
+        run: npm run build:host
+
+      - name: Smoke-run produced binary
+        run: |
+          set -euo pipefail
+          # Detect the host arch in the same shape as scripts/sea.mjs.
+          case "$(uname -m)" in
+            x86_64) ARCH=x64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "Unsupported host arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          BIN="dist/dispatch-linux-${ARCH}"
+          test -x "${BIN}"
+          out="$("${BIN}")"
+          echo "binary output: ${out}"
+          echo "${out}" | grep -E '^dispatch [0-9]+\.[0-9]+\.[0-9]+'

@@ -26,7 +26,7 @@ describe("acquirePidLock", () => {
     assert.equal(r.ok, true);
     assert.equal(readFileSync(pidFile, "utf8").trim(), "12345");
     assert.ok(registered, "cleanup should be registered");
-    registered!();
+    (registered as unknown as () => void)();
     assert.equal(existsSync(pidFile), false);
   });
 

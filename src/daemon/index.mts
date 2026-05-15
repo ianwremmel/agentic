@@ -14,6 +14,16 @@ export {
   type AcquireResult,
 } from "./pid-lock.mts";
 export {
+  BACKOFF_SCHEDULE_MS,
+  SHUTDOWN_GRACE_MS,
+  STABLE_RESET_MS,
+  WatchManager,
+  type SpawnedWatch,
+  type SubscriptionKey,
+  type WatchFactory,
+  type WatchManagerOptions,
+} from "./watch-manager.mts";
+export {
   AWAITING_CI_LONG_MS,
   DEFAULT_INTERVALS_MS,
   PollScheduler,

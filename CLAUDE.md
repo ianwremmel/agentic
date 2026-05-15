@@ -4,10 +4,31 @@ Guidance for Claude Code when working in this repository.
 
 ## What this repo is
 
-A Claude Code **plugin marketplace**. The `.claude-plugin/marketplace.json`
-catalog lists the plugins under `plugins/`. Each plugin is a self-contained
-directory with its own `.claude-plugin/plugin.json` manifest plus the standard
-`skills/`, `agents/`, `commands/`, and `hooks/` subdirectories.
+A Claude Code **plugin marketplace** _and_ the source for the `dispatch` CLI.
+
+- The `.claude-plugin/marketplace.json` catalog lists the plugins under
+  `plugins/`. Each plugin is a self-contained directory with its own
+  `.claude-plugin/plugin.json` manifest plus the standard `skills/`,
+  `agents/`, `commands/`, and `hooks/` subdirectories.
+- The `dispatch` CLI lives in TypeScript at the repo root (`src/`,
+  `package.json`, `tsconfig.json`). It is built into a per-arch Node SEA
+  binary and distributed by the `plugins/dispatch/` plugin's shell wrapper.
+
+## Repo layout
+
+```
+.
+├── .claude-plugin/marketplace.json   # marketplace catalog
+├── package.json                      # dispatch CLI manifest (root)
+├── tsconfig.json                     # dispatch CLI TS config (root)
+├── src/                              # dispatch CLI source
+├── plugins/                          # Claude Code plugins
+│   └── dispatch/                     # ships the dispatch CLI wrapper
+└── docs/                             # spec + design docs
+```
+
+The CLI package is `@ianwremmel/dispatch`. The package manager is **npm**;
+the committed lockfile is `package-lock.json`.
 
 Plugins currently published:
 
@@ -65,6 +86,16 @@ subdirectories exist as scaffolding only.
 - Load a single plugin: `claude --plugin-dir ./plugins/dispatch`
 - Reload after edits: `/reload-plugins` (from inside Claude Code)
 - Validate the whole marketplace: `claude plugin validate .`
+
+## Working on the `dispatch` CLI (root TypeScript project)
+
+- Install deps: `npm install`
+- Type-check: `npm run typecheck`
+- Lint: `npm run lint`
+- Format: `npm run format` (check-only: `npm run format:check`)
+- Unit tests: `npm run test` (Vitest)
+- Build (bundling lands in #17, SEA pipeline in #18; today this just runs
+  `tsc --noEmit`).
 
 ## Do not
 

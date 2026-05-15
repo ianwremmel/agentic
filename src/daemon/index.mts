@@ -14,6 +14,11 @@ export {
   type AcquireResult,
 } from "./pid-lock.mts";
 export {
+  recoverFromCrash,
+  type CrashRecoveryDeps,
+  type CrashRecoveryReport,
+} from "./crash-recovery.mts";
+export {
   DEFAULT_HEARTBEAT_CADENCE_MS,
   HeartbeatScheduler,
   type HeartbeatSchedulerOptions,

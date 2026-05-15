@@ -10,8 +10,10 @@ interface FakeResponse {
   headers?: Record<string, string>;
 }
 
+type FakeInit = NonNullable<ConstructorParameters<typeof Response>[1]>;
+
 function mkResponse(r: FakeResponse): Response {
-  const init: ResponseInit = {
+  const init: FakeInit = {
     status: r.status,
     headers: r.headers,
   };

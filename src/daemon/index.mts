@@ -8,6 +8,12 @@ export {
   type SpawnRunnerResult,
 } from "./runner-spawn.mts";
 export {
+  acquirePidLock,
+  EXIT_HELD,
+  type AcquireOptions,
+  type AcquireResult,
+} from "./pid-lock.mts";
+export {
   STREAM_TAIL_BYTES,
   triageRunnerExit,
   type RunnerExit,

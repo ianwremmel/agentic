@@ -113,10 +113,11 @@ export const daemonStart: CommandHandler = async (parsed, ctx) => {
             },
           });
           // Seed the scheduler with every known task so the polling
-          // cadence is active immediately.
-          for (const task of taskStore.list()) {
-            scheduler.setTask(task);
-          }
+          // cadence is active immediately. Fire-and-forget; new tasks
+          // created later are armed by the runner-spawn wiring.
+          void taskStore.list().then((tasks) => {
+            for (const t of tasks) scheduler?.setTask(t);
+          });
         },
         detach: () => {
           // Best-effort terminal detach for now (see file header).

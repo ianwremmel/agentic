@@ -27,10 +27,14 @@ const banner = [
   `// built ${buildTimestamp}`,
   `// SPDX-License-Identifier: ${pkg.license ?? "UNLICENSED"}`,
   `"use strict";`,
-  // Install source-map-support if available so stack traces resolve through
-  // dist/dispatch.cjs.map. The require is guarded so a missing module is a
-  // no-op rather than a crash.
-  `try { require("source-map-support").install(); } catch (_) { /* optional */ }`,
+  // Source-map-support is deliberately not installed here.
+  //
+  // The single-executable-application (SEA) runtime restricts `require()` in
+  // the main script to built-in modules. Installing source-map-support
+  // (whether bundled or not) triggers internal `require()` calls that emit a
+  // confusing runtime warning. We can revisit once Node SEA gains support
+  // for bundled module loading. Stack traces still resolve to bundled source
+  // positions when invoked under plain `node dist/dispatch.cjs`.
 ].join("\n");
 
 await build({

@@ -12,6 +12,9 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "bundle": "node scripts/bundle.mjs",
+    "sea": "node scripts/sea.mjs",
+    "build": "npm run typecheck && npm run bundle && npm run sea",
+    "build:host": "npm run typecheck && npm run bundle && node scripts/sea.mjs --host-only",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -28,6 +31,7 @@
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
     "globals": "^17.6.0",
+    "postject": "^1.0.0-alpha.6",
     "prettier": "^3.4.2",
     "source-map-support": "^0.5.21",
     "typescript": "^5.7.2"

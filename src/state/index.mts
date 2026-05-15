@@ -28,3 +28,10 @@ export {
   type EventSpoolOptions,
   type SpooledEvent,
 } from "./event-spool.mts";
+export {
+  cacheForRoot,
+  encodeRepoSlug,
+  openPrStatusCache,
+  type CacheTarget,
+  type PrStatusCache,
+} from "./pr-status-cache.mts";

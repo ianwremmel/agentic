@@ -14,6 +14,13 @@ export {
   type AcquireResult,
 } from "./pid-lock.mts";
 export {
+  ConcurrencyGate,
+  DEFAULT_MAX_LIVE_RUNNERS,
+  TaskBusyError,
+  type ConcurrencyGateOptions,
+  type Slot,
+} from "./concurrency-gate.mts";
+export {
   recoverFromCrash,
   type CrashRecoveryDeps,
   type CrashRecoveryReport,

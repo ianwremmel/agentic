@@ -14,6 +14,13 @@ export {
   type AcquireResult,
 } from "./pid-lock.mts";
 export {
+  PR_SIDE_KINDS,
+  TICKET_SIDE_KINDS,
+  coalesce,
+  sideOf,
+  type CoalesceSide,
+} from "./coalesce.mts";
+export {
   BACKOFF_SCHEDULE_MS,
   SHUTDOWN_GRACE_MS,
   STABLE_RESET_MS,

@@ -14,6 +14,13 @@ export {
   type AcquireResult,
 } from "./pid-lock.mts";
 export {
+  drain,
+  ingest,
+  pendingCount,
+  type IncomingDisposition,
+  type PendingFollowup,
+} from "./followup-accumulator.mts";
+export {
   PR_SIDE_KINDS,
   TICKET_SIDE_KINDS,
   coalesce,

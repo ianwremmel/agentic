@@ -14,6 +14,11 @@ export {
   type AcquireResult,
 } from "./pid-lock.mts";
 export {
+  DEFAULT_HEARTBEAT_CADENCE_MS,
+  HeartbeatScheduler,
+  type HeartbeatSchedulerOptions,
+} from "./heartbeat-scheduler.mts";
+export {
   drain,
   ingest,
   pendingCount,

@@ -31,6 +31,23 @@ export {
   type HeartbeatSchedulerOptions,
 } from "./heartbeat-scheduler.mts";
 export {
+  DEFAULT_GRACE_MS,
+  DEFAULT_POLL_MS,
+  buildCombinedPayload,
+  classify,
+  defaultClassifier,
+  handleInvalidatingEvent,
+  preemptLiveRunner,
+  type Classifier,
+  type CombinedFollowupPayload,
+  type HandleInvalidatingEventOptions,
+  type HandleResult,
+  type InvalidatingReason,
+  type PreemptDeps,
+  type PreemptLiveRunnerOptions,
+  type PreemptedResult,
+} from "./preempt.mts";
+export {
   drain,
   ingest,
   pendingCount,

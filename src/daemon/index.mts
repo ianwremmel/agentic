@@ -58,6 +58,14 @@ export {
   type ProbeRunner,
 } from "./preflight.mts";
 export {
+  runDaemonStop,
+  DEFAULT_STOP_POLL_MS,
+  DEFAULT_STOP_TIMEOUT_MS,
+  type DaemonStopDeps,
+  type DaemonStopOptions,
+  type DaemonStopReport,
+} from "./stop.mts";
+export {
   runDaemonStart,
   type AcquireLockOutcome,
   type DaemonStartDeps,

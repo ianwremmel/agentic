@@ -8,6 +8,7 @@ import { daemonStart } from "./daemon-start.mts";
 import { daemonStatus } from "./daemon-status.mts";
 import { daemonStop } from "./daemon-stop.mts";
 import { promptsList } from "./prompts-list.mts";
+import { promptsCopy } from "./prompts-copy.mts";
 import type { CommandHandler } from "./types.mts";
 
 function notImplemented(name: string): CommandHandler {
@@ -26,7 +27,7 @@ export const stubs = {
   daemonStatus,
 
   promptsList,
-  promptsCopy: notImplemented("prompts copy"),
+  promptsCopy,
   promptsDiff: notImplemented("prompts diff"),
 
   tasksList: notImplemented("tasks list"),

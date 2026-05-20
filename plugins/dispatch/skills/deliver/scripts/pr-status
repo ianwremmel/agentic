@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# pr-status — emit PR state XML per §2.2.2 PR Status Protocol.
+#
+# Usage:
+#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> pr-status <pr>
+#
+# Requires: gh, jq, claude. Run from inside the repo's git worktree.
+
+set -euo pipefail
+
+PR="${1:-}"
+[[ -n "$PR" ]] || { echo "usage: pr-status <pr>" >&2; exit 2; }
+: "${DISPATCH_AGENT_ID:?DISPATCH_AGENT_ID required}"
+: "${DISPATCH_SKILL:?DISPATCH_SKILL required}"
+
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+SLUG="${REPO/\//__}"
+BASE="${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}"
+DIR="$BASE/$DISPATCH_SKILL/$SLUG/$PR"
+mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations"
+
+INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|codeql)$"
+STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
+TERMINAL_RE='(^|[[:space:]])(✓|✅|done|acknowledged|wontfix|dismissed|resolved)([[:space:]]|$)'
+
+xml_attr() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
+xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# --- summary helper -----------------------------------------------------------
+# Args: <body-file> <out-file>
+summarize() {
+  local body="$1" out="$2"
+  claude -p --max-turns 1 \
+    "Summarize the following PR item in 1-3 sentences describing its outcome. Plain prose only.
+
+$(cat "$body")" > "$out" 2>/dev/null || echo "(summary unavailable)" > "$out"
+}
+
+# Args: <id> <subdir> <body>
+# Writes <id>.md (and regenerates summary on change); echoes 1 if summary present.
+cache_item() {
+  local id="$1" sub="$2" body="$3"
+  local md="$DIR/$sub/$id.md"
+  local hash_file="$DIR/$sub/$id.hash"
+  local new_hash; new_hash="$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)"
+  local old_hash=""; [[ -f "$hash_file" ]] && old_hash="$(cat "$hash_file")"
+  if [[ ! -f "$md" || "$new_hash" != "$old_hash" ]]; then
+    printf '%s' "$body" > "$md"
+    printf '%s' "$new_hash" > "$hash_file"
+    [[ "$sub" != "annotations" ]] && rm -f "$DIR/$sub/$id.summary.md"
+  fi
+}
+
+# --- fetch --------------------------------------------------------------------
+PR_JSON="$(gh pr view "$PR" --json \
+  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews,comments,reviewThreads)"
+
+HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
+
+# --- checks -------------------------------------------------------------------
+checks_xml() {
+  jq -r --arg info "$INFORMATIONAL_RE" --argjson stuck_after "$STUCK_AFTER_SEC" '
+    def now: (now | floor);
+    .statusCheckRollup // [] | map({
+      name: (.name // .context // "check"),
+      conclusion: (.conclusion // .state // ""),
+      status: (.status // ""),
+      url: (.detailsUrl // .targetUrl // ""),
+      started: (.startedAt // ""),
+      informational: ($info != "" and (((.name // .context // "")) | test($info; "i")))
+    }) | map(. + {
+      pending: (.status == "IN_PROGRESS" or .status == "QUEUED" or .status == "PENDING" or .conclusion == "" and .status != ""),
+      failing: ((.conclusion // "") | test("FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE"; "i")),
+      stuck: (.status == "IN_PROGRESS" and .started != "" and ((now - (.started | fromdateiso8601? // now)) > $stuck_after))
+    }) as $cs
+    | (any($cs[]; .pending and (.stuck | not))) as $any_pending
+    | (any($cs[]; .failing and (.informational | not) and (.pending | not))) as $any_failing
+    | (if $any_pending then "pending" elif $any_failing then "failing" else "passing" end) as $rollup
+    | "  <checks state=\"\($rollup)\">",
+      ($cs[] | "    <check name=\"\(.name)\" conclusion=\"\(.conclusion)\" url=\"\(.url)\" informational=\"\(.informational)\" stuck=\"\(.stuck)\"/>"),
+      "  </checks>"
+  ' <<<"$PR_JSON"
+}
+
+# --- merge conflicts ----------------------------------------------------------
+conflicts_xml() {
+  local m; m="$(jq -r '.mergeable // ""' <<<"$PR_JSON")"
+  local present=false; [[ "$m" == "CONFLICTING" ]] && present=true
+  echo "  <merge-conflicts present=\"$present\"/>"
+}
+
+# --- reviews ------------------------------------------------------------------
+reviews_xml() {
+  echo "  <reviews>"
+  jq -r '.reviews // [] | .[] | [(.author.login // ""), (.author.is_bot // false), (.state // "")] | @tsv' <<<"$PR_JSON" |
+  while IFS=$'\t' read -r author is_bot state; do
+    [[ -n "$author" ]] || continue
+    local mode="human"
+    if [[ "$is_bot" == "true" ]] || [[ "${author,,}" =~ (copilot|codex|claude|ai-agent) ]]; then
+      mode="bot"
+    fi
+    local s; s="$(tr '[:upper:]' '[:lower:]' <<<"$state")"
+    case "$s" in commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
+    printf '    <review author="%s" mode="%s" state="%s"/>\n' \
+      "$(xml_attr "$author")" "$mode" "$s"
+  done
+  echo "  </reviews>"
+}
+
+# --- actionability ------------------------------------------------------------
+# Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
+# Echoes "true" (actionable) or "false".
+classify_actionable() {
+  local body="$1" author="$2" resolved="$3"
+  [[ "$resolved" == "true" ]] && { echo false; return; }
+  local marker="<!-- agent-reply:$DISPATCH_AGENT_ID -->"
+  if grep -qF "$marker" <<<"$body" && grep -qE "$TERMINAL_RE" <<<"$body"; then
+    echo false; return
+  fi
+  echo true
+}
+
+# --- comments (top-level PR comments) -----------------------------------------
+comments_xml() {
+  echo "  <comments>"
+  jq -c '.comments // [] | .[]' <<<"$PR_JSON" | while read -r c; do
+    local id author body
+    id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
+    author="$(jq -r '.author.login // ""' <<<"$c")"
+    body="$(jq -r '.body // ""' <<<"$c")"
+    [[ -n "$id" ]] || continue
+    id="${id//[^A-Za-z0-9_=-]/_}"
+    cache_item "$id" "comments" "$body"
+    local actionable; actionable="$(classify_actionable "$body" "$author" "false")"
+    local cache_path="$DIR/comments/$id.md"
+    local sum_path="$DIR/comments/$id.summary.md"
+    if [[ "$actionable" == "true" ]]; then
+      printf '    <comment id="%s" actionable="true" cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+    else
+      [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
+      printf '    <comment id="%s" actionable="false" cache="%s"><summary>%s</summary></comment>\n' \
+        "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+    fi
+  done
+  echo "  </comments>"
+}
+
+# --- review threads -----------------------------------------------------------
+threads_xml() {
+  echo "  <threads>"
+  jq -c '.reviewThreads // [] | .[]' <<<"$PR_JSON" | while read -r t; do
+    local id resolved newest_body newest_author body
+    id="$(jq -r '.id // ""' <<<"$t")"
+    resolved="$(jq -r '.isResolved // false' <<<"$t")"
+    body="$(jq -r '[.comments.nodes[]? // (.comments[]?) | "[" + (.author.login // "?") + "] " + (.body // "")] | join("\n\n---\n\n")' <<<"$t")"
+    newest_body="$(jq -r '(.comments.nodes // .comments // []) | last.body // ""' <<<"$t")"
+    newest_author="$(jq -r '(.comments.nodes // .comments // []) | last.author.login // ""' <<<"$t")"
+    [[ -n "$id" ]] || continue
+    id="${id//[^A-Za-z0-9_=-]/_}"
+    cache_item "$id" "threads" "$body"
+    local actionable; actionable="$(classify_actionable "$newest_body" "$newest_author" "$resolved")"
+    local cache_path="$DIR/threads/$id.md"
+    local sum_path="$DIR/threads/$id.summary.md"
+    if [[ "$actionable" == "true" ]]; then
+      printf '    <thread id="%s" actionable="true" cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+    else
+      [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
+      printf '    <thread id="%s" actionable="false" cache="%s"><summary>%s</summary></thread>\n' \
+        "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+    fi
+  done
+  echo "  </threads>"
+}
+
+# --- annotations (code scanning / check annotations) --------------------------
+annotations_xml() {
+  echo "  <annotations>"
+  local owner="${REPO%/*}" repo="${REPO#*/}"
+  local sha; sha="$(jq -r .headRefOid <<<"$PR_JSON")"
+  local runs
+  runs="$(gh api "repos/$owner/$repo/commits/$sha/check-runs" --jq '.check_runs // []' 2>/dev/null || echo '[]')"
+  jq -c '.[]' <<<"$runs" | while read -r run; do
+    local run_id; run_id="$(jq -r '.id' <<<"$run")"
+    gh api "repos/$owner/$repo/check-runs/$run_id/annotations" 2>/dev/null \
+      | jq -c '.[]?' | while read -r a; do
+      local path line msg id body
+      path="$(jq -r '.path // ""' <<<"$a")"
+      line="$(jq -r '.start_line // 0' <<<"$a")"
+      msg="$(jq -r '.message // ""' <<<"$a")"
+      body="[$path:$line] $msg"
+      id="$(printf '%s' "$body" | sha256sum | cut -c1-16)"
+      cache_item "$id" "annotations" "$body"
+      local ack="$DIR/annotations/$id.ack"
+      local cache_path="$DIR/annotations/$id.md"
+      local sum_path="$DIR/annotations/$id.summary.md"
+      if [[ -f "$ack" ]]; then
+        [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
+        printf '    <annotation id="%s" actionable="false" cache="%s"><summary>%s</summary></annotation>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      else
+        printf '    <annotation id="%s" actionable="true" cache="%s"/>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+      fi
+    done
+  done
+  echo "  </annotations>"
+}
+
+# --- emit ---------------------------------------------------------------------
+printf '<pr-status repo="%s" pr="%s" head="%s">\n' \
+  "$(xml_attr "$REPO")" "$(xml_attr "$PR")" "$(xml_attr "$HEAD")"
+checks_xml
+conflicts_xml
+reviews_xml
+comments_xml
+threads_xml
+annotations_xml
+echo '</pr-status>'

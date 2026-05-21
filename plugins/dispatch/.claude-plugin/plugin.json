@@ -17,5 +17,13 @@
     "project-management",
     "issues",
     "planning"
-  ]
+  ],
+  "userConfig": {
+    "copilot_available": {
+      "type": "boolean",
+      "title": "Copilot review available",
+      "description": "Whether GitHub Copilot review is expected to work on this installation. Set to false on GitHub Enterprise installations without Copilot review — the `deliver` skill will skip the Copilot phase and go straight to human review.",
+      "default": true
+    }
+  }
 }

@@ -9,7 +9,7 @@ Land a code change via a PR. On every tick: run `scripts/pr-status`, address eve
 
 ## Setup
 
-1. **Worktree.** Work inside `~/.worktrees/<owner>/<repo>/<branch>` (or repo override). Find existing with `git worktree list` — never guess. Reuse if present.
+1. **Worktree.** Work inside `<worktree_base>/<owner>/<repo>/<branch>` (`worktree_base` is a `userConfig` value; default `~/.worktrees`). Find existing with `git worktree list` — never guess. Reuse if present.
 2. **PR-open sequence** (skip if a PR is already open for this branch):
    - `git commit --allow-empty -m "chore: open PR [skip ci]"` — never amend or squash this commit.
    - Push; open a **draft** PR. Body: Motivation, Ticket link (omit entirely if none — bare IDs are non-conforming), Test plan. **No execution plan in the body.**
@@ -20,7 +20,7 @@ Land a code change via a PR. On every tick: run `scripts/pr-status`, address eve
 
 Six binary signals read from each `pr-status` XML:
 
-1. **CI.** `<checks state="passing">` (failures from `informational="true"` checks don't count).
+1. **CI.** `<checks state="passing">`. The protocol's rollup already treats `neutral`/`success` as passing and lets the repo suppress specific non-blocking checks via `informational="true"`.
 2. **No conflicts.** `<merge-conflicts present="false"/>`.
 3. **No actionable annotations.** Zero `<annotation actionable="true">`.
 4. **No actionable comments.** Zero `<comment actionable="true">`.
@@ -111,13 +111,13 @@ These apply in every state; they are not states themselves.
 
 ## Polling
 
-Adaptive, not fixed. Build project memory and use it to dodge unnecessary traffic.
+Adaptive, not fixed. Build project memory and use it to dodge unnecessary traffic. **Never poll faster than once per minute.**
 
-| Waiting on                              | Schedule                                                                                                                                            |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CI (`<checks state="pending">`)         | 15 s for the first 2 min (build-step failures usually surface here); then 60 s; then tighten back to 15 s once within ~2 min of the project's typical CI duration. |
-| Reviewer reply after a request          | 5 min for the first hour; then 30 min.                                                                                                              |
-| Merge after reaching `ready_for_merge`  | 5 min for the first hour; then 30 min.                                                                                                              |
+| Waiting on                              | Schedule                                                                                                                       |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| CI (`<checks state="pending">`)         | 60 s. Lengthen to ~5 min once past the project's typical CI duration without completion.                                       |
+| Reviewer reply after a request          | 5 min for the first hour; then 30 min.                                                                                         |
+| Merge after reaching `ready_for_merge`  | 5 min for the first hour; then 30 min.                                                                                         |
 
 ### Project memory
 
@@ -136,6 +136,7 @@ Read from the plugin's `userConfig` (env: `CLAUDE_PLUGIN_OPTION_*`):
 | Key                 | Effect                                                                                                                       |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `copilot_available` | `false` → skip the Copilot phase entirely: `draft → ready_for_human_review` directly. Default `true`.                        |
+| `worktree_base`     | Root directory for per-PR worktrees. Layout: `<base>/<owner>/<repo>/<branch>`. Default `~/.worktrees`.                       |
 
 ## References
 

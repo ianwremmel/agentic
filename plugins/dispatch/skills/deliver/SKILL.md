@@ -25,7 +25,7 @@ Six binary signals read from each `pr-status` XML:
 3. **No actionable annotations.** Zero `<annotation actionable="true">`.
 4. **No actionable comments.** Zero `<comment actionable="true">`.
 5. **No actionable threads.** Zero `<thread actionable="true">`.
-6. **Human-approved.** At least one `<review mode="human" state="approved">` from a non-self reviewer, no later `changes_requested` from the same reviewer.
+6. **Human-approved.** At least one `<review mode="human" state="approved">` from a non-self reviewer, and no current `changes_requested` from any reviewer.
 
 Gates 1–5 are evaluated at every tick across every lifecycle state outside `starting`/`done`. **Gate failures are addressed in place — they do not change the state.** Only the conditions listed on each transition edge below trigger a state change.
 

@@ -69,21 +69,21 @@ Universal terminal (not drawn, applies from every state): **PR closed without me
 
 ## States
 
-| State                            | Do                                                                                                                                                | Wait/poll? |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| `starting`                       | One-shot: create or locate the worktree per §Setup.                                                                                               | no         |
-| `draft`                          | **Implementation phase — this is where coding happens.** Edit; run pre-push review pair (simplify + adversarial); push. When you decide the change is ready, evaluate gates 1–5.    | no         |
-| `ready_for_copilot_review`       | Transient. Request Copilot review on the PR.                                                                                                      | no         |
-| `copilot_review_requested`       | Wait for Copilot to submit a review.                                                                                                              | yes (CI cadence) |
-| `copilot_commented`              | Address every actionable Copilot item per the per-concern table. Push fix(es).                                                                    | no         |
-| `ready_for_human_review`         | Transient. Clear draft state; request specific human(s). Mode A: GitHub review request. Mode B: tag the human on the ticket. Never request from yourself. | no |
-| `human_review_requested`         | Wait for a human review submission.                                                                                                                | yes (reviewer cadence) |
-| `human_review_commented`         | Address every actionable item from the human review. Push. Re-request human review.                                                               | no         |
-| `human_review_requested_changes` | Address items. Push. **Re-request review is required** — `changes_requested` blocks merge until the reviewer dismisses or re-submits.             | no         |
-| `human_review_approved`          | Evaluate gates 1–5. They must still hold; if not, address concerns in place until they do.                                                        | no         |
-| `ready_for_merge`                | Wait for merge. **Do not merge yourself unless explicitly instructed.**                                                                            | yes (merge cadence) |
-| `merged`                         | Acknowledge per §2.1. Remove any worktree **you** created (on any closure, merged or not).                                                        | no         |
-| `done`                           | Terminal.                                                                                                                                          | —          |
+| State                            | Do                                                                                       | Poll?    |
+| -------------------------------- | ---------------------------------------------------------------------------------------- | -------- |
+| `starting`                       | Create or locate the worktree (§Setup).                                                  | no       |
+| `draft`                          | **Coding happens here.** Edit; pre-push review; push. When ready, check gates 1–5.       | no       |
+| `ready_for_copilot_review`       | Request Copilot review.                                                                  | no       |
+| `copilot_review_requested`       | Await Copilot's review.                                                                  | CI       |
+| `copilot_commented`              | Address each actionable Copilot item; push fix(es).                                      | no       |
+| `ready_for_human_review`         | Clear draft; request human(s). Never self-request. Mode A/B per reference.               | no       |
+| `human_review_requested`         | Await a human review.                                                                    | reviewer |
+| `human_review_commented`         | Address each item; push; re-request review.                                              | no       |
+| `human_review_requested_changes` | Address; push; **re-request required** — `changes_requested` blocks merge until cleared. | no       |
+| `human_review_approved`          | Confirm gates 1–5 still hold; else fix in place.                                         | no       |
+| `ready_for_merge`                | Await merge. **Don't self-merge unless instructed.**                                     | merge    |
+| `merged`                         | Acknowledge (§2.1); remove any worktree you created.                                     | no       |
+| `done`                           | Terminal.                                                                                | —        |
 
 **Coding does NOT happen in:** `ready_for_copilot_review`, `copilot_review_requested`, `ready_for_human_review`, `human_review_requested`, `human_review_approved`, `ready_for_merge`, `merged`, `done`. Code changes in those states are only legal as the response to a gate-1–5 failure (CI broke, conflict arose, a new actionable annotation/comment/thread appeared) — and that work is "addressing concerns in place," not advancing the lifecycle.
 
@@ -91,12 +91,12 @@ Universal terminal (not drawn, applies from every state): **PR closed without me
 
 Apply to every actionable item the XML emits, not just the first.
 
-| XML signal                                              | Action                                                                                                                                  |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `<merge-conflicts present="true"/>` (gate 2 fails)      | Rebase or merge the target branch; resolve.                                                                                             |
-| `<checks state="failing">` (gate 1 fails)               | Diagnose root cause; fix.                                                                                                               |
-| Actionable `<comment>` or `<thread>` (gates 4–5 fail)   | Reply per §2.1 with **either** a commit link describing what changed **or** a one-line dismissal rationale. Apply terminal signal. Resolve threads when satisfied. |
-| Actionable `<annotation>` (gate 3 fails)                | Fix the code, OR dismiss by writing `<cache>/$id.ack` with the rationale captured in the plan comment or commit body.                   |
+| XML signal                                            | Action                                                                                                                                                             |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<merge-conflicts present="true"/>` (gate 2 fails)    | Rebase or merge the target branch; resolve.                                                                                                                        |
+| `<checks state="failing">` (gate 1 fails)             | Diagnose root cause; fix.                                                                                                                                          |
+| Actionable `<comment>` or `<thread>` (gates 4–5 fail) | Reply per §2.1 with **either** a commit link describing what changed **or** a one-line dismissal rationale. Apply terminal signal. Resolve threads when satisfied. |
+| Actionable `<annotation>` (gate 3 fails)              | Fix the code, OR dismiss by writing `<cache>/$id.ack` with the rationale captured in the plan comment or commit body.                                              |
 
 ## Cross-cutting behaviors
 
@@ -105,7 +105,7 @@ These apply in every state; they are not states themselves.
 - **Pre-push review.** Before every significant push: simplify pass + adversarial pass by a distinct reviewer. Triage every finding (act or one-line dismissal). Non-significant pushes (the empty `chore: open PR`, whitespace/format-only, trivial typo/lint fixes) skip pre-push review; if unsure, treat as significant.
 - **Reply to every reviewer item.** Commit link or dismissal rationale. Silence is non-conforming. Human comments get more deference than bot ones.
 - **Plan comment is the living plan.** Edit in place: check off completed steps, strike through abandoned ones with a one-line rationale (don't delete), append new ones. The PR body's Motivation and Test plan stay stable.
-- **First green.** Gate 1 must be satisfied by a green CI rollup achieved *after* the agent first attempts to leave `draft`. Greens on intermediate commits before that moment do not satisfy gate 1.
+- **First green.** Gate 1 must be satisfied by a green CI rollup achieved _after_ the agent first attempts to leave `draft`. Greens on intermediate commits before that moment do not satisfy gate 1.
 - **Heartbeats.** While polling, emit INFO heartbeats per §2.3 (`ticket=-` when there is no linked ticket).
 - **Termination is narrow.** Plan completion, green CI, review requests, and `ready_for_merge` do not terminate. Only PR closure or explicit human "stop" terminates.
 
@@ -113,11 +113,11 @@ These apply in every state; they are not states themselves.
 
 Adaptive, not fixed. Build project memory and use it to dodge unnecessary traffic. **Never poll faster than once per minute.**
 
-| Waiting on                              | Schedule                                                                                                                       |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| CI (`<checks state="pending">`)         | 60 s. Lengthen to ~5 min once past the project's typical CI duration without completion.                                       |
-| Reviewer reply after a request          | 5 min for the first hour; then 30 min.                                                                                         |
-| Merge after reaching `ready_for_merge`  | 5 min for the first hour; then 30 min.                                                                                         |
+| Waiting on                             | Schedule                                                                                 |
+| -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| CI (`<checks state="pending">`)        | 60 s. Lengthen to ~5 min once past the project's typical CI duration without completion. |
+| Reviewer reply after a request         | 5 min for the first hour; then 30 min.                                                   |
+| Merge after reaching `ready_for_merge` | 5 min for the first hour; then 30 min.                                                   |
 
 ### Project memory
 
@@ -133,14 +133,16 @@ On entry to a polling state, read the median `elapsed_s` for that kind and tune 
 
 Read from the plugin's `userConfig` (env: `CLAUDE_PLUGIN_OPTION_*`):
 
-| Key                 | Effect                                                                                                                       |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `copilot_available` | `false` → skip the Copilot phase entirely: `draft → ready_for_human_review` directly. Default `true`.                        |
-| `worktree_base`     | Root directory for per-PR worktrees. Layout: `<base>/<owner>/<repo>/<branch>`. Default `~/.worktrees`.                       |
+| Key                 | Effect                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `copilot_available` | `false` → skip the Copilot phase entirely: `draft → ready_for_human_review` directly. Default `true`.  |
+| `worktree_base`     | Root directory for per-PR worktrees. Layout: `<base>/<owner>/<repo>/<branch>`. Default `~/.worktrees`. |
 
 ## References
 
-- §2.4.2 Delivery Protocol
-- §2.2.2 PR Status Protocol
-- §2.1.2 Communication Protocol (machine marker, Mode A/B sparkle wrapper, terminal signals)
-- §2.3 Operational logging (heartbeats, `TRANSITION` entries)
+The bits this skill leans on — Mode A/B detection, the machine marker and
+sparkle wrapper, terminal signals, actionability, and the operational-log line
+format — are condensed in [`reference.md`](./reference.md), bundled so the skill
+is self-contained once installed. That file points back to the full dispatch
+spec (§2.1 Communication, §2.2 PR Status, §2.3 Logging, §2.4 Delivery) where the
+two differ.

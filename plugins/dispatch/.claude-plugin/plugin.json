@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -17,5 +17,19 @@
     "project-management",
     "issues",
     "planning"
-  ]
+  ],
+  "userConfig": {
+    "copilot_available": {
+      "type": "boolean",
+      "title": "Copilot review available",
+      "description": "Whether GitHub Copilot review is expected to work on this installation. Set to false on GitHub Enterprise installations without Copilot review — the `deliver` skill will skip the Copilot phase and go straight to human review.",
+      "default": true
+    },
+    "worktree_base": {
+      "type": "directory",
+      "title": "Worktree base directory",
+      "description": "Root directory under which the `deliver` skill creates per-PR worktrees. Layout: <base>/<owner>/<repo>/<branch>.",
+      "default": "~/.worktrees"
+    }
+  }
 }

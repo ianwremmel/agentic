@@ -58,10 +58,13 @@ PR_JSON="$(gh pr view "$PR" --json \
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
 # reviewThreads isn't exposed by `gh pr view --json`, so fetch via GraphQL.
+# Use the numeric PR number from PR_JSON since `$PR` may have been passed as
+# a URL or branch name (both accepted by `gh pr view`).
+PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
 OWNER="${REPO%/*}"
 REPO_NAME="${REPO#*/}"
 THREADS_JSON="$(gh api graphql \
-  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR" \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
   -f query='
     query($owner:String!, $repo:String!, $pr:Int!) {
       repository(owner:$owner, name:$repo) {
@@ -72,14 +75,14 @@ THREADS_JSON="$(gh api graphql \
               isResolved
               isOutdated
               path
-              comments(first:50) {
+              comments(last:50) {
                 nodes { id databaseId body author { login } createdAt }
               }
             }
           }
         }
       }
-    }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []' 2>/dev/null || echo '[]')"
+    }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
 
 # --- checks -------------------------------------------------------------------
 checks_xml() {

@@ -53,9 +53,36 @@ cache_item() {
 
 # --- fetch --------------------------------------------------------------------
 PR_JSON="$(gh pr view "$PR" --json \
-  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews,comments,reviewThreads)"
+  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews,comments)"
 
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
+
+# reviewThreads isn't exposed by `gh pr view --json`, so fetch via GraphQL.
+# Use the numeric PR number from PR_JSON since `$PR` may have been passed as
+# a URL or branch name (both accepted by `gh pr view`).
+PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
+OWNER="${REPO%/*}"
+REPO_NAME="${REPO#*/}"
+THREADS_JSON="$(gh api graphql \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviewThreads(first:100) {
+            nodes {
+              id
+              isResolved
+              isOutdated
+              path
+              comments(last:50) {
+                nodes { id databaseId body author { login } createdAt }
+              }
+            }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
 
 # --- checks -------------------------------------------------------------------
 checks_xml() {
@@ -149,13 +176,13 @@ comments_xml() {
 # --- review threads -----------------------------------------------------------
 threads_xml() {
   echo "  <threads>"
-  jq -c '.reviewThreads // [] | .[]' <<<"$PR_JSON" | while read -r t; do
+  jq -c '.[]' <<<"$THREADS_JSON" | while read -r t; do
     local id resolved newest_body newest_author body
     id="$(jq -r '.id // ""' <<<"$t")"
     resolved="$(jq -r '.isResolved // false' <<<"$t")"
-    body="$(jq -r '[.comments.nodes[]? // (.comments[]?) | "[" + (.author.login // "?") + "] " + (.body // "")] | join("\n\n---\n\n")' <<<"$t")"
-    newest_body="$(jq -r '(.comments.nodes // .comments // []) | last.body // ""' <<<"$t")"
-    newest_author="$(jq -r '(.comments.nodes // .comments // []) | last.author.login // ""' <<<"$t")"
+    body="$(jq -r '[.comments.nodes[]? | "[" + (.author.login // "?") + "] " + (.body // "")] | join("\n\n---\n\n")' <<<"$t")"
+    newest_body="$(jq -r '.comments.nodes // [] | last.body // ""' <<<"$t")"
+    newest_author="$(jq -r '.comments.nodes // [] | last.author.login // ""' <<<"$t")"
     [[ -n "$id" ]] || continue
     id="${id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "threads" "$body"

@@ -69,7 +69,7 @@ THREADS_JSON="$(gh api graphql \
     query($owner:String!, $repo:String!, $pr:Int!) {
       repository(owner:$owner, name:$repo) {
         pullRequest(number:$pr) {
-          reviewThreads(first:250) {
+          reviewThreads(first:100) {
             nodes {
               id
               isResolved

@@ -107,7 +107,7 @@ These apply in every state; they are not states themselves.
 - **Plan comment is the living plan.** Edit in place: check off completed steps, strike through abandoned ones with a one-line rationale (don't delete), append new ones. The PR body's Motivation and Test plan stay stable.
 - **First green.** Gate 1 must be satisfied by a green CI rollup achieved _after_ the agent first attempts to leave `draft`. Greens on intermediate commits before that moment do not satisfy gate 1.
 - **Heartbeats.** While polling, emit INFO heartbeats per §2.3 (`ticket=-` when there is no linked ticket).
-- **Lifecycle termination is narrow.** Plan completion, green CI, review requests, and `ready_for_merge` do not end the *lifecycle* — only PR closure or explicit human "stop" does. Turn termination is separate and routine; see §Polling/Mechanism.
+- **Termination is narrow.** Plan completion, green CI, review requests, and `ready_for_merge` do not terminate. Only PR closure or explicit human "stop" terminates. The agent runs the lifecycle through itself — see §Polling/Mechanism — and is never re-prodded by a caller (human or orchestrator) to make forward progress.
 
 ## Polling
 
@@ -121,22 +121,17 @@ Adaptive, not fixed. Build project memory and use it to dodge unnecessary traffi
 
 ### Mechanism
 
-Polling must terminate when the agent's turn does. Lifecycle termination is narrow (PR closure or human "stop"), but **turn termination is normal** — any time the only remaining action is to wait, end the turn cleanly. The skill is resumable from PR state alone: every lifecycle state in §Lifecycle reconstructs from a fresh `pr-status` read, so an `/loop` tick, a `ScheduleWakeup`, or a manual re-invocation all resume identically.
+The agent is the poll loop. Polling is done by the agent itself, inline, via sequential foreground tool calls — typically `Bash` `sleep` followed by a `pr-status` re-read and any reactive work the new state requires. The agent stays continuously active in its current turn until a lifecycle terminal (see "Termination is narrow"); it does not yield its turn back to a caller, hand off to a wakeup, or expect anyone to re-prod it. This holds whether `deliver` is invoked directly by a human or dispatched as a subagent (e.g. `linear-project`'s `deliver-worker`).
 
-Three supported wait patterns, in order of preference:
+For waits longer than the Bash tool timeout (~10 min), do **not** use a single long `sleep`. Split into shorter intervals — a 30-minute reviewer wait becomes ~5×6-minute `sleep`s, each followed by a cheap `pr-status` check. Re-checking more often than the schedule above is fine; the table is an upper bound on the wait, not a lower bound on the loop.
 
-| Pattern                            | When                                                                                                                                                       |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| End the turn; caller re-dispatches | Default when invoked from a tick-driven caller (e.g. `linear-project`'s `/loop`). The caller's next tick re-reads PR state and re-enters.                  |
-| `ScheduleWakeup` + end the turn    | Standalone runs with no external tick driver. Schedule a wakeup that re-invokes this skill; close the turn.                                                |
-| Inline foreground `Bash` `sleep`   | Short waits (≤ ~5 min, comfortably under the Bash tool timeout) where ending the turn would lose more than it saves (e.g. mid-burst CI ack/recheck cycle). |
+Forbidden patterns (each has been observed to silently strand a PR mid-lifecycle):
 
-Forbidden patterns (each has bitten this skill in production):
+- **Detached background poll loops.** Any `run_in_background: true` Bash whose body repeats `touch <lock>; sleep; poll` in any form — `while true`, `until`, plain `touch; sleep; touch` triplets, `nohup`, `disown`, etc. Spawning a detached loop and then exhausting the agent's tool calls leaves the OS process polling indefinitely while the agent itself is reaped; the lock keeps heartbeating forever even though no reactive work can happen, and the PR sits orphaned with the `agent-working` signal still set.
+- **Suspending on `Monitor`** as the poll vehicle. The harness's armed-monitor pattern observably fails to wake long polls — the agent yields, the wake never fires, the PR is silently unmonitored. Stay in-turn with foreground `sleep`s instead.
+- **Ending the turn before a lifecycle terminal.** Returning early — for "no actionable work right now," for "the caller will check back," or any reason short of merged / closed / explicit human "stop" — orphans the PR. The corresponding instruction to a caller is: **do not design the caller around mid-lifecycle re-dispatch.** A live `deliver` agent is expected to be doing the work.
 
-- **Detached background poll loops.** Any `run_in_background: true` Bash whose body repeats `touch <lock>; sleep; poll` in any form — `while true`, `until`, plain `touch; sleep; touch` triplets, `nohup`, `disown`, etc. The loop becomes a raw OS process that survives the agent's task completion, keeps any heartbeat file fresh indefinitely, and breaks the invariant that turn-end means polling-stopped — corrupting every liveness signal a stateless caller can use to detect a dead worker.
-- **Suspending on `Monitor`** as the poll vehicle. The harness's armed-monitor pattern observably fails to wake long polls; the agent yields, the wake-up never fires, the PR is silently unmonitored. Use `ScheduleWakeup` instead.
-
-Whether the turn ends at a wait boundary or at a lifecycle terminal, **the same cleanup runs**: anything the skill acquired this turn, plus any caller-imposed cleanup specified in the dispatch brief (lock file, `agent-working` label, status file). A turn that ends without running cleanup leaves the PR in a half-tracked state that the caller can only recover via its own stale-state sweep.
+When the agent reaches a lifecycle terminal, or exits in response to an explicit human "stop" it can catch, it runs whatever cleanup the dispatch brief specifies (lock file removal, `agent-working` label removal, status file write). Abnormal exits (API errors, OOM, harness reaping) are out of the agent's reach; the caller's stale-state sweep is the backstop for those, not a substitute for the agent's discipline.
 
 ### Project memory
 

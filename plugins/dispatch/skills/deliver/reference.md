@@ -76,15 +76,29 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
   absence of a formal `changes_requested` review does NOT mean "no changes
   requested." Every comment the account's human leaves is either a question to
   answer or an implicit change request.
+- **Sole-reviewer case.** "MUST NOT request review from self" constrains the
+  *request side-effect*, not the loop. When the calling agent is the PR author
+  and no eligible non-self human reviewer exists, the agent skips the request
+  but does not exit — it keeps polling on the reviewer cadence until the PR
+  closes, and the universal `merged → done` terminal handles the eventual
+  closure. Terminating early because there's nobody to ask is non-conforming.
 
 ## Actionability (§2.2)
 
 The `pr-status` script applies these rules; the agent reads the resulting
 `actionable="true|false"`. For reference, a comment or thread is **non-actionable**
-iff EITHER:
+iff any of:
 
+- the body is the calling agent's plan comment — a line-anchored
+  `<!-- agent-plan:... -->` sentinel AND a comment author matching the calling
+  gh identity. The agent edits its plan in place; it never needs to be
+  "addressed." (The author match keeps a *human* comment that merely quotes
+  the marker actionable.)
 - the newest comment was written by the calling agent AND carries a terminal
-  signal, OR
+  signal — matched either by an exact `<!-- agent-reply:$DISPATCH_AGENT_ID -->`
+  marker OR by the comment's gh-reported author equalling the calling identity,
+  so a drifted agent-id in the marker does not re-actionable the agent's own
+  resolved replies.
 - the platform has explicitly resolved the thread (threads only).
 
 A human reply after the agent's last turn makes the item actionable again.

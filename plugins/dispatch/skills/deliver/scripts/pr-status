@@ -23,6 +23,13 @@ INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|cod
 STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
 TERMINAL_RE='(^|[[:space:]])(✓|✅|done|acknowledged|wontfix|dismissed|resolved)([[:space:]]|$)'
 
+# gh-authenticated identity used as a fallback in classify_actionable so
+# agent-id drift in markers across runs does not re-actionable the calling
+# agent's own resolved replies. Empty if `gh api user` fails; one breadcrumb
+# then logs the fallback path as inactive.
+CALLER_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
+[[ -z "$CALLER_LOGIN" ]] && echo "pr-status: warning: gh api user failed; author-identity actionability fallback disabled" >&2
+
 xml_attr() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
 xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
@@ -137,12 +144,28 @@ reviews_xml() {
 # --- actionability ------------------------------------------------------------
 # Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
 # Echoes "true" (actionable) or "false".
+# Full rules: reference.md → Actionability. Summary: non-actionable iff thread-
+# resolved, or the body is the calling agent's plan comment (line-anchored
+# plan-marker + author identity, so a human quoting the marker stays
+# actionable), or the body is the calling agent's terminal-tagged reply
+# (matched by exact agent-id marker OR by author identity as a drift fallback).
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
   [[ "$resolved" == "true" ]] && { echo false; return; }
-  local marker="<!-- agent-reply:$DISPATCH_AGENT_ID -->"
-  if grep -qF "$marker" <<<"$body" && grep -qE "$TERMINAL_RE" <<<"$body"; then
+  # Plan comment by the calling agent: line-anchored marker + author match.
+  # The agent's own plan comment edits never need to be "addressed."
+  if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+      && grep -qE '^<!-- agent-plan:[^ ]+ -->$' <<<"$body"; then
     echo false; return
+  fi
+  if grep -qE "$TERMINAL_RE" <<<"$body"; then
+    if grep -qF "<!-- agent-reply:$DISPATCH_AGENT_ID -->" <<<"$body"; then
+      echo false; return
+    fi
+    if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+        && grep -qF '<!-- agent-reply:' <<<"$body"; then
+      echo false; return
+    fi
   fi
   echo true
 }

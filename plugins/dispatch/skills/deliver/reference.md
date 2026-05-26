@@ -94,11 +94,15 @@ iff any of:
   gh identity. The agent edits its plan in place; it never needs to be
   "addressed." (The author match keeps a *human* comment that merely quotes
   the marker actionable.)
-- the newest comment was written by the calling agent AND carries a terminal
-  signal — matched either by an exact `<!-- agent-reply:$DISPATCH_AGENT_ID -->`
-  marker OR by the comment's gh-reported author equalling the calling identity,
-  so a drifted agent-id in the marker does not re-actionable the agent's own
-  resolved replies.
+- the newest comment was written by the calling agent (gh-reported author
+  equals the calling identity) AND carries an `<!-- agent-reply:... -->` marker
+  AND its last non-empty line is a terminal signal (`Done.` / `Declined.` /
+  `Shipped.`, case-insensitive, trailing period optional, or `✓`/`✅`). Author
+  identity is load-bearing here: a human quoting the marker plus a terminal
+  word in their own comment stays actionable. If `gh api user` fails so the
+  caller identity isn't known, the check degrades to the pre-fix "exact
+  `$DISPATCH_AGENT_ID` marker alone" rule so actionability still falls; a
+  warning is written to stderr.
 - the platform has explicitly resolved the thread (threads only).
 
 A human reply after the agent's last turn makes the item actionable again.

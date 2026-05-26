@@ -66,7 +66,7 @@ stateDiagram-v2
     done --> [*]
 ```
 
-Universal terminal (not drawn, applies from every state): **PR closed without merging** or **human "stop" instruction** → acknowledge per §2.1 → `merged` → `done`. Worktree cleanup happens on **any** closure, not only on a successful merge.
+Universal terminal (not drawn, applies from every state): **PR closed (merged or not)** or **human "stop" instruction** → acknowledge per §2.1 → `merged` → `done`. This includes the sole-reviewer case, where the explicit `human_review_approved → ready_for_merge → merged` path is unreachable and the merge fires the universal edge directly out of `human_review_requested`. Worktree cleanup happens on **any** closure.
 
 ## States
 

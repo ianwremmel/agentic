@@ -76,15 +76,33 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
   absence of a formal `changes_requested` review does NOT mean "no changes
   requested." Every comment the account's human leaves is either a question to
   answer or an implicit change request.
+- **Sole-reviewer case.** "MUST NOT request review from self" constrains the
+  *request side-effect*, not the loop. When the calling agent is the PR author
+  and no eligible non-self human reviewer exists, the agent skips the request
+  but does not exit — it keeps polling on the reviewer cadence until the PR
+  closes, and the universal `merged → done` terminal handles the eventual
+  closure. Terminating early because there's nobody to ask is non-conforming.
 
 ## Actionability (§2.2)
 
 The `pr-status` script applies these rules; the agent reads the resulting
 `actionable="true|false"`. For reference, a comment or thread is **non-actionable**
-iff EITHER:
+iff any of:
 
-- the newest comment was written by the calling agent AND carries a terminal
-  signal, OR
+- the body is the calling agent's plan comment — a line-anchored
+  `<!-- agent-plan:... -->` sentinel AND a comment author matching the calling
+  gh identity. The agent edits its plan in place; it never needs to be
+  "addressed." (The author match keeps a *human* comment that merely quotes
+  the marker actionable.)
+- the newest comment was written by the calling agent (gh-reported author
+  equals the calling identity) AND carries an `<!-- agent-reply:... -->` marker
+  AND its last non-empty line is a terminal signal (`Done.` / `Declined.` /
+  `Shipped.`, case-insensitive, trailing period optional, or `✓`/`✅`). Author
+  identity is load-bearing here: a human quoting the marker plus a terminal
+  word in their own comment stays actionable. If `gh api user` fails so the
+  caller identity isn't known, the check degrades to the pre-fix "exact
+  `$DISPATCH_AGENT_ID` marker alone" rule so actionability still falls; a
+  warning is written to stderr.
 - the platform has explicitly resolved the thread (threads only).
 
 A human reply after the agent's last turn makes the item actionable again.

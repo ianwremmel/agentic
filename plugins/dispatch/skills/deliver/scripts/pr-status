@@ -21,7 +21,21 @@ mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations"
 
 INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|codeql)$"
 STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
-TERMINAL_RE='(^|[[:space:]])(✓|✅|done|acknowledged|wontfix|dismissed|resolved)([[:space:]]|$)'
+
+# Per reference.md → Terminal signals: the text tokens must be the *last
+# non-empty line* of the body. Canonical tokens are `Done.`, `Declined.`,
+# `Shipped.`; `✓`/`✅` are accepted as inline reaction-equivalents; the
+# remaining legacy tokens (`acknowledged`, etc.) preserve pre-existing
+# behavior. Match is case-insensitive and tolerant of an optional trailing
+# period.
+TERMINAL_RE='^[[:space:]]*(✓|✅|done\.?|declined\.?|shipped\.?|acknowledged\.?|wontfix\.?|dismissed\.?|resolved\.?)[[:space:]]*$'
+
+# gh-authenticated identity used as a fallback in classify_actionable so
+# agent-id drift in markers across runs does not re-actionable the calling
+# agent's own resolved replies. Empty if `gh api user` fails; one breadcrumb
+# then logs the fallback path as inactive.
+CALLER_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
+[[ -z "$CALLER_LOGIN" ]] && echo "pr-status: warning: gh api user failed; author-identity actionability fallback disabled" >&2
 
 xml_attr() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
 xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -134,15 +148,52 @@ reviews_xml() {
   echo "  </reviews>"
 }
 
+# Returns 0 iff $1's last non-empty line is a canonical terminal signal.
+# Anchoring to the last non-empty line matches reference.md ("must be the
+# last non-empty line"); inline mentions of "done" in prose stay actionable.
+has_terminal_signal() {
+  local last
+  last="$(printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n1)"
+  [[ -n "$last" ]] || return 1
+  grep -qiE "$TERMINAL_RE" <<<"$last"
+}
+
 # --- actionability ------------------------------------------------------------
 # Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
 # Echoes "true" (actionable) or "false".
+# Full rules: reference.md → Actionability. Summary: non-actionable iff
+# thread-resolved, or the body is the calling agent's plan comment
+# (line-anchored plan-marker + author identity, so a human quoting the marker
+# stays actionable), or the body is the calling agent's terminal-tagged reply
+# (any agent-reply marker + author identity + terminal signal on the last
+# non-empty line). When $CALLER_LOGIN is unavailable (`gh api user` failed),
+# the reply check falls back to the pre-fix behavior — exact
+# $DISPATCH_AGENT_ID marker alone — so the script degrades, not fails.
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
   [[ "$resolved" == "true" ]] && { echo false; return; }
-  local marker="<!-- agent-reply:$DISPATCH_AGENT_ID -->"
-  if grep -qF "$marker" <<<"$body" && grep -qE "$TERMINAL_RE" <<<"$body"; then
+
+  # Plan comment by the calling agent.
+  if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+      && grep -qE '^<!-- agent-plan:[^ ]+ -->$' <<<"$body"; then
     echo false; return
+  fi
+
+  # Terminal-tagged reply by the calling agent.
+  if has_terminal_signal "$body"; then
+    if [[ -n "$CALLER_LOGIN" ]]; then
+      if [[ "$author" == "$CALLER_LOGIN" ]] \
+          && grep -qF '<!-- agent-reply:' <<<"$body"; then
+        echo false; return
+      fi
+    else
+      # Degraded path: no caller identity; gate on the exact agent-id marker
+      # alone. False-positive on a human quoting the exact marker + terminal
+      # signal is preserved from the pre-fix behavior.
+      if grep -qF "<!-- agent-reply:$DISPATCH_AGENT_ID -->" <<<"$body"; then
+        echo false; return
+      fi
+    fi
   fi
   echo true
 }

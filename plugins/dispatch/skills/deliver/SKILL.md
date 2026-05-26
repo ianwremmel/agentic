@@ -48,6 +48,7 @@ stateDiagram-v2
     copilot_commented --> ready_for_copilot_review: addressed · gates 1-5 · re-request
 
     ready_for_human_review --> human_review_requested: draft cleared · human requested
+    ready_for_human_review --> human_review_requested: draft cleared · no eligible non-self reviewer (skip request)
 
     human_review_requested --> human_review_commented: human commented (non-binding)
     human_review_requested --> human_review_requested_changes: human changes_requested
@@ -65,7 +66,7 @@ stateDiagram-v2
     done --> [*]
 ```
 
-Universal terminal (not drawn, applies from every state): **PR closed without merging** or **human "stop" instruction** → acknowledge per §2.1 → `merged` → `done`. Worktree cleanup happens on **any** closure, not only on a successful merge.
+Universal terminal (not drawn, applies from every state): **PR closed (merged or not)** or **human "stop" instruction** → acknowledge per §2.1 → `merged` → `done`. This includes the sole-reviewer case, where the explicit `human_review_approved → ready_for_merge → merged` path is unreachable and the merge fires the universal edge directly out of `human_review_requested`. Worktree cleanup happens on **any** closure.
 
 ## States
 
@@ -87,6 +88,8 @@ Universal terminal (not drawn, applies from every state): **PR closed without me
 
 **Coding does NOT happen in:** `ready_for_copilot_review`, `copilot_review_requested`, `ready_for_human_review`, `human_review_requested`, `human_review_approved`, `ready_for_merge`, `merged`, `done`. Code changes in those states are only legal as the response to a gate-1–5 failure (CI broke, conflict arose, a new actionable annotation/comment/thread appeared) — and that work is "addressing concerns in place," not advancing the lifecycle.
 
+**Self as sole eligible reviewer.** If no eligible non-self human reviewer exists, `ready_for_human_review` skips the request but still transitions to `human_review_requested` and keeps polling on the reviewer cadence. Gate 6 is unreachable in this case, which is fine — the PR is merged out-of-band, the agent observes closure on a poll, and the universal `merged → done` terminal fires. "Nobody to request from" is not a termination condition.
+
 ## Per-concern handling
 
 Apply to every actionable item the XML emits, not just the first.
@@ -107,7 +110,8 @@ These apply in every state; they are not states themselves.
 - **Plan comment is the living plan.** Edit in place: check off completed steps, strike through abandoned ones with a one-line rationale (don't delete), append new ones. The PR body's Motivation and Test plan stay stable.
 - **First green.** Gate 1 must be satisfied by a green CI rollup achieved _after_ the agent first attempts to leave `draft`. Greens on intermediate commits before that moment do not satisfy gate 1.
 - **Heartbeats.** While polling, emit INFO heartbeats per §2.3 (`ticket=-` when there is no linked ticket).
-- **Termination is narrow.** Plan completion, green CI, review requests, and `ready_for_merge` do not terminate. Only PR closure or explicit human "stop" terminates. The agent runs the lifecycle through itself — see §Polling/Mechanism — and is never re-prodded by a caller (human or orchestrator) to make forward progress.
+- **Termination is narrow.** Plan completion, green CI, review requests, `ready_for_merge`, and "nobody to request review from" do not terminate. Only PR closure or explicit human "stop" terminates. The agent runs the lifecycle through itself — see §Polling/Mechanism — and is never re-prodded by a caller (human or orchestrator) to make forward progress.
+- **Re-derive termination each tick.** Decide termination from the current `pr-status` read; never carry "if X then stop" conditions across ticks. The loop amplifies them, and only the narrow list above is grounds for stopping.
 
 ## Polling
 

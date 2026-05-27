@@ -74,8 +74,8 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
   the platform restricts to humans (e.g. Copilot review on GitHub).
 - **Mode B inverse:** on a PR the agent authored under shared credentials, the
   absence of a formal `changes_requested` review does NOT mean "no changes
-  requested." Every comment the account's human leaves is either a question to
-  answer or an implicit change request.
+  requested." Every comment the operator leaves is either a question to answer
+  or an implicit change request.
 - **Sole-reviewer case.** "MUST NOT request review from self" constrains the
   *request side-effect*, not the loop. When the calling agent is the PR author
   and no eligible non-self human reviewer exists, the agent skips the request
@@ -105,7 +105,7 @@ iff any of:
   warning is written to stderr.
 - the platform has explicitly resolved the thread (threads only).
 
-A human reply after the agent's last turn makes the item actionable again.
+A reviewer reply after the agent's last turn makes the item actionable again.
 An annotation is actionable unless `<cache>/<id>.ack` exists.
 
 ## Operational logging (§2.3)

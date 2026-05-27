@@ -101,8 +101,8 @@ is not triaging it.
 
 After reaching a steady state — plan complete, no actionable threads, review
 requested — the agent doesn't exit. New activity can arrive at any point: a CI
-flake, a human comment, a security annotation. The agent stays present and
-responds until the PR closes or a human explicitly tells it to stop.
+flake, a reviewer comment, a security annotation. The agent stays present and
+responds until the PR closes or the operator explicitly tells it to stop.
 
 The termination signal is closure, not completion. "My plan is checked off" is not
 a reason to stop monitoring.

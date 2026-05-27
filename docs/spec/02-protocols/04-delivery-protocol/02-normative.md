@@ -229,21 +229,22 @@ Once ALL of the following hold, the agent MUST request human review:
 
 When Stage 1 was skipped, condition 2 is trivially satisfied.
 
-**Identifying the human.** The agent MUST identify a specific human or set of
-humans to engage. The selection mechanism (CODEOWNERS, ticket assigner, per-repo
-config) is implementation-defined. The agent MUST NOT request review from itself.
-The agent MUST follow §2.1 rules on alternative credentials if the platform
-restricts which accounts may request which review types.
+**Identifying the reviewer.** The agent MUST identify a specific human reviewer
+or set of human reviewers to engage. The selection mechanism (CODEOWNERS, ticket
+assigner, per-repo config) is implementation-defined. The agent MUST NOT request
+review from itself. The agent MUST follow §2.1 rules on alternative credentials
+if the platform restricts which accounts may request which review types.
 
-**Engagement in Mode B.** When the agent shares credentials with the human (Mode
-B per §2.1), GitHub's review-request mechanism cannot be used, and a PR comment
-tagging the human will not trigger a platform notification (the agent and human
-share the same account). The agent MUST instead engage the human through the
-first available venue that can reach them:
+**Engagement in Mode B.** When the agent shares credentials with the reviewer
+(Mode B per §2.1, where the operator is the desired reviewer), GitHub's
+review-request mechanism cannot be used, and a PR comment tagging the reviewer
+will not trigger a platform notification (the agent and reviewer share the same
+account). The agent MUST instead engage the reviewer through the first available
+venue that can reach them:
 
 1. A ticket comment on the associated tracker (Linear, Asana, GitHub Issues)
-   tagging the human. Because the human has a separate account on the tracker,
-   platform notifications fire normally.
+   tagging the reviewer. Because the reviewer has a separate account on the
+   tracker, platform notifications fire normally.
 2. An implementation-defined out-of-band channel (Slack, email, etc.) specified
    in the repository or user configuration.
 
@@ -285,9 +286,9 @@ The Delivery Protocol terminates — the agent stops monitoring and exits — wh
 EITHER of the following occurs:
 
 - **PR closes.** The PR is merged or closed without merging.
-- **Human explicitly instructs the agent to stop.** A human leaves an instruction
-  in the PR or ticket telling the agent to disengage. The agent MUST acknowledge
-  the instruction per §2.1 and exit.
+- **Operator explicitly instructs the agent to stop.** The operator leaves an
+  instruction in the PR or ticket telling the agent to disengage. The agent MUST
+  acknowledge the instruction per §2.1 and exit.
 
 The agent MUST NOT stop monitoring solely because:
 

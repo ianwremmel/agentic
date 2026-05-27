@@ -195,8 +195,8 @@ Actionability follows §2.1.2 §"Thread-aware filtering" verbatim. An item is
 - The platform has explicitly resolved the thread (review threads only; top-level
   comments have no platform resolution mechanism).
 
-Otherwise the item is **actionable**. In particular, a human reply to an agent's
-previous turn makes the item actionable.
+Otherwise the item is **actionable**. In particular, a reviewer reply to an
+agent's previous turn makes the item actionable.
 
 ### Annotations
 

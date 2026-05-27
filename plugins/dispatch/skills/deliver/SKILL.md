@@ -76,7 +76,7 @@ stateDiagram-v2
 
     public_review_requested --> public_review_commented: reviewer commented (non-binding)
     public_review_requested --> public_review_requested_changes: reviewer changes_requested
-    public_review_requested --> public_review_approved: review approval (Gate 6 in solo mode; Gate 7 in team mode)
+    public_review_requested --> public_review_approved: review approval (Gate 6 in solo mode, Gate 7 in team mode)
 
     public_review_commented --> ready_for_public_review: addressed · gates 1-5 · re-request
     public_review_requested_changes --> ready_for_public_review: addressed · gates 1-5 · re-request (required to unblock merge)

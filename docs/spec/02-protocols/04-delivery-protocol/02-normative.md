@@ -139,7 +139,7 @@ Substantive scope changes belong in the plan comment, accompanied by a
 
 ### Reviewer responses
 
-Whenever a reviewer (human, Copilot, or any other commenter) leaves a comment,
+Whenever a reviewer (operator, human teammate, Copilot, or any other commenter) leaves a comment,
 the agent MUST respond per §2.1 — terminal reaction or text token where
 applicable, plus an explanatory reply where the comment is substantive.
 
@@ -207,6 +207,22 @@ is non-conforming.
 
 ## CI gates and reviewer progression
 
+### Mode selection: solo vs team
+
+The reviewer progression has two shapes selected at session start by an
+implementation-defined `team_mode` flag (e.g. a per-plugin userConfig
+setting, a `CLAUDE.md` directive). The default is **solo mode**.
+
+- **Solo mode** (`team_mode = false`). The operator is the sole human
+  reviewer. Stage 3 (team review) is skipped entirely. After operator
+  approval, the agent goes directly to merge.
+- **Team mode** (`team_mode = true`). Additional human reviewers exist
+  beyond the operator. The operator gets a private pass over the PR while
+  it is still in draft (Stage 2); draft is cleared only after operator
+  approval; the rest of the team is engaged in Stage 3.
+
+Stages 1 and 2 run in both modes. Stage 3 runs only in team mode.
+
 ### Stage 1 — Draft → Copilot review
 
 Once BOTH of the following hold, the agent MUST request Copilot review:
@@ -219,47 +235,91 @@ Once BOTH of the following hold, the agent MUST request Copilot review:
 If Copilot review is unavailable in the current GitHub installation, Stage 1 is
 skipped and the agent proceeds directly to the Stage 2 gating condition.
 
-### Stage 2 — Copilot review → Human review
+### Stage 2 — Copilot review → Operator review (in draft)
 
-Once ALL of the following hold, the agent MUST request human review:
+Once ALL of the following hold, the agent MUST engage the operator for a
+review pass:
 
 1. The current PR head has a green CI rollup.
 2. No Copilot thread on the PR is actionable per §2.2.
-3. The PR is marked ready for review (draft state cleared).
+3. The PR is still in draft state. The agent MUST NOT clear draft before
+   this stage.
 
 When Stage 1 was skipped, condition 2 is trivially satisfied.
 
-**Identifying the human.** The agent MUST identify a specific human or set of
-humans to engage. The selection mechanism (CODEOWNERS, ticket assigner, per-repo
-config) is implementation-defined. The agent MUST NOT request review from itself.
-The agent MUST follow §2.1 rules on alternative credentials if the platform
-restricts which accounts may request which review types.
+**Identifying the operator.** There is at most one operator per session. In
+Mode A (the agent runs under a dedicated bot/service account distinct from
+its operator), the operator is identified by an explicit configuration value
+(e.g. an `operator_login` setting, the ticket assigner, or per-repo config);
+the selection mechanism is implementation-defined. In Mode B (the agent
+shares platform credentials with its operator), the operator is the
+authenticated account.
 
-**Engagement in Mode B.** When the agent shares credentials with the human (Mode
-B per §2.1), GitHub's review-request mechanism cannot be used, and a PR comment
-tagging the human will not trigger a platform notification (the agent and human
-share the same account). The agent MUST instead engage the human through the
-first available venue that can reach them:
+**Engagement venue.** The agent MUST reach the operator through the first
+venue that can deliver a notification:
 
-1. A ticket comment on the associated tracker (Linear, Asana, GitHub Issues)
-   tagging the human. Because the human has a separate account on the tracker,
-   platform notifications fire normally.
-2. An implementation-defined out-of-band channel (Slack, email, etc.) specified
-   in the repository or user configuration.
+1. **Mode A**: a GitHub PR review request on the draft PR, addressed to the
+   operator's account. The request fires a normal notification because the
+   operator's account is distinct from the agent's.
+2. **Mode B**: GitHub's review-request mechanism cannot target the
+   authenticated account, so the agent MUST instead engage the operator
+   through one of:
+   1. A ticket comment on the associated tracker (Linear, Asana, GitHub
+      Issues) tagging the operator. Because the operator has a separate
+      account on the tracker, platform notifications fire normally.
+   2. An implementation-defined out-of-band channel (Slack, email, etc.)
+      specified in the repository or user configuration.
 
-In long-running automated sessions, venue 1 is preferred.
+   In long-running automated sessions, venue 2.1 is preferred.
 
-### Stage 3 — Iteration
+**Iteration in draft.** Stage 2 iterates: the operator may leave comments
+(actionable per §2.2) and the agent MUST address them per §Reviewer
+responses. The PR remains in draft for the duration. The stage completes
+when the operator signals approval — a formal approval review (Mode A
+only), a `+1` reaction on the engagement comment, a "go ahead" reply, or
+an explicit "ready/clear draft" instruction.
 
-Once review is requested (Copilot or human), the agent MUST continue iterating.
-New comments and CI failures MUST trigger responses per §Reviewer responses and
-§Pre-push review. The iteration loop is driven by actionability per §2.2: the
-agent iterates as long as any thread or annotation on the PR is actionable and
-stops when none is.
+**Draft clearance.** On operator approval the agent MUST clear draft state.
+The operator MAY clear draft themselves; in that case the agent observes
+the cleared state and treats it as equivalent to operator approval — the
+stage completes without the agent acting on draft.
 
-The agent MAY dismiss automated reviewer comments that are not material to the
-change, per the reviewer-responses rule. The agent SHOULD give human comments
-more deference than automated ones; the bar to dismiss a human comment is higher.
+### Stage 3 — Operator review → Team review (team mode only)
+
+In solo mode, Stage 3 is skipped entirely; after Stage 2 the agent proceeds
+to merge.
+
+In team mode, once ALL of the following hold, the agent MUST request team
+review:
+
+1. The current PR head has a green CI rollup.
+2. No operator thread on the PR is actionable per §2.2.
+3. The PR is marked ready for review (draft state cleared).
+
+**Identifying team reviewers.** The agent MUST identify a specific human or
+set of humans to engage, excluding itself and the operator. The selection
+mechanism (CODEOWNERS, ticket-derived reviewer set, per-repo config) is
+implementation-defined.
+
+**Engagement venue.** The agent MUST follow §2.1 rules on alternative
+credentials if the platform restricts which accounts may request which
+review types. In Mode B the operator's credentials cannot be used to
+request review from the operator; the engagement venue rules from Stage 2
+apply for any reviewer that cannot be reached via a GitHub review request.
+
+### Stage 4 — Iteration
+
+Once review is requested (Copilot, operator, or team), the agent MUST
+continue iterating. New comments and CI failures MUST trigger responses per
+§Reviewer responses and §Pre-push review. The iteration loop is driven by
+actionability per §2.2: the agent iterates as long as any thread or
+annotation on the PR is actionable and stops when none is.
+
+The agent MAY dismiss automated reviewer comments that are not material to
+the change, per the reviewer-responses rule. The agent SHOULD give human
+comments more deference than automated ones; the bar to dismiss a human
+comment is higher. Operator comments carry the highest deference — the bar
+to dismiss an operator comment is higher than for any other reviewer.
 
 ## Monitoring
 
@@ -285,9 +345,9 @@ The Delivery Protocol terminates — the agent stops monitoring and exits — wh
 EITHER of the following occurs:
 
 - **PR closes.** The PR is merged or closed without merging.
-- **Human explicitly instructs the agent to stop.** A human leaves an instruction
-  in the PR or ticket telling the agent to disengage. The agent MUST acknowledge
-  the instruction per §2.1 and exit.
+- **Operator explicitly instructs the agent to stop.** The operator leaves an
+  instruction in the PR or ticket telling the agent to disengage. The agent
+  MUST acknowledge the instruction per §2.1 and exit.
 
 The agent MUST NOT stop monitoring solely because:
 

@@ -2,11 +2,11 @@
 
 ## Why a daemon
 
-A single agent session is interactive: a human starts it, it does work, and it
-exits. Real engineering work doesn't fit in one session. CI takes minutes;
-reviewers take hours; tickets sit between humans for days. The protocols require
-the agent to monitor PRs and tickets across those gaps — but nothing in the
-protocols keeps a process alive between events.
+A single agent session is interactive: the operator starts it, it does work, and
+it exits. Real engineering work doesn't fit in one session. CI takes minutes;
+reviewers take hours; tickets sit between collaborators for days. The protocols
+require the agent to monitor PRs and tickets across those gaps — but nothing in
+the protocols keeps a process alive between events.
 
 The daemon fills that gap. It runs in the background, subscribes to the event
 sources the protocols read from, and resumes the appropriate agent session when
@@ -60,9 +60,9 @@ in this order, taking the first match:
 3. Built-in default bundled with the daemon binary
 
 This layering lets a project customize how its agents respond to a specific event
-without touching the defaults for everything else. A user can apply their own
-preferences across all repos they work in. And a fresh install works with zero
-configuration — the defaults cover all event kinds.
+without touching the defaults for everything else. An operator can apply their
+own preferences across all repos they work in. And a fresh install works with
+zero configuration — the defaults cover all event kinds.
 
 Both XML and Markdown template formats are supported. XML is preferred for new
 templates (it more clearly delimits data from instruction); Markdown is accepted

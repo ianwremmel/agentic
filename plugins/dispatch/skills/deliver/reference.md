@@ -74,14 +74,22 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
   the platform restricts to humans (e.g. Copilot review on GitHub).
 - **Mode B inverse:** on a PR the agent authored under shared credentials, the
   absence of a formal `changes_requested` review does NOT mean "no changes
-  requested." Every comment the account's human leaves is either a question to
-  answer or an implicit change request.
+  requested." Every comment the operator leaves through the shared account is
+  either a question to answer or an implicit change request.
+- **Operator engagement.** In **Mode A**, request operator review on the draft
+  PR via the GitHub review-request API; the operator is a distinct account so
+  the request fires a normal notification. In **Mode B**, the review-request
+  mechanism cannot target the authenticated account, so engage the operator
+  via a ticket comment on the associated tracker (the operator has a separate
+  tracker account; notifications fire normally), or via an implementation-
+  defined out-of-band channel.
 - **Sole-reviewer case.** "MUST NOT request review from self" constrains the
-  *request side-effect*, not the loop. When the calling agent is the PR author
-  and no eligible non-self human reviewer exists, the agent skips the request
-  but does not exit — it keeps polling on the reviewer cadence until the PR
-  closes, and the universal `merged → done` terminal handles the eventual
-  closure. Terminating early because there's nobody to ask is non-conforming.
+  *request side-effect*, not the loop. In team mode, when the calling agent
+  is the PR author and no eligible non-self, non-operator human reviewer
+  exists, the agent skips the request but does not exit — it keeps polling on
+  the reviewer cadence until the PR closes, and the universal `merged → done`
+  terminal handles the eventual closure. Terminating early because there's
+  nobody to ask is non-conforming.
 
 ## Actionability (§2.2)
 

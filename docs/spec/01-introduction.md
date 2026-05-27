@@ -52,6 +52,26 @@ to deviate. **MAY** denotes optional behavior.
 
 ## Key concepts
 
+### Roles
+
+The spec uses three role terms with precise meanings:
+
+- **agent** — an agentic coding assistant doing work on behalf of an
+  operator. An agent may or may not share platform credentials with its
+  operator (see Mode A/B below).
+- **operator** — the individual directing an agent. Almost certainly a
+  human. There is at most one operator per agent session. In Mode B the
+  operator and the agent share platform credentials; in Mode A they don't.
+- **reviewer** — any participant (Copilot, agent, or human) leaving review
+  feedback on a pull request. The operator may also be a reviewer, but in a
+  team repository most reviewers are not the operator.
+
+The word **human** is used throughout the spec only as a category contrasted
+with bot/agent — e.g. "human reviewer", "human-credentialed account". It is
+not interchangeable with "operator"; phrases like "the human" (singular,
+definite) are avoided because a single PR may engage more than one human and
+the operator is not necessarily one of them.
+
 ### Agent identity and modes
 
 An agent session runs under credentials that identify either a dedicated
@@ -64,7 +84,7 @@ for all writes the agent makes in that session:
   is needed.
 - **Mode B** — the account belongs to a human. The byline is
   indistinguishable from a human comment; a visible sparkle wrapper is
-  required so humans can tell the agent's words from their own.
+  required so human readers can tell the agent's words from their own.
 
 Mode is determined at write time from credentials, not from configuration. On
 uncertainty, default to Mode B. §2.1 defines the full detection predicate.

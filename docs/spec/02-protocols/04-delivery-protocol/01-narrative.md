@@ -5,41 +5,49 @@
 The Delivery Protocol exists to ensure three things hold whenever an agent
 changes code:
 
-1. **Agents don't pollute the main worktree.** The user's primary checkout stays
-   clean. Agent work happens in isolated worktrees so concurrent sessions don't
-   step on each other or on the user.
+1. **Agents don't pollute the main worktree.** The operator's primary checkout
+   stays clean. Agent work happens in isolated worktrees so concurrent sessions
+   don't step on each other or on the operator.
 
 2. **Work goes through the appropriate quality gates.** Every change passes
    pre-push review, CI, and the reviewer-progression stages in a uniform order.
    Nothing reaches a human reviewer that hasn't already been examined by the
    available automation.
 
-3. **Humans are not engaged while automation is still in play.** The protocol
-   holds human review until automated signals (CI, Copilot, adversarial pre-push
-   review) have done their work. Humans only see PRs whose remaining questions
-   genuinely require human judgment.
+3. **Human reviewers are not engaged while automation is still in play.** The
+   protocol holds human review until automated signals (CI, Copilot,
+   adversarial pre-push review) have done their work. Human reviewers only see
+   PRs whose remaining questions genuinely require human judgment.
 
 ## Stage overview
 
-Work flows through six stages:
+Work flows through these stages:
 
 ```
-Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot → Human review → Termination
+Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot →
+  Operator review (in draft) → [Team review, team mode only] → Termination
 ```
 
 Each stage has a precondition (what must be true before entering it) and a
 postcondition (what the agent emits or achieves before leaving it). The stages
-are not strictly sequential — implementation and CI may interleave, and iteration
-loops back from human review to implementation — but the overall direction is
-left-to-right.
+are not strictly sequential — implementation and CI may interleave, and
+iteration loops back from any review stage to implementation — but the overall
+direction is left-to-right.
+
+The operator-review stage runs in both solo and team mode and happens entirely
+inside the draft window: the operator is the agent's principal, so they get a
+private pass before the work is published team-wide. In solo mode the
+operator's approval is the only human approval; the PR goes straight to merge
+after that. In team mode (`team_mode` config flag) the operator's approval is
+the gate for clearing draft and engaging the rest of the team.
 
 ## Why worktrees
 
 Git worktrees let the agent keep a dedicated checkout for its branch without
-disturbing the user's main checkout or other branches. Without them, an agent
-editing files in the user's primary worktree would conflict with any concurrent
-work the user is doing, and two agent sessions on different features would
-conflict with each other.
+disturbing the operator's main checkout or other branches. Without them, an
+agent editing files in the operator's primary worktree would conflict with any
+concurrent work the operator is doing, and two agent sessions on different
+features would conflict with each other.
 
 The protocol requires the agent to be in a dedicated worktree before making any
 changes, but leaves the creation mechanism open. If the agent is already invoked
@@ -72,10 +80,22 @@ of the work.
 
 ## Automation-first reviewer progression
 
-The protocol enforces an ordering: Copilot before humans. Automated review is
-cheap, fast, and scalable; running it first filters the defects it catches well
-(bugs, style, obvious oversights) so human reviewers can focus on the judgment
-calls it cannot answer (architecture, product decisions, organizational context).
+The protocol enforces an ordering: Copilot before any human, and the operator
+before the rest of the team. Automated review is cheap, fast, and scalable;
+running it first filters the defects it catches well (bugs, style, obvious
+oversights) so human reviewers can focus on the judgment calls it cannot answer
+(architecture, product decisions, organizational context).
+
+After Copilot, the operator gets a private pass over the PR while it is still
+in draft. The operator is the agent's principal — they're who decided the work
+was worth doing and they bear the consequences of what gets shipped — so it's
+appropriate for them to see the result before it's announced to the rest of the
+team. The PR stays in draft for this stage; only after the operator approves
+does the agent clear draft and (in team mode) engage additional reviewers.
+
+In solo-operator repositories the team-review stage doesn't exist at all: the
+operator's approval is the only human approval needed and the PR goes straight
+to merge after draft is cleared.
 
 The CI gate before each handoff serves the same purpose: there's no point asking
 a reviewer — automated or human — to look at code that doesn't compile or whose
@@ -101,8 +121,8 @@ is not triaging it.
 
 After reaching a steady state — plan complete, no actionable threads, review
 requested — the agent doesn't exit. New activity can arrive at any point: a CI
-flake, a human comment, a security annotation. The agent stays present and
-responds until the PR closes or a human explicitly tells it to stop.
+flake, a reviewer comment, a security annotation. The agent stays present and
+responds until the PR closes or the operator explicitly tells it to stop.
 
 The termination signal is closure, not completion. "My plan is checked off" is not
 a reason to stop monitoring.

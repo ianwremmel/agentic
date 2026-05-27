@@ -219,7 +219,8 @@ GitHub).
 ### Reading a review (Mode B, inverse)
 
 An agent MUST NOT treat the absence of a formal Request-changes review state as
-"no changes requested" on PRs it authored in Mode B. Every comment the account's
-human leaves — review comment, inline comment, or top-level PR comment — MUST
-be evaluated as either a question to answer or an implicit change request.
+"no changes requested" on PRs it authored in Mode B. Every comment the operator
+leaves through the shared account — review comment, inline comment, or top-level
+PR comment — MUST be evaluated as either a question to answer or an implicit
+change request.
 

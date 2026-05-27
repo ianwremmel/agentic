@@ -2,10 +2,10 @@
 
 ## The attribution problem
 
-When a human runs Claude Code on their laptop or inside a hosted client, the
-agent posts comments using that human's credentials. On GitHub this means the
-comment's byline reads as the human's username — indistinguishable from
-something the human typed. The same is true on Linear, Jira, Asana, and every
+When an operator runs Claude Code on their laptop or inside a hosted client, the
+agent posts comments using the operator's credentials. On GitHub this means the
+comment's byline reads as the operator's username — indistinguishable from
+something the operator typed. The same is true on Linear, Jira, Asana, and every
 other tracker that doesn't expose separate bot identities.
 
 This creates two distinct problems:
@@ -74,8 +74,8 @@ thread or a Linear comment thread — identically.
 
 The in-product Claude Code chat is not one of these venues. The protocol governs
 what agents write into the three external venues above. The chat may mirror
-agent activity but is not a substitute for it, because other humans and other
-agents cannot reliably observe the chat stream.
+agent activity but is not a substitute for it, because other operators, other
+human reviewers, and other agents cannot reliably observe the chat stream.
 
 ## How agents avoid re-evaluating their own work
 
@@ -102,16 +102,16 @@ so it only acts on things that need a new decision.
 
 On GitHub, you cannot approve or request changes on a pull request you authored.
 This restriction applies to the account, not the person — so in Mode B, where
-the agent and the human share an account, the human **cannot formally approve or
-request changes** on PRs the agent authored. Any feedback the human leaves will
-be Comment-style review comments.
+the agent and the operator share an account, the operator **cannot formally
+approve or request changes** on PRs the agent authored. Any feedback the
+operator leaves will be Comment-style review comments.
 
 The practical consequence: an agent in Mode B must not wait for a formal
 "Request changes" review state on its own PRs — it will never arrive. Every
-comment the human leaves, review or otherwise, must be treated as substantive
-feedback. The Delivery Protocol (§2.4) handles this in detail.
+comment the operator leaves, review or otherwise, must be treated as
+substantive feedback. The Delivery Protocol (§2.4) handles this in detail.
 
-In Mode A (dedicated bot account), the human and the agent have separate
+In Mode A (dedicated bot account), the operator and the agent have separate
 identities and this restriction does not apply.
 
 ## Thread lifecycle

@@ -105,7 +105,13 @@ Apply to every actionable item the XML emits, not just the first.
 
 These apply in every state; they are not states themselves.
 
-- **Pre-push review.** Before every significant push: simplify pass + adversarial pass by a distinct reviewer. Triage every finding (act or one-line dismissal). Non-significant pushes (the empty `chore: open PR`, whitespace/format-only, trivial typo/lint fixes) skip pre-push review; if unsure, treat as significant.
+- **Pre-push review.** Before every significant push, run an adversarial review consisting of **two passes**:
+  1. *Spec-aware* — given the relevant spec/docs **and** the PR contents (diff + commit messages), find every place the code drifts from what the spec mandates: missing required behavior, extra behavior the spec doesn't sanction, or behavior that conflicts with the spec.
+  2. *Spec-blind* — given **only** the PR contents (diff + commit messages), with no spec or external docs, find every bug, internal inconsistency, or claim-vs-implementation gap (judged against the PR's own commit messages, identifiers, and in-diff comments).
+
+  Use a **model family distinct from the one that authored the change** for both adversarial passes wherever the install has one configured (e.g. Codex via `codex:adversarial-review` / `codex:rescue` when the authoring agent is Claude). A second subagent on the authoring model with a different framing does NOT count as a distinct reviewer — the model family must differ. Only where no distinct model family is available may both passes fall back to subagents on the authoring model, one per framing above; that fallback is weaker and SHOULD trigger extra caution.
+
+  Triage every finding (act, or one-line dismissal that names the finding being dismissed — readers of the PR won't see the underlying review output). Non-significant pushes (the empty `chore: open PR`, whitespace/format-only, trivial typo/lint fixes) skip pre-push review; if unsure, treat as significant.
 - **Reply to every reviewer item.** Commit link or dismissal rationale. Silence is non-conforming. Human comments get more deference than bot ones.
 - **Plan comment is the living plan.** Edit in place: check off completed steps, strike through abandoned ones with a one-line rationale (don't delete), append new ones. The PR body's Motivation and Test plan stay stable.
 - **First green.** Gate 1 must be satisfied by a green CI rollup achieved _after_ the agent first attempts to leave `draft`. Greens on intermediate commits before that moment do not satisfy gate 1.

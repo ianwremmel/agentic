@@ -94,6 +94,37 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
   closes, and the universal `merged → done` terminal handles the eventual
   closure. Terminating early because there's nobody to ask is non-conforming.
 
+### Operator engagement (deliver-specific)
+
+The `deliver` skill engages the operator on two edges: `ready_for_private_review
+→ private_review_requested` (team mode) and `ready_for_public_review →
+public_review_requested` (solo mode). Engagement mechanics differ by Mode:
+
+- **Mode A** (separate bot account). Use the platform's PR review-request API,
+  targeting `operator_login` if set, otherwise the ticket assigner (same
+  selection mechanism §2.4.2 uses for human reviewers).
+- **Mode B** (shared credentials). The PR review-request API cannot target the
+  authenticated account, so use the same venues §2.4.2 specifies for Mode B
+  human-review engagement: a ticket comment tagging the operator first, then an
+  implementation-defined out-of-band channel. Operator identity is the
+  authenticated account itself.
+
+The engagement comment MUST carry the `<!-- agent-reply:<agent-id> -->` machine
+marker so reactions and replies can be tied back to it for Gate 6 evaluation.
+
+### Audience by visibility stage
+
+The lifecycle names states by **PR visibility**, not audience. Audience falls
+out of the mode:
+
+| State family       | Visibility           | Audience (solo mode) | Audience (team mode)            |
+| ------------------ | -------------------- | -------------------- | ------------------------------- |
+| `private_review_*` | draft (not cleared)  | unreachable          | operator                        |
+| `public_review_*`  | draft cleared        | operator             | non-operator team reviewer(s)   |
+
+In team mode the operator is **excluded** from the public reviewer set; the
+operator's binding signal is collected during `private_review_*` via Gate 6.
+
 ## Actionability (§2.2)
 
 The `pr-status` script applies these rules; the agent reads the resulting

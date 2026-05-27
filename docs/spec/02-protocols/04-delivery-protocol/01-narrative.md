@@ -19,19 +19,41 @@ changes code:
    review) have done their work. Humans only see PRs whose remaining questions
    genuinely require human judgment.
 
+4. **The operator gets the first look in a team.** Where a repository has more
+   human reviewers than just the operator, the operator reviews privately —
+   while the PR is still in draft — before the broader team is engaged.
+   Clearing draft is a public act, and the operator should get the chance to
+   shape the change before it goes team-wide.
+
 ## Stage overview
 
-Work flows through six stages:
+Work flows through up to seven stages:
 
 ```
-Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot → Human review → Termination
+Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot →
+  [Private review (team mode only, in draft)] → Public review → Termination
 ```
 
 Each stage has a precondition (what must be true before entering it) and a
 postcondition (what the agent emits or achieves before leaving it). The stages
-are not strictly sequential — implementation and CI may interleave, and iteration
-loops back from human review to implementation — but the overall direction is
-left-to-right.
+are not strictly sequential — implementation and CI may interleave, and
+iteration loops back from review to implementation — but the overall direction
+is left-to-right.
+
+### Solo vs team mode
+
+Whether the private review stage appears at all is a per-installation choice
+expressed by the `team_mode` configuration. In **solo mode** (the default), the
+operator is the only human reviewer; the agent clears draft after Copilot and
+the operator is engaged as the public reviewer directly. In **team mode**, the
+operator is one of several human reviewers and gets a private pre-review while
+the PR is still in draft; only after the operator approves does the agent
+clear draft and engage the rest of the team publicly. The lifecycle stages are
+named by **PR visibility**, not audience: `private_review_*` happens while the
+PR is still in draft; `public_review_*` happens after draft is cleared. The
+audience of each is mode-dependent — in solo mode the operator IS the public
+reviewer; in team mode the operator is the private reviewer and the team is
+the public one.
 
 ## Why worktrees
 
@@ -80,6 +102,23 @@ calls it cannot answer (architecture, product decisions, organizational context)
 The CI gate before each handoff serves the same purpose: there's no point asking
 a reviewer — automated or human — to look at code that doesn't compile or whose
 tests are failing.
+
+## Why a private review stage (team mode)
+
+In a team repo, clearing draft is a public act — it announces "this is ready
+for the team to look at." If the operator only sees the change after the team
+does, the operator's feedback can't shape the framing the team encounters.
+
+The private review stage gives the operator first look while the PR is still
+in draft. The agent engages the operator (via PR review request in Mode A, or
+ticket/out-of-band channel in Mode B) and waits for an approval signal — a
+formal review approval, a `+1` reaction on the engagement comment, a "go
+ahead" / "lgtm" text reply, or a ticket-side approval. Only then does the
+agent clear draft and engage the rest of the team.
+
+In solo mode the operator IS the only human reviewer, so this stage adds
+nothing — the agent skips it and engages the operator publicly. The lifecycle
+diagram is unchanged in shape; only the edge out of Copilot differs by mode.
 
 ## Pre-push review
 

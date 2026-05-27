@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -30,6 +30,17 @@
       "title": "Worktree base directory",
       "description": "Root directory under which the `deliver` skill creates per-PR worktrees. Layout: <base>/<owner>/<repo>/<branch>.",
       "default": "~/.worktrees"
+    },
+    "team_mode": {
+      "type": "boolean",
+      "title": "Team mode",
+      "description": "When true, /deliver adds a private review stage in draft (operator only) before clearing draft for public review (team). When false (default), /deliver clears draft after Copilot and the operator is the public reviewer — no separate private stage.",
+      "default": false
+    },
+    "operator_login": {
+      "type": "string",
+      "title": "Operator GitHub login",
+      "description": "GitHub login of the operator directing this agent. Used in Mode A (separate bot account) to target the operator with PR review requests and to classify <review> elements in pr-status XML. If unset, the agent falls back to the ticket assigner (same selection mechanism §2.4.2 uses for human reviewers). Ignored in Mode B (shared credentials)."
     }
   }
 }

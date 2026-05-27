@@ -214,51 +214,141 @@ Once BOTH of the following hold, the agent MUST request Copilot review:
    agent reached that confidence point ("first green"). Earlier green rollups on
    intermediate commits do not satisfy this condition.
 
-If Copilot review is unavailable in the current GitHub installation, Stage 1 is
-skipped and the agent proceeds directly to the Stage 2 gating condition.
+If Copilot review is unavailable in the current GitHub installation, Stage 1
+is skipped and the agent proceeds directly to the Stage 2 gating condition (or
+Stage 3 in solo mode, where Stage 2 is also skipped).
 
-### Stage 2 — Copilot review → Human review
+### Mode selection: solo vs team
 
-Once ALL of the following hold, the agent MUST request human review:
+The Delivery Protocol supports two delivery shapes selected by a per-installation
+`team_mode` configuration value:
+
+- **Solo mode** (default — `team_mode=false`). The operator is the only human
+  reviewer. After Copilot, the agent clears draft and engages the operator as
+  the public reviewer directly. The private review stage (Stage 2 below) is
+  skipped; Stage 3 (Public review) targets the operator.
+- **Team mode** (`team_mode=true`). The operator is one of several human
+  reviewers. After Copilot, the agent runs Stage 2 (Private review) with the
+  PR still in draft, targeting the operator. Only after the operator approves
+  does the agent clear draft and run Stage 3 (Public review) with the rest of
+  the team — the operator is **excluded** from the Stage 3 reviewer set.
+
+Stage names refer to **PR visibility**: Stage 2 happens while the PR is still
+in draft (`private_review_*` states); Stage 3 happens after draft is cleared
+(`public_review_*` states). Audience falls out of mode, as above.
+
+### Stage 2 — Private review (team mode only, in draft)
+
+Reached when ALL of the following hold:
+
+1. `team_mode=true`.
+2. The current PR head has a green CI rollup.
+3. No Copilot thread on the PR is actionable per §2.2.
+4. The PR is still in draft (NOT cleared).
+
+When `team_mode=false`, Stage 2 is skipped entirely and the agent proceeds
+directly to Stage 3 after the same CI/Copilot conditions.
+
+When Stage 1 was skipped (Copilot unavailable), condition 3 is trivially
+satisfied.
+
+**Operator engagement.** The agent MUST engage the operator while the PR is
+still in draft:
+
+- **Mode A** (separate agent account). Use the platform's PR review-request
+  API, targeting the operator's identity. The operator identity is supplied
+  via implementation-defined configuration (see §2.2.2 "Operator identity");
+  installations without an explicitly configured operator MAY fall back to the
+  ticket assigner (same selection mechanism Stage 3 uses for human reviewers).
+- **Mode B** (shared credentials). The PR review-request API cannot target the
+  authenticated account, so the agent MUST instead engage the operator through
+  the first available venue that can reach them, in the same order Stage 3
+  prescribes for Mode B engagement: a ticket comment tagging the operator
+  first, then an implementation-defined out-of-band channel.
+
+The agent's engagement comment MUST carry the §2.1 `<!-- agent-reply:<agent-id> -->`
+machine marker so reactions and replies can be tied back to it for the Gate 6
+evaluation below.
+
+**Gate 6 — Operator-approved (always required).** Satisfied by ANY of the
+following signals on the engagement venue:
+
+- A `<review mode="human" role="operator" state="approved">` element in the
+  next pr-status XML (Mode A formal review).
+- A `<reaction emoji="+1">` from the operator on the agent's engagement
+  comment (surfaced via the `<reactions>` child of `<comment>` per §2.2.2).
+- A "go ahead" / "lgtm" / "ready" / "clear draft" reply from the operator on
+  the engagement comment, on the ticket, or via the out-of-band channel.
+- A ticket-side approval signal (e.g. status transition by the operator).
+
+In team mode Gate 6 is satisfied during Stage 2. In solo mode (Stage 2
+skipped), Gate 6 is satisfied during Stage 3 via the same signals on the
+operator's public-review engagement.
+
+**Draft clearance.** Once Gate 6 is satisfied AND CI/Copilot conditions still
+hold, the agent MUST clear the draft and proceed to Stage 3. If the operator
+clicks "ready for review" themselves, the agent observes the same
+draft-cleared edge being fired by another actor and proceeds.
+
+### Stage 3 — Public review
+
+Once ALL of the following hold, the agent MUST request public review:
 
 1. The current PR head has a green CI rollup.
 2. No Copilot thread on the PR is actionable per §2.2.
 3. The PR is marked ready for review (draft state cleared).
+4. In team mode: Gate 6 was satisfied in Stage 2 (so draft clearance was
+   authorized).
 
-When Stage 1 was skipped, condition 2 is trivially satisfied.
+When Stage 1 was skipped, condition 2 is trivially satisfied. When Stage 2 was
+skipped (solo mode), condition 4 is trivially satisfied.
 
-**Identifying the reviewer.** The agent MUST identify a specific human reviewer
-or set of human reviewers to engage. The selection mechanism (CODEOWNERS, ticket
-assigner, per-repo config) is implementation-defined. The agent MUST NOT request
-review from itself. The agent MUST follow §2.1 rules on alternative credentials
-if the platform restricts which accounts may request which review types.
+**Identifying the reviewer.** The agent MUST identify a specific human
+reviewer or set of human reviewers to engage. The selection mechanism
+(CODEOWNERS, ticket assigner, per-repo config) is implementation-defined. The
+agent MUST NOT request review from itself. The agent MUST follow §2.1 rules
+on alternative credentials if the platform restricts which accounts may
+request which review types.
 
-**Engagement in Mode B.** When the agent shares credentials with the reviewer
-(Mode B per §2.1, where the operator is the desired reviewer), GitHub's
-review-request mechanism cannot be used, and a PR comment tagging the reviewer
-will not trigger a platform notification (the agent and reviewer share the same
-account). The agent MUST instead engage the reviewer through the first available
-venue that can reach them:
+In **solo mode** the target is the operator (or the ticket assigner as
+fallback, same selection as Stage 2). In **team mode** the operator is
+**excluded** from the reviewer set — the operator's binding signal was
+collected during Stage 2 via Gate 6; Stage 3 collects the team's binding
+signal via Gate 7 below.
+
+**Engagement in Mode B.** When the agent shares credentials with the desired
+reviewer (Mode B per §2.1), GitHub's review-request mechanism cannot be used,
+and a PR comment tagging the reviewer will not trigger a platform notification
+(the agent and reviewer share the same account). The agent MUST instead engage
+the reviewer through the first available venue that can reach them:
 
 1. A ticket comment on the associated tracker (Linear, Asana, GitHub Issues)
    tagging the reviewer. Because the reviewer has a separate account on the
    tracker, platform notifications fire normally.
-2. An implementation-defined out-of-band channel (Slack, email, etc.) specified
-   in the repository or user configuration.
+2. An implementation-defined out-of-band channel (Slack, email, etc.)
+   specified in the repository or user configuration.
 
 In long-running automated sessions, venue 1 is preferred.
 
-### Stage 3 — Iteration
+**Gate 7 — Team-approved (team mode only).** At least one
+`<review mode="human" role="team" state="approved">` from a non-self reviewer,
+and no current `changes_requested` from any reviewer. Satisfied during Stage
+3. In solo mode Gate 7 is trivially satisfied (not evaluated) — the binding
+public-review signal in solo mode is Gate 6, evaluated against the operator
+on the same signals listed in Stage 2.
 
-Once review is requested (Copilot or human), the agent MUST continue iterating.
-New comments and CI failures MUST trigger responses per §Reviewer responses and
-§Pre-push review. The iteration loop is driven by actionability per §2.2: the
-agent iterates as long as any thread or annotation on the PR is actionable and
-stops when none is.
+### Stage 4 — Iteration
 
-The agent MAY dismiss automated reviewer comments that are not material to the
-change, per the reviewer-responses rule. The agent SHOULD give human comments
-more deference than automated ones; the bar to dismiss a human comment is higher.
+Once review is requested (Copilot, operator, or team), the agent MUST continue
+iterating. New comments and CI failures MUST trigger responses per §Reviewer
+responses and §Pre-push review. The iteration loop is driven by actionability
+per §2.2: the agent iterates as long as any thread or annotation on the PR is
+actionable and stops when none is.
+
+The agent MAY dismiss automated reviewer comments that are not material to
+the change, per the reviewer-responses rule. The agent SHOULD give human
+comments more deference than automated ones; the bar to dismiss a human
+comment is higher.
 
 ## Monitoring
 

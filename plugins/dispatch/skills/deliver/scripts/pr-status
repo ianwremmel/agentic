@@ -2,7 +2,8 @@
 # pr-status — emit PR state XML per §2.2.2 PR Status Protocol.
 #
 # Usage:
-#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> pr-status <pr>
+#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> \
+#     DISPATCH_OPERATOR_LOGIN=<login> pr-status <pr>
 #
 # Requires: gh, jq, claude. Run from inside the repo's git worktree.
 
@@ -12,6 +13,8 @@ PR="${1:-}"
 [[ -n "$PR" ]] || { echo "usage: pr-status <pr>" >&2; exit 2; }
 : "${DISPATCH_AGENT_ID:?DISPATCH_AGENT_ID required}"
 : "${DISPATCH_SKILL:?DISPATCH_SKILL required}"
+: "${DISPATCH_OPERATOR_LOGIN:?DISPATCH_OPERATOR_LOGIN required (operator GitHub login; see §2.2.2 Operator identity)}"
+OPERATOR_LC="$(printf '%s' "$DISPATCH_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
 
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 SLUG="${REPO/\//__}"
@@ -72,12 +75,14 @@ PR_JSON="$(gh pr view "$PR" --json \
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
 # reviewThreads isn't exposed by `gh pr view --json`, so fetch via GraphQL.
+# Same for top-level comment reactions (Gate 6 needs reaction visibility on the
+# agent's engagement comment, so we surface them as `<reaction>` children).
 # Use the numeric PR number from PR_JSON since `$PR` may have been passed as
 # a URL or branch name (both accepted by `gh pr view`).
 PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
 OWNER="${REPO%/*}"
 REPO_NAME="${REPO#*/}"
-THREADS_JSON="$(gh api graphql \
+GRAPHQL_JSON="$(gh api graphql \
   -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
   -f query='
     query($owner:String!, $repo:String!, $pr:Int!) {
@@ -94,9 +99,36 @@ THREADS_JSON="$(gh api graphql \
               }
             }
           }
+          comments(first:100) {
+            nodes {
+              id
+              databaseId
+              reactions(first:100) {
+                nodes { content user { login } }
+              }
+            }
+          }
         }
       }
-    }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
+    }' --jq '.data.repository.pullRequest')"
+
+THREADS_JSON="$(jq -c '.reviewThreads.nodes // []' <<<"$GRAPHQL_JSON")"
+COMMENT_REACTIONS_JSON="$(jq -c '.comments.nodes // []' <<<"$GRAPHQL_JSON")"
+
+# GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
+reaction_emoji() {
+  case "$1" in
+    THUMBS_UP)   printf '+1' ;;
+    THUMBS_DOWN) printf -- '-1' ;;
+    LAUGH)       printf 'laugh' ;;
+    HOORAY)      printf 'hooray' ;;
+    CONFUSED)    printf 'confused' ;;
+    HEART)       printf 'heart' ;;
+    ROCKET)      printf 'rocket' ;;
+    EYES)        printf 'eyes' ;;
+    *)           printf '%s' "$(tr '[:upper:]' '[:lower:]' <<<"$1")" ;;
+  esac
+}
 
 # --- checks -------------------------------------------------------------------
 checks_xml() {
@@ -142,8 +174,15 @@ reviews_xml() {
     fi
     local s; s="$(tr '[:upper:]' '[:lower:]' <<<"$state")"
     case "$s" in commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
-    printf '    <review author="%s" mode="%s" state="%s"/>\n' \
-      "$(xml_attr "$author")" "$mode" "$s"
+    if [[ "$mode" == "human" ]]; then
+      local role="team"
+      [[ "${author,,}" == "$OPERATOR_LC" ]] && role="operator"
+      printf '    <review author="%s" mode="%s" role="%s" state="%s"/>\n' \
+        "$(xml_attr "$author")" "$mode" "$role" "$s"
+    else
+      printf '    <review author="%s" mode="%s" state="%s"/>\n' \
+        "$(xml_attr "$author")" "$mode" "$s"
+    fi
   done
   echo "  </reviews>"
 }
@@ -198,27 +237,65 @@ classify_actionable() {
   echo true
 }
 
+# Emit <reactions>…</reactions> for a top-level comment by raw node_id, or
+# nothing if there are no reactions. Used by comments_xml.
+reactions_xml_for() {
+  local raw_id="$1"
+  local rj count
+  rj="$(jq -c --arg id "$raw_id" '
+    map(select(.id == $id or (.databaseId|tostring) == $id))
+    | .[0].reactions.nodes // []' <<<"$COMMENT_REACTIONS_JSON")"
+  if [[ -z "$rj" || "$rj" == "[]" || "$rj" == "null" ]]; then
+    return 0
+  fi
+  count="$(jq 'length' <<<"$rj")"
+  if [[ "$count" -le 0 ]]; then
+    return 0
+  fi
+  echo "<reactions>"
+  jq -r '.[] | [(.user.login // ""), (.content // "")] | @tsv' <<<"$rj" |
+  while IFS=$'\t' read -r user content; do
+    [[ -n "$user" && -n "$content" ]] || continue
+    local emoji; emoji="$(reaction_emoji "$content")"
+    printf '        <reaction author="%s" emoji="%s"/>\n' \
+      "$(xml_attr "$user")" "$(xml_attr "$emoji")"
+  done
+  echo "      </reactions>"
+  return 0
+}
+
 # --- comments (top-level PR comments) -----------------------------------------
 comments_xml() {
   echo "  <comments>"
   jq -c '.comments // [] | .[]' <<<"$PR_JSON" | while read -r c; do
-    local id author body
-    id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
+    local raw_id id author body
+    raw_id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
     author="$(jq -r '.author.login // ""' <<<"$c")"
     body="$(jq -r '.body // ""' <<<"$c")"
-    [[ -n "$id" ]] || continue
-    id="${id//[^A-Za-z0-9_=-]/_}"
+    [[ -n "$raw_id" ]] || continue
+    id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
     local actionable; actionable="$(classify_actionable "$body" "$author" "false")"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"
+    local reactions; reactions="$(reactions_xml_for "$raw_id")"
     if [[ "$actionable" == "true" ]]; then
-      printf '    <comment id="%s" actionable="true" cache="%s"/>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+      if [[ -n "$reactions" ]]; then
+        printf '    <comment id="%s" actionable="true" cache="%s">\n      %s\n    </comment>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$reactions"
+      else
+        printf '    <comment id="%s" actionable="true" cache="%s"/>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+      fi
     else
       [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      printf '    <comment id="%s" actionable="false" cache="%s"><summary>%s</summary></comment>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      if [[ -n "$reactions" ]]; then
+        printf '    <comment id="%s" actionable="false" cache="%s">\n      <summary>%s</summary>\n      %s\n    </comment>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")" "$reactions"
+      else
+        printf '    <comment id="%s" actionable="false" cache="%s"><summary>%s</summary></comment>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      fi
     fi
   done
   echo "  </comments>"

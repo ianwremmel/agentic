@@ -74,8 +74,8 @@ thread or a Linear comment thread — identically.
 
 The in-product Claude Code chat is not one of these venues. The protocol governs
 what agents write into the three external venues above. The chat may mirror
-agent activity but is not a substitute for it, because other operators, other
-human reviewers, and other agents cannot reliably observe the chat stream.
+agent activity but is not a substitute for it, because other humans and other
+agents cannot reliably observe the chat stream.
 
 ## How agents avoid re-evaluating their own work
 

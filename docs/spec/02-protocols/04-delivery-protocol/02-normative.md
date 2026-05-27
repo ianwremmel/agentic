@@ -139,9 +139,10 @@ Substantive scope changes belong in the plan comment, accompanied by a
 
 ### Reviewer responses
 
-Whenever a reviewer (operator, human teammate, Copilot, or any other commenter) leaves a comment,
-the agent MUST respond per §2.1 — terminal reaction or text token where
-applicable, plus an explanatory reply where the comment is substantive.
+Whenever a reviewer (operator, human teammate, Copilot, or any other
+commenter) leaves a comment, the agent MUST respond per §2.1 — terminal
+reaction or text token where applicable, plus an explanatory reply where the
+comment is substantive.
 
 Every substantive reply MUST state either:
 
@@ -214,14 +215,17 @@ implementation-defined `team_mode` flag (e.g. a per-plugin userConfig
 setting, a `CLAUDE.md` directive). The default is **solo mode**.
 
 - **Solo mode** (`team_mode = false`). The operator is the sole human
-  reviewer. Stage 3 (team review) is skipped entirely. After operator
-  approval, the agent goes directly to merge.
+  reviewer. After Copilot the agent marks the PR ready for review and the
+  operator reviews the (now non-draft) PR. There is no private in-draft
+  operator pass.
 - **Team mode** (`team_mode = true`). Additional human reviewers exist
-  beyond the operator. The operator gets a private pass over the PR while
-  it is still in draft (Stage 2); draft is cleared only after operator
-  approval; the rest of the team is engaged in Stage 3.
+  beyond the operator. The operator gets a private pre-review pass over the
+  PR while it is still in draft (Stage 2a); draft is cleared only after the
+  operator approves; the rest of the team is engaged in Stage 2b.
 
-Stages 1 and 2 run in both modes. Stage 3 runs only in team mode.
+Stage 1 is identical in both modes. Stage 2a runs only in team mode. Stage
+2b is the operator-review stage in solo mode and the team-review stage in
+team mode; its mechanics are the same in both, but the reviewer set differs.
 
 ### Stage 1 — Draft → Copilot review
 
@@ -233,12 +237,16 @@ Once BOTH of the following hold, the agent MUST request Copilot review:
    intermediate commits do not satisfy this condition.
 
 If Copilot review is unavailable in the current GitHub installation, Stage 1 is
-skipped and the agent proceeds directly to the Stage 2 gating condition.
+skipped and the agent proceeds directly to the Stage 2a (team mode) or Stage
+2b (solo mode) gating condition.
 
-### Stage 2 — Copilot review → Operator review (in draft)
+### Stage 2a — Copilot review → Operator pre-review (team mode only)
+
+This stage runs **only when `team_mode = true`**. In solo mode the agent
+proceeds directly from Stage 1 to Stage 2b.
 
 Once ALL of the following hold, the agent MUST engage the operator for a
-review pass:
+pre-review pass:
 
 1. The current PR head has a green CI rollup.
 2. No Copilot thread on the PR is actionable per §2.2.
@@ -247,7 +255,7 @@ review pass:
 
 When Stage 1 was skipped, condition 2 is trivially satisfied.
 
-**Identifying the operator.** There is at most one operator per session. In
+**Identifying the operator.** There is exactly one operator per session. In
 Mode A (the agent runs under a dedicated bot/service account distinct from
 its operator), the operator is identified by an explicit configuration value
 (e.g. an `operator_login` setting, the ticket assigner, or per-repo config);
@@ -272,42 +280,52 @@ venue that can deliver a notification:
 
    In long-running automated sessions, venue 2.1 is preferred.
 
-**Iteration in draft.** Stage 2 iterates: the operator may leave comments
+**Iteration in draft.** Stage 2a iterates: the operator may leave comments
 (actionable per §2.2) and the agent MUST address them per §Reviewer
 responses. The PR remains in draft for the duration. The stage completes
 when the operator signals approval — a formal approval review (Mode A
 only), a `+1` reaction on the engagement comment, a "go ahead" reply, or
 an explicit "ready/clear draft" instruction.
 
-**Draft clearance.** On operator approval the agent MUST clear draft state.
-The operator MAY clear draft themselves; in that case the agent observes
-the cleared state and treats it as equivalent to operator approval — the
-stage completes without the agent acting on draft.
+**Draft clearance.** On operator approval the agent MUST clear draft state
+and proceed to Stage 2b. The operator MAY clear draft themselves; in that
+case the agent observes the cleared state and treats it as equivalent to
+operator approval — the stage completes without the agent acting on draft.
 
-### Stage 3 — Operator review → Team review (team mode only)
+### Stage 2b — Ready for review → Human review
 
-In solo mode, Stage 3 is skipped entirely; after Stage 2 the agent proceeds
-to merge.
-
-In team mode, once ALL of the following hold, the agent MUST request team
-review:
+Once ALL of the following hold, the agent MUST request review from the
+appropriate human reviewer(s):
 
 1. The current PR head has a green CI rollup.
-2. No operator thread on the PR is actionable per §2.2.
+2. No upstream thread on the PR is actionable per §2.2 (Copilot threads in
+   solo mode; Copilot and operator threads in team mode).
 3. The PR is marked ready for review (draft state cleared).
 
-**Identifying team reviewers.** The agent MUST identify a specific human or
-set of humans to engage, excluding itself and the operator. The selection
-mechanism (CODEOWNERS, ticket-derived reviewer set, per-repo config) is
-implementation-defined.
+In **solo mode**, draft clearance occurs at the start of this stage as the
+agent enters Stage 2b. The agent MUST clear draft before requesting review.
+
+In **team mode**, draft is already cleared by Stage 2a. The agent MUST NOT
+re-mark the PR as draft.
+
+**Identifying reviewers.** The agent MUST identify a specific human or set of
+humans to engage. The selection mechanism (CODEOWNERS, ticket assigner,
+per-repo config) is implementation-defined. The agent MUST NOT request review
+from itself.
+
+- In **solo mode** the operator is the only eligible reviewer.
+- In **team mode** the agent MUST request review from at least one human
+  reviewer who is neither itself nor the operator (the operator already
+  reviewed in Stage 2a). The selection MAY include the operator as an
+  additional reviewer but MUST include at least one other.
 
 **Engagement venue.** The agent MUST follow §2.1 rules on alternative
 credentials if the platform restricts which accounts may request which
-review types. In Mode B the operator's credentials cannot be used to
-request review from the operator; the engagement venue rules from Stage 2
-apply for any reviewer that cannot be reached via a GitHub review request.
+review types. The Mode B venue-fallback rules from Stage 2a apply for any
+reviewer that cannot be reached via a GitHub review request (in particular,
+the operator in Mode B solo mode).
 
-### Stage 4 — Iteration
+### Stage 3 — Iteration
 
 Once review is requested (Copilot, operator, or team), the agent MUST
 continue iterating. New comments and CI failures MUST trigger responses per

@@ -24,8 +24,14 @@ changes code:
 Work flows through these stages:
 
 ```
-Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot →
-  Operator review (in draft) → [Team review, team mode only] → Termination
+Solo mode (default):
+  Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot →
+    Ready for review (draft cleared) → Operator review → Termination
+
+Team mode:
+  Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot →
+    Operator pre-review (in draft) → Ready for review (draft cleared) →
+      Team review → Termination
 ```
 
 Each stage has a precondition (what must be true before entering it) and a
@@ -34,12 +40,15 @@ are not strictly sequential — implementation and CI may interleave, and
 iteration loops back from any review stage to implementation — but the overall
 direction is left-to-right.
 
-The operator-review stage runs in both solo and team mode and happens entirely
-inside the draft window: the operator is the agent's principal, so they get a
-private pass before the work is published team-wide. In solo mode the
-operator's approval is the only human approval; the PR goes straight to merge
-after that. In team mode (`team_mode` config flag) the operator's approval is
-the gate for clearing draft and engaging the rest of the team.
+The shape is selected by the `team_mode` config flag. In **solo mode** the
+operator is the only human reviewer; the agent marks the PR ready for review
+after Copilot, and the operator reviews like a normal team member (post-draft).
+In **team mode** the operator is one of several human reviewers, and they get
+a private pre-review pass while the PR is still in draft — they're the agent's
+principal and bear the consequences of what gets shipped, so it's appropriate
+for them to see the result before it's announced to the rest of the team. The
+agent clears draft only after the operator approves; the rest of the team is
+engaged after that.
 
 ## Why worktrees
 
@@ -80,22 +89,23 @@ of the work.
 
 ## Automation-first reviewer progression
 
-The protocol enforces an ordering: Copilot before any human, and the operator
-before the rest of the team. Automated review is cheap, fast, and scalable;
-running it first filters the defects it catches well (bugs, style, obvious
-oversights) so human reviewers can focus on the judgment calls it cannot answer
-(architecture, product decisions, organizational context).
+The protocol enforces an ordering: Copilot before any human. Automated review
+is cheap, fast, and scalable; running it first filters the defects it catches
+well (bugs, style, obvious oversights) so human reviewers can focus on the
+judgment calls it cannot answer (architecture, product decisions,
+organizational context).
 
-After Copilot, the operator gets a private pass over the PR while it is still
-in draft. The operator is the agent's principal — they're who decided the work
-was worth doing and they bear the consequences of what gets shipped — so it's
-appropriate for them to see the result before it's announced to the rest of the
-team. The PR stays in draft for this stage; only after the operator approves
-does the agent clear draft and (in team mode) engage additional reviewers.
+In **solo mode** there are no other humans — the operator performs the role
+the team would otherwise perform. After Copilot the agent marks the PR ready
+for review and the operator reviews the (now non-draft) PR like a normal
+reviewer. There is no private in-draft operator pass; it would be redundant.
 
-In solo-operator repositories the team-review stage doesn't exist at all: the
-operator's approval is the only human approval needed and the PR goes straight
-to merge after draft is cleared.
+In **team mode** the operator is one of several humans and gets a private
+pre-review while the PR is still in draft. The operator is the agent's
+principal — they're who decided the work was worth doing and they bear the
+consequences of what gets shipped — so it's appropriate for them to see the
+result before it's announced to the rest of the team. The agent only clears
+draft after the operator approves; the rest of the team is engaged after that.
 
 The CI gate before each handoff serves the same purpose: there's no point asking
 a reviewer — automated or human — to look at code that doesn't compile or whose

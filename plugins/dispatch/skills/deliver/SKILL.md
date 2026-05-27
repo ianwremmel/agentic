@@ -7,6 +7,8 @@ description: Drive a code change to merge through a draft PR — CI, reviews, it
 
 Land a code change via a PR. On every tick: run `scripts/pr-status`, address every actionable concern, then evaluate exit gates to decide whether to transition.
 
+The **operator** referenced below is the individual directing this agent — the only human with stop authority over it. Full role glossary (agent, operator, reviewer) in [`reference.md`](./reference.md#roles-1).
+
 ## Setup
 
 1. **Worktree.** Work inside `<worktree_base>/<owner>/<repo>/<branch>` (`worktree_base` is a `userConfig` value; default `~/.worktrees`). Find existing with `git worktree list` — never guess. Reuse if present.

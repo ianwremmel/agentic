@@ -5,6 +5,17 @@ Operational Logging). Only the parts `deliver` relies on are reproduced here so
 the skill is self-contained once installed. The full spec is authoritative where
 they differ.
 
+## Roles (§1)
+
+- **Agent** — the agentic coding assistant doing the work (this skill).
+- **Operator** — the individual directing the agent. Exactly one per
+  agent session; almost certainly a human; the only human with stop
+  authority over the agent. May share platform credentials with the
+  agent (Mode B).
+- **Reviewer** — any participant — Copilot, another agent, or a human —
+  leaving review feedback on a PR. The operator may also be a reviewer
+  of the agent's PRs.
+
 ## Mode detection (§2.1)
 
 Determined by the credentials held at write time, not the environment.

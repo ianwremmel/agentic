@@ -83,18 +83,14 @@ tests are failing.
 
 ## Pre-push review
 
-Before pushing significant changes, the agent runs two reviews:
+Before pushing significant changes, the agent runs an adversarial review: a
+pass by a reviewer structurally separate from the author, examining the change
+for defects and missed cases. The same reasoning process should not both
+produce and approve a change. A different model family is the strongest form
+of separation; a different agent role on the same model is a weaker fallback.
 
-1. **Self-simplification** — looks for opportunities to reduce complexity,
-   consolidate with existing code, or remove unnecessary additions.
-
-2. **Adversarial review** — a pass by a distinct reviewer (a different model, a
-   different agent role) that examines the change for defects and missed cases.
-   The same reasoning process should not both produce and approve a change; the
-   adversarial reviewer is structurally separate from the author.
-
-Both findings must be triaged before the push lands. "Triaged" means either acted
-on or explicitly dismissed with a recorded rationale. Silently ignoring a finding
+Findings must be triaged before the push lands. "Triaged" means either acted on
+or explicitly dismissed with a recorded rationale. Silently ignoring a finding
 is not triaging it.
 
 ## Monitoring and termination

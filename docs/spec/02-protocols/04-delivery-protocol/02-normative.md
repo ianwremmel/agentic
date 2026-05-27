@@ -170,29 +170,27 @@ significant:
 If the agent cannot definitively classify a push as non-significant, it MUST
 treat it as significant.
 
-### Required reviews
+### Required review
 
-1. **Self-simplification review.** A pass examining the pending change for
-   opportunities to simplify, consolidate with existing code, or remove
-   unnecessary complexity. The `simplify` skill satisfies this requirement; an
-   equivalent local convention is acceptable.
+Before any significant push the agent MUST run an **adversarial review** — a
+pass by a reviewer that is NOT the agent producing the change, examining the
+change for defects, missed cases, and incorrect assumptions. The same
+reasoning process MUST NOT both produce and approve the change.
 
-2. **Adversarial review by a distinct reviewer.** A pass by a reviewer that is
-   NOT the agent producing the change — typically a different model or a
-   different agent role — examining the change for defects, missed cases, and
-   incorrect assumptions. The same reasoning process MUST NOT both produce and
-   approve the change.
+The reviewer SHOULD be a different model family from the authoring agent
+wherever the installation has one configured; a different agent role on the
+same model is a weaker fallback, permitted only when no distinct model family
+is available.
 
 ### Local overrides
 
-If the repository's `CLAUDE.md` recommends specific pre-push review steps serving
-the same roles, those steps replace the corresponding required reviews above. The
-agent MUST still run two reviews (one self-simplification, one adversarial); local
-guidance chooses the concrete tools.
+If the repository's `CLAUDE.md` recommends specific pre-push review steps,
+those steps replace the requirement above. The agent MUST still run an
+adversarial review; local guidance chooses the concrete tools and framings.
 
 ### Triage requirement
 
-For each finding from either review, the agent MUST either:
+For each finding from the review, the agent MUST either:
 
 - **Act on it** — amend the pending change to address the finding before pushing,
   OR

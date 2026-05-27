@@ -148,7 +148,7 @@ A thread is **non-actionable** when **any** of the following holds:
   state on a review thread).
 
 A thread is **actionable** otherwise. The most important actionable case is a
-human reply after the agent's last turn: the whole thread is back in play.
+reviewer reply after the agent's last turn: the whole thread is back in play.
 
 Non-actionable threads still inform the agent's understanding of the broader
 conversation and MUST remain available as context. They do not require a new
@@ -219,7 +219,7 @@ GitHub).
 ### Reading a review (Mode B, inverse)
 
 An agent MUST NOT treat the absence of a formal Request-changes review state as
-"no changes requested" on PRs it authored in Mode B. Every comment the account's
-human leaves — review comment, inline comment, or top-level PR comment — MUST
-be evaluated as either a question to answer or an implicit change request.
+"no changes requested" on PRs it authored in Mode B. Every comment the operator
+leaves — review comment, inline comment, or top-level PR comment — MUST be
+evaluated as either a question to answer or an implicit change request.
 

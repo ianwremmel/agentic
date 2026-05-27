@@ -11,7 +11,7 @@ developer runs from the terminal.
 **Interaction commands** are the primitives the protocols depend on for every
 platform write the agent makes — posting a comment, reacting to a thread,
 requesting a review, querying PR state. These are called from within an agent
-session, not by a human directly.
+session, not by the operator directly.
 
 Separating these into explicit CLI subcommands — rather than calling platform
 APIs directly — achieves three things:
@@ -49,8 +49,8 @@ marker syntax, or cache layout.
 ## Daemon vs interaction: who calls what
 
 Daemon commands (`daemon start`, `daemon stop`, `daemon status`, `prompts *`,
-`tasks *`) are invoked by a human from the terminal. They manage process state
-and configuration.
+`tasks *`) are invoked by the operator from the terminal. They manage process
+state and configuration.
 
 Interaction commands (`create-comment`, `reply-to-thread`, `react`,
 `request-review`, `pr-status`, `ack-annotation`) are invoked by an agent session

@@ -52,6 +52,27 @@ to deviate. **MAY** denotes optional behavior.
 
 ## Key concepts
 
+### Roles
+
+Three role terms recur throughout the spec. Use them precisely; the spec
+avoids the bare phrase "the human" (singular, definite) as a load-bearing
+term because it conflates the directing user with whoever happens to be
+reviewing.
+
+- **Agent** — an agentic coding assistant doing work on behalf of an
+  operator. An agent may share platform credentials with its operator
+  (Mode B) or run under its own bot-typed account (Mode A).
+- **Operator** — the individual directing an agent. Almost certainly a
+  human. There is exactly one operator per agent session. The operator is
+  the only human with stop authority over the agent.
+- **Reviewer** — any participant — Copilot, another agent, or a human —
+  leaving review feedback on a PR. The operator may also be a reviewer of
+  the agent's PRs.
+
+"Human" remains in the spec as a category contrasted with bots/agents —
+"human reviewer", "human-credentialed account", "human reply" — but the
+load-bearing role terms are agent, operator, and reviewer.
+
 ### Agent identity and modes
 
 An agent session runs under credentials that identify either a dedicated

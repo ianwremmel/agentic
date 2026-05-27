@@ -2,8 +2,8 @@
 
 ## Why a daemon
 
-A single agent session is interactive: a human starts it, it does work, and it
-exits. Real engineering work doesn't fit in one session. CI takes minutes;
+A single agent session is interactive: an operator starts it, it does work, and
+it exits. Real engineering work doesn't fit in one session. CI takes minutes;
 reviewers take hours; tickets sit between humans for days. The protocols require
 the agent to monitor PRs and tickets across those gaps — but nothing in the
 protocols keeps a process alive between events.

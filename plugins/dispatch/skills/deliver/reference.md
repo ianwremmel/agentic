@@ -5,6 +5,10 @@ Operational Logging). Only the parts `deliver` relies on are reproduced here so
 the skill is self-contained once installed. The full spec is authoritative where
 they differ.
 
+`scripts/pr-status` is this skill's bundled implementation of the status reader
+the spec describes as `dispatch pr-status` (the not-yet-built CLI, #66); the two
+names denote the same reader. Everything below applies to it under either name.
+
 ## Roles (§1)
 
 - **Agent** — the agentic coding assistant doing the work (this skill).
@@ -140,6 +144,21 @@ In team mode the operator is **excluded** from the public reviewer set; the
 operator's binding signal is collected during `private_review_*` via Gate 6.
 
 ## Actionability (§2.2)
+
+**Why agents must not read PR state directly (§2.2.1).** A raw platform read —
+`gh pr view --json`, `gh pr checks`, `gh api …/comments|/reviews`, or an MCP PR
+read — returns thousands of tokens of mostly irrelevant fields, and that cost
+recurs on every poll until the context window fills. Worse, as a session grows,
+agents drift toward ad-hoc API calls and skip the established command, producing
+inconsistent snapshots that bypass the actionability classification (plan/own-reply
+suppression, thread resolution, `.ack`) and the disk cache the gates rely on.
+`scripts/pr-status` exists to fix exactly this: one coherent snapshot, heavy
+content written to stable disk paths, and a compact XML summary that answers every
+polling question at once. Drive **all** gate and actionability decisions from it,
+reading the cache files it wrote rather than re-fetching. This isn't a blanket
+ban on platform reads — investigating something emergent the snapshot and cache
+don't cover may legitimately need a direct read — but the PR status you act on
+comes only from `pr-status`, and routine direct `gh`/MCP calls are writes.
 
 The `pr-status` script applies these rules; the agent reads the resulting
 `actionable="true|false"`. For reference, a comment or thread is **non-actionable**

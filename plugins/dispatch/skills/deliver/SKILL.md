@@ -9,6 +9,8 @@ Land a code change via a PR. On every tick: run `scripts/pr-status`, address eve
 
 The **operator** referenced below is the individual directing this agent — the only human with stop authority over it. Full role glossary (agent, operator, reviewer) in [`reference.md`](./reference.md#roles-1).
 
+**Invoking `pr-status`.** The script requires `DISPATCH_AGENT_ID`, `DISPATCH_SKILL`, and `DISPATCH_OPERATOR_LOGIN`, and hard-fails (matching the calling-agent-identity posture) if any is unset. Before **every** invocation the agent MUST resolve the operator identity and pass it: use `operator_login` (`CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN`) if set; otherwise fall back to the ticket assigner. If neither is available, surface an actionable error rather than skipping the tick — the script cannot run without it.
+
 ## Setup
 
 1. **Worktree.** Work inside `<worktree_base>/<owner>/<repo>/<branch>` (`worktree_base` is a `userConfig` value; default `~/.worktrees`). Find existing with `git worktree list` — never guess. Reuse if present.
@@ -29,7 +31,7 @@ Seven binary signals read from each `pr-status` XML:
 5. **No actionable threads.** Zero `<thread actionable="true">`.
 6. **Operator-approved.** Always required. Satisfied by any of:
    - A `<review mode="human" role="operator" state="approved">` in the pr-status XML (Mode A).
-   - A `<reaction emoji="+1">` from the operator on the agent's engagement comment (the top-level comment carrying the current `<!-- agent-reply:<agent-id> -->` marker).
+   - A `<reaction emoji="+1">` from the operator on the agent's engagement comment (the top-level comment carrying the current `<!-- agent-reply:<agent-id> -->` marker plus the `<!-- agent-engagement:<agent-id> -->` sentinel).
    - A "go ahead" / "lgtm" / explicit "ready" / "clear draft" reply from the operator on the engagement comment, on the ticket, or out-of-band — surfaced through the same channels the agent already monitors for actionability.
    - A ticket-side approval signal (e.g. status transition by the operator).
 
@@ -103,12 +105,12 @@ Universal terminal (not drawn, applies from every state): **PR closed (merged or
 | `ready_for_copilot_review`         | Request Copilot review.                                                                                         | no       |
 | `copilot_review_requested`         | Await Copilot's review.                                                                                         | CI       |
 | `copilot_commented`                | Address each actionable Copilot item; push fix(es).                                                             | no       |
-| `ready_for_private_review`         | (Team mode only.) Engage the operator while still in draft. Mode A: PR review request targeting `operator_login` (or ticket assigner fallback). Mode B: ticket/out-of-band per §Review rules. | no       |
+| `ready_for_private_review`         | (Team mode only.) Engage the operator while still in draft: post the engagement comment (agent-reply marker + `<!-- agent-engagement:<agent-id> -->` sentinel) and notify — Mode A: PR review request targeting `operator_login` (or ticket assigner fallback); Mode B: ticket/out-of-band per §Review rules. | no       |
 | `private_review_requested`         | (Team mode only.) Await the operator's signal (review approval, +1 reaction, text reply, or ticket transition). | reviewer |
 | `private_review_commented`         | (Team mode only.) Address each item; push; re-request.                                                          | no       |
 | `private_review_requested_changes` | (Team mode only.) Address; push; **re-request required** — blocks public review until cleared.                  | no       |
 | `private_review_approved`          | (Team mode only.) Clear draft; transition to `ready_for_public_review`.                                         | no       |
-| `ready_for_public_review`          | Request public review. Solo mode: request the operator (or ticket assigner). Team mode: request team reviewer(s), **excluding the operator**. Never self-request. Mode A/B per reference. | no       |
+| `ready_for_public_review`          | Request public review. Solo mode: post the engagement comment (agent-reply + `agent-engagement` sentinel) and engage the operator (or ticket assigner). Team mode: request team reviewer(s), **excluding the operator**. Never self-request. Mode A/B per reference. | no       |
 | `public_review_requested`          | Await the public reviewer.                                                                                      | reviewer |
 | `public_review_commented`          | Address each item; push; re-request review.                                                                     | no       |
 | `public_review_requested_changes`  | Address; push; **re-request required** — `changes_requested` blocks merge until cleared.                        | no       |

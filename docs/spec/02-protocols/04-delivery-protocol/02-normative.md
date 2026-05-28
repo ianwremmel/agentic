@@ -258,13 +258,30 @@ still in draft. Engagement has two parts:
 1. A **notification** that reaches the operator through a Mode-appropriate
    venue (below).
 2. An **engagement comment** — a top-level PR comment the agent posts carrying
-   the §2.1 `<!-- agent-reply:<agent-id> -->` machine marker. This comment is
-   the anchor that the operator's reaction- or reply-based approval signals
-   (Gate 6 below) are tied back to: a `+1` reaction or a "go ahead" reply on
-   this comment counts, surfaced via the `<reactions>` child of `<comment>`
-   per §2.2.2. The agent MUST post it regardless of Mode, since the formal
-   review request (Mode A) and ticket tag (Mode B) are notifications, not
-   PR comments the operator can react to.
+   the §2.1 `<!-- agent-reply:<agent-id> -->` machine marker AND, inside the
+   wrapped body (after the marker in Mode A / after the opening sparkle in Mode
+   B, never displacing the leading machine marker), the engagement sentinel:
+
+   ```
+   <!-- agent-engagement:<agent-id> -->
+   ```
+
+   This comment is the anchor that the operator's reaction- or reply-based
+   approval signals (Gate 6 below) are tied back to: a `+1` reaction or a "go
+   ahead" reply on this comment counts, surfaced via the `<reactions>` child of
+   `<comment>` per §2.2.2. The agent MUST post it regardless of Mode, since the
+   formal review request (Mode A) and ticket tag (Mode B) are notifications,
+   not PR comments the operator can react to.
+
+   The engagement sentinel marks the comment as an agent artifact so it
+   classifies **non-actionable** per §2.2.2 (mirroring the plan comment).
+   Without it, the agent's own soliciting comment would carry the
+   `agent-reply` marker but no terminal signal and so stay `actionable="true"`
+   forever — perpetually failing Gate 4 ("no actionable comments") and blocking
+   the draft-clear, public-review, and merge transitions. The agent MUST NOT
+   instead terminal-tag the engagement comment: a terminal signal means
+   "finished, suppress re-evaluation," which is wrong while the agent is
+   actively awaiting operator approval.
 
 The notification venue by Mode:
 

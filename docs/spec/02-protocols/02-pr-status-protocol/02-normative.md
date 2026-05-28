@@ -79,7 +79,9 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
   </checks>
   <merge-conflicts present="true|false"/>
   <reviews>
-    <review author="<login>" mode="bot|human" role="operator|team"
+    <review author="<login>" mode="bot"
+            state="commented|approved|changes_requested|dismissed"/>
+    <review author="<login>" mode="human" role="operator|team"
             state="commented|approved|changes_requested|dismissed"/>
   </reviews>
   <comments>
@@ -216,13 +218,23 @@ For `actionable="false"` elements: `<summary>` MUST be present with 1–3 senten
 ### Top-level comments and threads
 
 Actionability follows §2.1.2 §"Thread-aware filtering" verbatim. An item is
-**non-actionable** iff either of the following holds:
+**non-actionable** iff any of the following holds:
 
 - The newest comment was written by the calling agent AND carries a terminal
   signal (a terminal reaction on platforms with reaction support, or a terminal
   text token on platforms without).
 - The platform has explicitly resolved the thread (review threads only; top-level
   comments have no platform resolution mechanism).
+- The comment is an **agent artifact** authored by the calling agent — one
+  carrying a line-anchored agent-artifact sentinel such as the Delivery
+  Protocol's plan comment (`<!-- agent-plan:<agent-id> -->`) or engagement
+  comment (`<!-- agent-engagement:<agent-id> -->`). These are the agent's own
+  working/soliciting comments, never reviewer items the agent must "address,"
+  so they MUST classify as non-actionable regardless of terminal signal. The
+  author-identity match is load-bearing: a human quoting one of these sentinels
+  stays actionable. (The set of recognized artifact sentinels is defined by the
+  consuming protocol, e.g. §2.4; this protocol only fixes the
+  author-match + line-anchored-sentinel classification rule.)
 
 Otherwise the item is **actionable**. In particular, a reviewer reply to an
 agent's previous turn makes the item actionable.

@@ -76,13 +76,14 @@ HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
 # reviewThreads and top-level comments aren't both exposed with the fields we
 # need by `gh pr view --json` (in particular it omits comment reactions, which
-# Gate 6 needs), so fetch both via GraphQL in one round-trip.
+# Gate 6 needs), so fetch them via GraphQL.
 # Use the numeric PR number from PR_JSON since `$PR` may have been passed as
 # a URL or branch name (both accepted by `gh pr view`).
 PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
 OWNER="${REPO%/*}"
 REPO_NAME="${REPO#*/}"
-GRAPHQL_JSON="$(gh api graphql \
+
+THREADS_JSON="$(gh api graphql \
   -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
   -f query='
     query($owner:String!, $repo:String!, $pr:Int!) {
@@ -99,7 +100,23 @@ GRAPHQL_JSON="$(gh api graphql \
               }
             }
           }
-          comments(first:100) {
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
+
+# §2.2.2 requires EVERY top-level comment to appear, and Gate 6 reads reactions
+# off the (recent) engagement comment, so the comments connection must be fully
+# paginated — a `first:100` single page silently drops the engagement comment
+# (and its approval reaction) on long-running PRs. `--paginate` walks every page
+# via $endCursor; `--jq …nodes[]` emits one node per line across all pages, which
+# `jq -s` collects back into a single array.
+COMMENTS_JSON="$(gh api graphql --paginate \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          comments(first:100, after:$endCursor) {
             nodes {
               id
               databaseId
@@ -109,13 +126,11 @@ GRAPHQL_JSON="$(gh api graphql \
                 nodes { content user { login } }
               }
             }
+            pageInfo { hasNextPage endCursor }
           }
         }
       }
-    }' --jq '.data.repository.pullRequest')"
-
-THREADS_JSON="$(jq -c '.reviewThreads.nodes // []' <<<"$GRAPHQL_JSON")"
-COMMENTS_JSON="$(jq -c '.comments.nodes // []' <<<"$GRAPHQL_JSON")"
+    }' --jq '.data.repository.pullRequest.comments.nodes[]' | jq -s '.')"
 
 # GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
 reaction_emoji() {
@@ -203,20 +218,25 @@ has_terminal_signal() {
 # Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
 # Echoes "true" (actionable) or "false".
 # Full rules: reference.md → Actionability. Summary: non-actionable iff
-# thread-resolved, or the body is the calling agent's plan comment
-# (line-anchored plan-marker + author identity, so a human quoting the marker
-# stays actionable), or the body is the calling agent's terminal-tagged reply
-# (any agent-reply marker + author identity + terminal signal on the last
-# non-empty line). When $CALLER_LOGIN is unavailable (`gh api user` failed),
-# the reply check falls back to the pre-fix behavior — exact
-# $DISPATCH_AGENT_ID marker alone — so the script degrades, not fails.
+# thread-resolved, or the body is the calling agent's plan comment or
+# engagement comment (line-anchored agent-plan/agent-engagement sentinel +
+# author identity, so a human quoting the marker stays actionable), or the body
+# is the calling agent's terminal-tagged reply (any agent-reply marker + author
+# identity + terminal signal on the last non-empty line). When $CALLER_LOGIN is
+# unavailable (`gh api user` failed), the reply check falls back to the pre-fix
+# behavior — exact $DISPATCH_AGENT_ID marker alone — so the script degrades, not
+# fails.
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
   [[ "$resolved" == "true" ]] && { echo false; return; }
 
-  # Plan comment by the calling agent.
+  # Plan or engagement comment by the calling agent. Both are agent artifacts,
+  # not reviewer items: the engagement comment in particular anchors operator
+  # approval (Gate 6) and would otherwise stay actionable forever — blocking
+  # Gate 4 and thus the draft-clear/merge transitions — since the agent never
+  # "addresses" its own request.
   if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
-      && grep -qE '^<!-- agent-plan:[^ ]+ -->$' <<<"$body"; then
+      && grep -qE '^<!-- agent-(plan|engagement):[^ ]+ -->$' <<<"$body"; then
     echo false; return
   fi
 

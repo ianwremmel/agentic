@@ -404,7 +404,10 @@ content_present() {
   local tmp_index; tmp_index="$(mktemp)" || return 2
   trap 'rm -f "$tmp_index"' RETURN
   GIT_INDEX_FILE="$tmp_index" git read-tree "$base_sha" 2>/dev/null || return 2
-  if git diff "$mb" "$head_sha" \
+  # --binary emits an applyable full binary patch; without it git diff writes a
+  # "Binary files differ" placeholder that git apply rejects, misclassifying any
+  # PR touching binary files as abandoned.
+  if git diff --binary "$mb" "$head_sha" \
        | GIT_INDEX_FILE="$tmp_index" git apply --reverse --cached --check - 2>/dev/null; then
     return 0
   fi

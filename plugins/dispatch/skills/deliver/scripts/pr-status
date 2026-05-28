@@ -400,18 +400,34 @@ content_present() {
   local mb; mb="$(git merge-base "$base_sha" "$head_sha" 2>/dev/null)" || return 2
   [[ -n "$mb" ]] || return 2
 
+  # No-op PR: an empty net patch is trivially present in base → shipped. Must be
+  # short-circuited because `git apply --check` rejects empty input ("No valid
+  # patches in input"), which would otherwise misclassify a no-op PR as abandoned.
+  if git diff --quiet "$mb" "$head_sha" 2>/dev/null; then
+    return 0
+  fi
+
   # Reverse-apply the net patch against a temp index seeded from the base tip.
+  # `rm -f` the mktemp file so the index path is free: some git versions read an
+  # existing empty GIT_INDEX_FILE as a corrupt index, failing read-tree. Clean up
+  # inline rather than via a RETURN trap — a RETURN trap would re-fire on the
+  # *caller's* return and, under `set -u`, abort the rest of the XML emission.
   local tmp_index; tmp_index="$(mktemp)" || return 2
-  trap 'rm -f "$tmp_index"' RETURN
-  GIT_INDEX_FILE="$tmp_index" git read-tree "$base_sha" 2>/dev/null || return 2
+  rm -f "$tmp_index"
+  if ! GIT_INDEX_FILE="$tmp_index" git read-tree "$base_sha" 2>/dev/null; then
+    rm -f "$tmp_index"
+    return 2
+  fi
   # --binary emits an applyable full binary patch; without it git diff writes a
   # "Binary files differ" placeholder that git apply rejects, misclassifying any
   # PR touching binary files as abandoned.
+  local rc=1
   if git diff --binary "$mb" "$head_sha" \
        | GIT_INDEX_FILE="$tmp_index" git apply --reverse --cached --check - 2>/dev/null; then
-    return 0
+    rc=0
   fi
-  return 1
+  rm -f "$tmp_index"
+  return "$rc"
 }
 
 # Resolve the PR's terminal end-to-end and emit <terminal>. Binary at closure

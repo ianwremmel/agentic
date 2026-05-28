@@ -5,6 +5,10 @@ Operational Logging). Only the parts `deliver` relies on are reproduced here so
 the skill is self-contained once installed. The full spec is authoritative where
 they differ.
 
+`scripts/pr-status` is this skill's bundled implementation of the status reader
+the spec describes as `dispatch pr-status` (the not-yet-built CLI, #66); the two
+names denote the same reader. Everything below applies to it under either name.
+
 ## Roles (§1)
 
 - **Agent** — the agentic coding assistant doing the work (this skill).

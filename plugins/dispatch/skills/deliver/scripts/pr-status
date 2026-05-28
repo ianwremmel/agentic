@@ -70,13 +70,13 @@ cache_item() {
 
 # --- fetch --------------------------------------------------------------------
 PR_JSON="$(gh pr view "$PR" --json \
-  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews,comments)"
+  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews)"
 
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
-# reviewThreads isn't exposed by `gh pr view --json`, so fetch via GraphQL.
-# Same for top-level comment reactions (Gate 6 needs reaction visibility on the
-# agent's engagement comment, so we surface them as `<reaction>` children).
+# reviewThreads and top-level comments aren't both exposed with the fields we
+# need by `gh pr view --json` (in particular it omits comment reactions, which
+# Gate 6 needs), so fetch both via GraphQL in one round-trip.
 # Use the numeric PR number from PR_JSON since `$PR` may have been passed as
 # a URL or branch name (both accepted by `gh pr view`).
 PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
@@ -103,6 +103,8 @@ GRAPHQL_JSON="$(gh api graphql \
             nodes {
               id
               databaseId
+              body
+              author { login }
               reactions(first:100) {
                 nodes { content user { login } }
               }
@@ -113,7 +115,7 @@ GRAPHQL_JSON="$(gh api graphql \
     }' --jq '.data.repository.pullRequest')"
 
 THREADS_JSON="$(jq -c '.reviewThreads.nodes // []' <<<"$GRAPHQL_JSON")"
-COMMENT_REACTIONS_JSON="$(jq -c '.comments.nodes // []' <<<"$GRAPHQL_JSON")"
+COMMENTS_JSON="$(jq -c '.comments.nodes // []' <<<"$GRAPHQL_JSON")"
 
 # GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
 reaction_emoji() {
@@ -237,19 +239,11 @@ classify_actionable() {
   echo true
 }
 
-# Emit <reactions>…</reactions> for a top-level comment by raw node_id, or
-# nothing if there are no reactions. Used by comments_xml.
+# Emit <reactions>…</reactions> for a reactions-node JSON array, or nothing if
+# the array is empty. Used by comments_xml.
 reactions_xml_for() {
-  local raw_id="$1"
-  local rj count
-  rj="$(jq -c --arg id "$raw_id" '
-    map(select(.id == $id or (.databaseId|tostring) == $id))
-    | .[0].reactions.nodes // []' <<<"$COMMENT_REACTIONS_JSON")"
+  local rj="$1"
   if [[ -z "$rj" || "$rj" == "[]" || "$rj" == "null" ]]; then
-    return 0
-  fi
-  count="$(jq 'length' <<<"$rj")"
-  if [[ "$count" -le 0 ]]; then
     return 0
   fi
   echo "<reactions>"
@@ -267,11 +261,12 @@ reactions_xml_for() {
 # --- comments (top-level PR comments) -----------------------------------------
 comments_xml() {
   echo "  <comments>"
-  jq -c '.comments // [] | .[]' <<<"$PR_JSON" | while read -r c; do
-    local raw_id id author body
+  jq -c '.[]' <<<"$COMMENTS_JSON" | while read -r c; do
+    local raw_id id author body reactions
     raw_id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
     author="$(jq -r '.author.login // ""' <<<"$c")"
     body="$(jq -r '.body // ""' <<<"$c")"
+    reactions="$(jq -c '.reactions.nodes // []' <<<"$c")"
     [[ -n "$raw_id" ]] || continue
     id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
@@ -283,7 +278,7 @@ comments_xml() {
       [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
       inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
     fi
-    inner+="$(reactions_xml_for "$raw_id")"
+    inner+="$(reactions_xml_for "$reactions")"
     if [[ -z "$inner" ]]; then
       printf '    <comment id="%s" actionable="%s" cache="%s"/>\n' \
         "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")"

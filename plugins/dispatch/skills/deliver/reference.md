@@ -98,7 +98,15 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
 
 The `deliver` skill engages the operator on two edges: `ready_for_private_review
 → private_review_requested` (team mode) and `ready_for_public_review →
-public_review_requested` (solo mode). Engagement mechanics differ by Mode:
+public_review_requested` (solo mode). Each engagement is two parts: a
+**notification** (the Mode-specific venue below) plus an **engagement
+comment** — a top-level PR comment the agent posts carrying the
+`<!-- agent-reply:<agent-id> -->` machine marker. The engagement comment is the
+anchor for reaction- and reply-based Gate 6 signals (a `+1` reaction or "go
+ahead" reply on it counts); the agent posts it regardless of Mode, since the
+notification venues below are not PR comments the operator can react to.
+
+Notification venue by Mode:
 
 - **Mode A** (separate bot account). Use the platform's PR review-request API,
   targeting `operator_login` if set, otherwise the ticket assigner (same
@@ -108,9 +116,6 @@ public_review_requested` (solo mode). Engagement mechanics differ by Mode:
   human-review engagement: a ticket comment tagging the operator first, then an
   implementation-defined out-of-band channel. Operator identity is the
   authenticated account itself.
-
-The engagement comment MUST carry the `<!-- agent-reply:<agent-id> -->` machine
-marker so reactions and replies can be tied back to it for Gate 6 evaluation.
 
 ### Audience by visibility stage
 

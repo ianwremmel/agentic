@@ -253,7 +253,20 @@ When Stage 1 was skipped (Copilot unavailable), condition 3 is trivially
 satisfied.
 
 **Operator engagement.** The agent MUST engage the operator while the PR is
-still in draft:
+still in draft. Engagement has two parts:
+
+1. A **notification** that reaches the operator through a Mode-appropriate
+   venue (below).
+2. An **engagement comment** — a top-level PR comment the agent posts carrying
+   the §2.1 `<!-- agent-reply:<agent-id> -->` machine marker. This comment is
+   the anchor that the operator's reaction- or reply-based approval signals
+   (Gate 6 below) are tied back to: a `+1` reaction or a "go ahead" reply on
+   this comment counts, surfaced via the `<reactions>` child of `<comment>`
+   per §2.2.2. The agent MUST post it regardless of Mode, since the formal
+   review request (Mode A) and ticket tag (Mode B) are notifications, not
+   PR comments the operator can react to.
+
+The notification venue by Mode:
 
 - **Mode A** (separate agent account). Use the platform's PR review-request
   API, targeting the operator's identity. The operator identity is supplied
@@ -265,10 +278,6 @@ still in draft:
   the first available venue that can reach them, in the same order Stage 3
   prescribes for Mode B engagement: a ticket comment tagging the operator
   first, then an implementation-defined out-of-band channel.
-
-The agent's engagement comment MUST carry the §2.1 `<!-- agent-reply:<agent-id> -->`
-machine marker so reactions and replies can be tied back to it for the Gate 6
-evaluation below.
 
 **Gate 6 — Operator-approved (always required).** Satisfied by ANY of the
 following signals on the engagement venue:

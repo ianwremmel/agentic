@@ -85,7 +85,7 @@ stateDiagram-v2
 
     public_review_approved --> ready_for_merge: gates 1-5 still hold
 
-    ready_for_merge --> merged: PR closed (merged)
+    ready_for_merge --> merged: PR closed (terminal resolved by pr-status)
 
     merged --> done: worktree removed
 
@@ -94,7 +94,12 @@ stateDiagram-v2
 
 `private_review_*` states are unreachable in solo mode. The agent clears draft on exactly one edge target: **any edge into `ready_for_public_review`**. In solo mode that is the edge out of `copilot_review_requested` (or `draft` when Copilot is unavailable). In team mode that is `private_review_approved → ready_for_public_review`. If the operator clicks "ready for review" themselves, the agent observes the same edge being fired by another actor and proceeds.
 
-Universal terminal (not drawn, applies from every state): **PR closed (merged or not)** or **operator "stop" instruction** → acknowledge per §2.1 → `merged` → `done`. This includes the sole-reviewer case in team mode, where the explicit `public_review_approved → ready_for_merge → merged` path is unreachable and the merge fires the universal edge directly out of `public_review_requested`. Worktree cleanup happens on **any** closure.
+Universal terminal (not drawn, applies from every state): **PR closed** or **operator "stop" instruction** → read the resolved terminal from `pr-status`'s `<terminal>` element → acknowledge per §2.1 → `merged` → `done`. At closure `<terminal state>` is **binary** — it resolves *whether the change shipped*, not *how it was merged*:
+
+- **`shipped`** — the change is present in base, regardless of who landed it or how (GitHub-merged, merge-queue fast-forward, or a squash/rebase landed by external tooling). Acknowledge as delivered (`Shipped.` / `rocket`) and advance any linked ticket to delivered/verified.
+- **`abandoned`** — closed with the change absent from base. Acknowledge as not-delivered and do **not** advance the linked ticket. If `<terminal>` carries an `error=` breadcrumb (the content check couldn't run), surface it so a human can reconcile — never claim delivery on a guess.
+
+This includes the sole-reviewer case in team mode, where the explicit `public_review_approved → ready_for_merge → merged` path is unreachable and the merge fires the universal edge directly out of `public_review_requested`. Worktree cleanup happens on **any** closure, shipped or abandoned.
 
 ## States
 
@@ -116,7 +121,7 @@ Universal terminal (not drawn, applies from every state): **PR closed (merged or
 | `public_review_requested_changes`  | Address; push; **re-request required** — `changes_requested` blocks merge until cleared.                        | no       |
 | `public_review_approved`           | Confirm gates 1–5 still hold; else fix in place.                                                                | no       |
 | `ready_for_merge`                  | Await merge. **Don't self-merge unless instructed.**                                                            | merge    |
-| `merged`                           | Acknowledge (§2.1); remove any worktree you created.                                                            | no       |
+| `merged`                           | Read the resolved `<terminal>` from `pr-status`. **shipped** → acknowledge as delivered, advance any linked ticket to delivered/verified. **abandoned** → acknowledge as not-delivered, leave the ticket where it is (surface any `error=` breadcrumb). Either way, remove any worktree you created. | no       |
 | `done`                             | Terminal.                                                                                                       | —        |
 
 **Coding does NOT happen in:** `ready_for_copilot_review`, `copilot_review_requested`, `ready_for_private_review`, `private_review_requested`, `private_review_approved`, `ready_for_public_review`, `public_review_requested`, `public_review_approved`, `ready_for_merge`, `merged`, `done`. Code changes in those states are only legal as the response to a gate-1–5 failure (CI broke, conflict arose, a new actionable annotation/comment/thread appeared) — and that work is "addressing concerns in place," not advancing the lifecycle.

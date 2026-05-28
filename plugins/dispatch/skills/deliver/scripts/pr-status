@@ -70,7 +70,7 @@ cache_item() {
 
 # --- fetch --------------------------------------------------------------------
 PR_JSON="$(gh pr view "$PR" --json \
-  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews)"
+  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews)"
 
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
@@ -372,9 +372,104 @@ annotations_xml() {
   echo "  </annotations>"
 }
 
+# --- terminal resolution ------------------------------------------------------
+# Returns 0 if the PR's net change is present in the base tip (shipped), 1 if
+# not (abandoned), 2 if the check could not run (no repo / git or fetch failure).
+# Squash/rebase-safe: builds the PR's combined net patch and reverse-applies it
+# against a temp index seeded from the base tip, so an n→1 squash or a rebase
+# rewrite still matches by content (per-commit patch-ids, which `git cherry`
+# uses, break under squash). Side-effect-free — never touches the caller's
+# worktree, index, or HEAD. An empty net patch (no-op PR) reverse-applies
+# trivially → present → shipped, which is intended.
+content_present() {
+  local base_ref="$1"
+  command -v git >/dev/null 2>&1 || return 2
+  git rev-parse --git-dir >/dev/null 2>&1 || return 2
+
+  # Fetch the head commit by SHA via refs/pull/<n>/head — the head branch may
+  # have been deleted on close, but GitHub keeps the SHA reachable here.
+  git fetch --quiet origin "refs/pull/$PR_NUMBER/head" 2>/dev/null || return 2
+  local head_sha; head_sha="$(git rev-parse --verify --quiet FETCH_HEAD)" || return 2
+  [[ -n "$head_sha" ]] || return 2
+
+  # Fetch the base tip (FETCH_HEAD gets overwritten, so head_sha is captured first).
+  git fetch --quiet origin "$base_ref" 2>/dev/null || return 2
+  local base_sha; base_sha="$(git rev-parse --verify --quiet FETCH_HEAD)" || return 2
+  [[ -n "$base_sha" ]] || return 2
+
+  local mb; mb="$(git merge-base "$base_sha" "$head_sha" 2>/dev/null)" || return 2
+  [[ -n "$mb" ]] || return 2
+
+  # Reverse-apply the net patch against a temp index seeded from the base tip.
+  local tmp_index; tmp_index="$(mktemp)" || return 2
+  trap 'rm -f "$tmp_index"' RETURN
+  GIT_INDEX_FILE="$tmp_index" git read-tree "$base_sha" 2>/dev/null || return 2
+  if git diff "$mb" "$head_sha" \
+       | GIT_INDEX_FILE="$tmp_index" git apply --reverse --cached --check - 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+# Resolve the PR's terminal end-to-end and emit <terminal>. Binary at closure
+# (shipped|abandoned); non-terminal while the PR is live (open|draft). Cheapest
+# signals first; git is shelled only on the CLOSED-but-not-merged + ahead_by>0
+# branch, never on the hot poll loop. Carries the raw signals it used.
+terminal_xml() {
+  local state merged_at base_ref head_oid is_draft
+  state="$(jq -r '.state // ""' <<<"$PR_JSON")"
+  merged_at="$(jq -r '.mergedAt // ""' <<<"$PR_JSON")"
+  base_ref="$(jq -r '.baseRefName // ""' <<<"$PR_JSON")"
+  head_oid="$(jq -r '.headRefOid // ""' <<<"$PR_JSON")"
+  is_draft="$(jq -r '.isDraft // false' <<<"$PR_JSON")"
+
+  local gh_merged=false
+  [[ "$state" == "MERGED" || ( -n "$merged_at" && "$merged_at" != "null" ) ]] && gh_merged=true
+
+  # Non-terminal: PR still open.
+  if [[ "$state" == "OPEN" ]]; then
+    local s=open; [[ "$is_draft" == "true" ]] && s=draft
+    printf '  <terminal state="%s" gh-merged="%s" ahead-by="-"/>\n' "$s" "$gh_merged"
+    return
+  fi
+
+  # Step 1: GitHub says merged → shipped. API only.
+  if [[ "$gh_merged" == "true" ]]; then
+    printf '  <terminal state="shipped" gh-merged="true" ahead-by="-"/>\n'
+    return
+  fi
+
+  # CLOSED without `merged`. Step 2: one three-dot compare call, read ahead_by.
+  # ahead_by == 0 → every head commit is already in base (plain merge /
+  # fast-forward / merge-queue close where GitHub never set merged) → shipped,
+  # no git. Works even if the head branch was deleted — compare accepts the SHA.
+  local ahead_by
+  ahead_by="$(gh api "repos/$OWNER/$REPO_NAME/compare/$base_ref...$head_oid" \
+    --jq '.ahead_by' 2>/dev/null || echo "")"
+
+  if [[ "$ahead_by" == "0" ]]; then
+    printf '  <terminal state="shipped" gh-merged="false" ahead-by="0"/>\n'
+    return
+  fi
+
+  # ahead_by > 0 (or compare failed): could be squash/rebase-landed or genuinely
+  # abandoned; the API can't tell. Step 3: content check via git (the only path
+  # that shells git). On no-repo / fetch failure we do NOT guess — emit abandoned
+  # with an error breadcrumb so delivery is never falsely claimed.
+  local ab_attr="${ahead_by:--}"
+  local rc=0
+  if content_present "$base_ref"; then rc=0; else rc=$?; fi
+  case "$rc" in
+    0) printf '  <terminal state="shipped" gh-merged="false" ahead-by="%s"/>\n' "$ab_attr" ;;
+    1) printf '  <terminal state="abandoned" gh-merged="false" ahead-by="%s"/>\n' "$ab_attr" ;;
+    *) printf '  <terminal state="abandoned" gh-merged="false" ahead-by="%s" error="content-check-unavailable"/>\n' "$ab_attr" ;;
+  esac
+}
+
 # --- emit ---------------------------------------------------------------------
 printf '<pr-status repo="%s" pr="%s" head="%s">\n' \
   "$(xml_attr "$REPO")" "$(xml_attr "$PR")" "$(xml_attr "$HEAD")"
+terminal_xml
 checks_xml
 conflicts_xml
 reviews_xml

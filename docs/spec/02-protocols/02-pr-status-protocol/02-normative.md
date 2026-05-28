@@ -13,16 +13,24 @@ data.
 
 ## Caller obligations
 
-A caller acting on PR state MUST route all platform state reads through
-`dispatch pr-status`. It MUST NOT call `gh pr view`, `gh pr checks`,
+A caller acting on PR state MUST derive its gate evaluation and actionability
+decisions solely from a `dispatch pr-status` snapshot and the on-disk cache that
+command populates. It MUST NOT call `gh pr view`, `gh pr checks`,
 `gh api …/comments`, `gh api …/reviews`, or any MCP PR read to evaluate gates or
-otherwise read PR state; the only platform reads a caller performs are the ones
-`dispatch pr-status` performs internally. A caller's direct platform calls are
-limited to **writes** (e.g. posting a reply, resolving a thread, requesting a
-review, marking a PR ready, adding a reaction).
+otherwise read the PR *status* it acts on. When it needs the full content of a
+comment, thread, or annotation, it reads the cached file `dispatch pr-status`
+already wrote rather than re-fetching.
 
-This obligation exists because direct reads burn context on every poll and
-bypass the actionability classification, summaries, and on-disk cache that
+This is not a blanket ban on platform reads. If a caller must investigate
+something emergent that the snapshot and cache do not cover — data not available
+locally — it MAY fetch that data directly. The obligation is narrower but firm:
+the PR status a caller routes its lifecycle decisions through comes only from
+`dispatch pr-status`. A caller's routine direct platform calls are **writes**
+(e.g. posting a reply, resolving a thread, requesting a review, marking a PR
+ready, adding a reaction).
+
+This obligation exists because ad-hoc status reads burn context on every poll
+and bypass the actionability classification, summaries, and on-disk cache that
 `dispatch pr-status` owns (§2.2.1).
 
 ## Cache layout

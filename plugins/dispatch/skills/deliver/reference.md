@@ -154,8 +154,11 @@ inconsistent snapshots that bypass the actionability classification (plan/own-re
 suppression, thread resolution, `.ack`) and the disk cache the gates rely on.
 `scripts/pr-status` exists to fix exactly this: one coherent snapshot, heavy
 content written to stable disk paths, and a compact XML summary that answers every
-polling question at once. Route **all** PR-state reads through it; reserve direct
-`gh`/MCP calls for writes.
+polling question at once. Drive **all** gate and actionability decisions from it,
+reading the cache files it wrote rather than re-fetching. This isn't a blanket
+ban on platform reads — investigating something emergent the snapshot and cache
+don't cover may legitimately need a direct read — but the PR status you act on
+comes only from `pr-status`, and routine direct `gh`/MCP calls are writes.
 
 The `pr-status` script applies these rules; the agent reads the resulting
 `actionable="true|false"`. For reference, a comment or thread is **non-actionable**

@@ -278,24 +278,18 @@ comments_xml() {
     local actionable; actionable="$(classify_actionable "$body" "$author" "false")"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"
-    local reactions; reactions="$(reactions_xml_for "$raw_id")"
-    if [[ "$actionable" == "true" ]]; then
-      if [[ -n "$reactions" ]]; then
-        printf '    <comment id="%s" actionable="true" cache="%s">\n      %s\n    </comment>\n' \
-          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$reactions"
-      else
-        printf '    <comment id="%s" actionable="true" cache="%s"/>\n' \
-          "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
-      fi
-    else
+    local inner=""
+    if [[ "$actionable" == "false" ]]; then
       [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      if [[ -n "$reactions" ]]; then
-        printf '    <comment id="%s" actionable="false" cache="%s">\n      <summary>%s</summary>\n      %s\n    </comment>\n' \
-          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")" "$reactions"
-      else
-        printf '    <comment id="%s" actionable="false" cache="%s"><summary>%s</summary></comment>\n' \
-          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
-      fi
+      inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
+    fi
+    inner+="$(reactions_xml_for "$raw_id")"
+    if [[ -z "$inner" ]]; then
+      printf '    <comment id="%s" actionable="%s" cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")"
+    else
+      printf '    <comment id="%s" actionable="%s" cache="%s">%s</comment>\n' \
+        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")" "$inner"
     fi
   done
   echo "  </comments>"

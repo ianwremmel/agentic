@@ -79,13 +79,19 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
   </checks>
   <merge-conflicts present="true|false"/>
   <reviews>
-    <review author="<login>" mode="bot|human"
+    <review author="<login>" mode="bot"
+            state="commented|approved|changes_requested|dismissed"/>
+    <review author="<login>" mode="human" role="operator|team"
             state="commented|approved|changes_requested|dismissed"/>
   </reviews>
   <comments>
     <comment id="<comment-id>" actionable="true"  cache="<abs-path>"/>
     <comment id="<comment-id>" actionable="false" cache="<abs-path>">
       <summary>1–3-sentence summary.</summary>
+      <reactions>
+        <reaction author="<login>" emoji="+1"/>
+        <reaction author="<login>" emoji="rocket"/>
+      </reactions>
     </comment>
   </comments>
   <threads>
@@ -148,11 +154,18 @@ implementation-defined configuration, not prescribed by this protocol.
 One `<review>` element per submitted review. The script MUST emit all submitted
 reviews; it MUST NOT deduplicate by reviewer.
 
-| Attribute | Type                                                  | Requirement | Meaning                             |
-| --------- | ----------------------------------------------------- | ----------- | ----------------------------------- |
-| `author`  | string                                                | REQUIRED    | Platform login of the reviewer      |
-| `mode`    | `bot\|human`                                          | REQUIRED    | See §Mode classification below      |
-| `state`   | `commented\|approved\|changes_requested\|dismissed`   | REQUIRED    | Platform review state, normalized   |
+| Attribute | Type                                                  | Requirement                                | Meaning                                              |
+| --------- | ----------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------- |
+| `author`  | string                                                | REQUIRED                                   | Platform login of the reviewer                       |
+| `mode`    | `bot\|human`                                          | REQUIRED                                   | See §Mode classification below                       |
+| `role`    | `operator\|team`                                      | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer |
+| `state`   | `commented\|approved\|changes_requested\|dismissed`   | REQUIRED                                   | Platform review state, normalized                    |
+
+**Role classification rule.** For each `<review mode="human">`: emit
+`role="operator"` iff `author` matches the supplied operator identity
+(case-insensitive); else `role="team"`. The operator identity input is
+described in §Operator identity below. The classifier MUST NOT emit `role` on
+`mode="bot"` reviews.
 
 ### `<comments>`
 
@@ -167,6 +180,24 @@ For `actionable="false"` elements: `<summary>` MUST be present with 1–3 senten
 | `id`         | string        | REQUIRED    | Platform-stable comment ID                     |
 | `actionable` | `true\|false` | REQUIRED    | Whether the agent must act on this comment     |
 | `cache`      | abs-path      | REQUIRED    | Absolute path to the `comments/<id>.md` file   |
+
+#### `<reactions>` (top-level comments only)
+
+Top-level `<comment>` elements MUST surface their platform reactions verbatim
+as a `<reactions>` child containing one `<reaction>` element per reaction.
+This enables agents to evaluate reaction-based approval signals (e.g. Gate 6
+in the Delivery Protocol) from the XML alone, without an additional API
+round-trip.
+
+The `<reactions>` element MAY be omitted when there are no reactions. Order is
+platform-defined and not significant. Reactions are surfaced for top-level
+comments only; `<thread>` and `<annotation>` elements do NOT carry
+`<reactions>` children in this revision.
+
+| Attribute | Type   | Requirement | Meaning                                                                                                          |
+| --------- | ------ | ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `author`  | string | REQUIRED    | Platform login of the reactor                                                                                    |
+| `emoji`   | string | REQUIRED    | Platform-normalized reaction name: `+1`, `-1`, `laugh`, `heart`, `hooray`, `confused`, `rocket`, `eyes`           |
 
 ### `<threads>` and `<annotations>`
 
@@ -187,13 +218,23 @@ For `actionable="false"` elements: `<summary>` MUST be present with 1–3 senten
 ### Top-level comments and threads
 
 Actionability follows §2.1.2 §"Thread-aware filtering" verbatim. An item is
-**non-actionable** iff either of the following holds:
+**non-actionable** iff any of the following holds:
 
 - The newest comment was written by the calling agent AND carries a terminal
   signal (a terminal reaction on platforms with reaction support, or a terminal
   text token on platforms without).
 - The platform has explicitly resolved the thread (review threads only; top-level
   comments have no platform resolution mechanism).
+- The comment is an **agent artifact** authored by the calling agent — one
+  carrying a line-anchored agent-artifact sentinel such as the Delivery
+  Protocol's plan comment (`<!-- agent-plan:<agent-id> -->`) or engagement
+  comment (`<!-- agent-engagement:<agent-id> -->`). These are the agent's own
+  working/soliciting comments, never reviewer items the agent must "address,"
+  so they MUST classify as non-actionable regardless of terminal signal. The
+  author-identity match is load-bearing: a human quoting one of these sentinels
+  stays actionable. (The set of recognized artifact sentinels is defined by the
+  consuming protocol, e.g. §2.4; this protocol only fixes the
+  author-match + line-anchored-sentinel classification rule.)
 
 Otherwise the item is **actionable**. In particular, a reviewer reply to an
 agent's previous turn makes the item actionable.
@@ -252,3 +293,20 @@ The calling agent MUST supply its identity when invoking the script. The
 mechanism — environment variable, CLI flag, or configuration file — is
 implementation-defined, but the script MUST NOT fall back to a default identity
 when none is supplied; it MUST fail with an error instead.
+
+## Operator identity
+
+Classifying `<review mode="human">` elements with `role="operator"` vs
+`role="team"` (see §`<reviews>`) requires knowing which account is the operator
+directing the calling agent.
+
+The calling agent MUST supply an operator identity when invoking the script.
+The mechanism mirrors §Calling agent identity — an implementation-defined
+input (environment variable, CLI flag, or configuration file). When the
+operator identity is missing, the script MUST NOT default it (for example, to
+the agent's own identity or to "no operator"); it MUST fail with an error.
+
+The classifier compares logins case-insensitively. An agent with no
+explicitly configured operator MAY supply a derived identity (for example, the
+ticket assigner from a linked tracker); the protocol is agnostic to how the
+calling agent obtains the value, only that it supplies one.

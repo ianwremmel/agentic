@@ -2,7 +2,8 @@
 # pr-status — emit PR state XML per §2.2.2 PR Status Protocol.
 #
 # Usage:
-#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> pr-status <pr>
+#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> \
+#     DISPATCH_OPERATOR_LOGIN=<login> pr-status <pr>
 #
 # Requires: gh, jq, claude. Run from inside the repo's git worktree.
 
@@ -12,6 +13,8 @@ PR="${1:-}"
 [[ -n "$PR" ]] || { echo "usage: pr-status <pr>" >&2; exit 2; }
 : "${DISPATCH_AGENT_ID:?DISPATCH_AGENT_ID required}"
 : "${DISPATCH_SKILL:?DISPATCH_SKILL required}"
+: "${DISPATCH_OPERATOR_LOGIN:?DISPATCH_OPERATOR_LOGIN required (operator GitHub login; see §2.2.2 Operator identity)}"
+OPERATOR_LC="$(printf '%s' "$DISPATCH_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
 
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 SLUG="${REPO/\//__}"
@@ -67,16 +70,19 @@ cache_item() {
 
 # --- fetch --------------------------------------------------------------------
 PR_JSON="$(gh pr view "$PR" --json \
-  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews,comments)"
+  number,headRefName,headRefOid,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews)"
 
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
-# reviewThreads isn't exposed by `gh pr view --json`, so fetch via GraphQL.
+# reviewThreads and top-level comments aren't both exposed with the fields we
+# need by `gh pr view --json` (in particular it omits comment reactions, which
+# Gate 6 needs), so fetch them via GraphQL.
 # Use the numeric PR number from PR_JSON since `$PR` may have been passed as
 # a URL or branch name (both accepted by `gh pr view`).
 PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
 OWNER="${REPO%/*}"
 REPO_NAME="${REPO#*/}"
+
 THREADS_JSON="$(gh api graphql \
   -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
   -f query='
@@ -97,6 +103,49 @@ THREADS_JSON="$(gh api graphql \
         }
       }
     }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
+
+# §2.2.2 requires EVERY top-level comment to appear, and Gate 6 reads reactions
+# off the (recent) engagement comment, so the comments connection must be fully
+# paginated — a `first:100` single page silently drops the engagement comment
+# (and its approval reaction) on long-running PRs. `--paginate` walks every page
+# via $endCursor; `--jq …nodes[]` emits one node per line across all pages, which
+# `jq -s` collects back into a single array.
+COMMENTS_JSON="$(gh api graphql --paginate \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          comments(first:100, after:$endCursor) {
+            nodes {
+              id
+              databaseId
+              body
+              author { login }
+              reactions(first:100) {
+                nodes { content user { login } }
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.comments.nodes[]' | jq -s '.')"
+
+# GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
+reaction_emoji() {
+  case "$1" in
+    THUMBS_UP)   printf '+1' ;;
+    THUMBS_DOWN) printf -- '-1' ;;
+    LAUGH)       printf 'laugh' ;;
+    HOORAY)      printf 'hooray' ;;
+    CONFUSED)    printf 'confused' ;;
+    HEART)       printf 'heart' ;;
+    ROCKET)      printf 'rocket' ;;
+    EYES)        printf 'eyes' ;;
+    *)           printf '%s' "$(tr '[:upper:]' '[:lower:]' <<<"$1")" ;;
+  esac
+}
 
 # --- checks -------------------------------------------------------------------
 checks_xml() {
@@ -142,8 +191,15 @@ reviews_xml() {
     fi
     local s; s="$(tr '[:upper:]' '[:lower:]' <<<"$state")"
     case "$s" in commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
-    printf '    <review author="%s" mode="%s" state="%s"/>\n' \
-      "$(xml_attr "$author")" "$mode" "$s"
+    if [[ "$mode" == "human" ]]; then
+      local role="team"
+      [[ "${author,,}" == "$OPERATOR_LC" ]] && role="operator"
+      printf '    <review author="%s" mode="%s" role="%s" state="%s"/>\n' \
+        "$(xml_attr "$author")" "$mode" "$role" "$s"
+    else
+      printf '    <review author="%s" mode="%s" state="%s"/>\n' \
+        "$(xml_attr "$author")" "$mode" "$s"
+    fi
   done
   echo "  </reviews>"
 }
@@ -162,20 +218,25 @@ has_terminal_signal() {
 # Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
 # Echoes "true" (actionable) or "false".
 # Full rules: reference.md → Actionability. Summary: non-actionable iff
-# thread-resolved, or the body is the calling agent's plan comment
-# (line-anchored plan-marker + author identity, so a human quoting the marker
-# stays actionable), or the body is the calling agent's terminal-tagged reply
-# (any agent-reply marker + author identity + terminal signal on the last
-# non-empty line). When $CALLER_LOGIN is unavailable (`gh api user` failed),
-# the reply check falls back to the pre-fix behavior — exact
-# $DISPATCH_AGENT_ID marker alone — so the script degrades, not fails.
+# thread-resolved, or the body is the calling agent's plan comment or
+# engagement comment (line-anchored agent-plan/agent-engagement sentinel +
+# author identity, so a human quoting the marker stays actionable), or the body
+# is the calling agent's terminal-tagged reply (any agent-reply marker + author
+# identity + terminal signal on the last non-empty line). When $CALLER_LOGIN is
+# unavailable (`gh api user` failed), the reply check falls back to the pre-fix
+# behavior — exact $DISPATCH_AGENT_ID marker alone — so the script degrades, not
+# fails.
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
   [[ "$resolved" == "true" ]] && { echo false; return; }
 
-  # Plan comment by the calling agent.
+  # Plan or engagement comment by the calling agent. Both are agent artifacts,
+  # not reviewer items: the engagement comment in particular anchors operator
+  # approval (Gate 6) and would otherwise stay actionable forever — blocking
+  # Gate 4 and thus the draft-clear/merge transitions — since the agent never
+  # "addresses" its own request.
   if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
-      && grep -qE '^<!-- agent-plan:[^ ]+ -->$' <<<"$body"; then
+      && grep -qE '^<!-- agent-(plan|engagement):[^ ]+ -->$' <<<"$body"; then
     echo false; return
   fi
 
@@ -198,27 +259,52 @@ classify_actionable() {
   echo true
 }
 
+# Emit <reactions>…</reactions> for a reactions-node JSON array, or nothing if
+# the array is empty. Used by comments_xml.
+reactions_xml_for() {
+  local rj="$1"
+  if [[ -z "$rj" || "$rj" == "[]" || "$rj" == "null" ]]; then
+    return 0
+  fi
+  echo "<reactions>"
+  jq -r '.[] | [(.user.login // ""), (.content // "")] | @tsv' <<<"$rj" |
+  while IFS=$'\t' read -r user content; do
+    [[ -n "$user" && -n "$content" ]] || continue
+    local emoji; emoji="$(reaction_emoji "$content")"
+    printf '        <reaction author="%s" emoji="%s"/>\n' \
+      "$(xml_attr "$user")" "$(xml_attr "$emoji")"
+  done
+  echo "      </reactions>"
+  return 0
+}
+
 # --- comments (top-level PR comments) -----------------------------------------
 comments_xml() {
   echo "  <comments>"
-  jq -c '.comments // [] | .[]' <<<"$PR_JSON" | while read -r c; do
-    local id author body
-    id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
+  jq -c '.[]' <<<"$COMMENTS_JSON" | while read -r c; do
+    local raw_id id author body reactions
+    raw_id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
     author="$(jq -r '.author.login // ""' <<<"$c")"
     body="$(jq -r '.body // ""' <<<"$c")"
-    [[ -n "$id" ]] || continue
-    id="${id//[^A-Za-z0-9_=-]/_}"
+    reactions="$(jq -c '.reactions.nodes // []' <<<"$c")"
+    [[ -n "$raw_id" ]] || continue
+    id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
     local actionable; actionable="$(classify_actionable "$body" "$author" "false")"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"
-    if [[ "$actionable" == "true" ]]; then
-      printf '    <comment id="%s" actionable="true" cache="%s"/>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
-    else
+    local inner=""
+    if [[ "$actionable" == "false" ]]; then
       [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      printf '    <comment id="%s" actionable="false" cache="%s"><summary>%s</summary></comment>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
+    fi
+    inner+="$(reactions_xml_for "$reactions")"
+    if [[ -z "$inner" ]]; then
+      printf '    <comment id="%s" actionable="%s" cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")"
+    else
+      printf '    <comment id="%s" actionable="%s" cache="%s">%s</comment>\n' \
+        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")" "$inner"
     fi
   done
   echo "  </comments>"

@@ -94,17 +94,66 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
   closes, and the universal `merged → done` terminal handles the eventual
   closure. Terminating early because there's nobody to ask is non-conforming.
 
+### Operator engagement (deliver-specific)
+
+The `deliver` skill engages the operator on two edges: `ready_for_private_review
+→ private_review_requested` (team mode) and `ready_for_public_review →
+public_review_requested` (solo mode). Each engagement is two parts: a
+**notification** (the Mode-specific venue below) plus an **engagement
+comment** — a top-level PR comment the agent posts carrying the
+`<!-- agent-reply:<agent-id> -->` machine marker AND, inside the wrapped body
+(like the plan comment's sentinel), an engagement sentinel
+`<!-- agent-engagement:<agent-id> -->`. The engagement comment is the anchor
+for reaction- and reply-based Gate 6 signals (a `+1` reaction or "go ahead"
+reply on it counts); the agent posts it regardless of Mode, since the
+notification venues below are not PR comments the operator can react to.
+
+The engagement sentinel makes the comment classify **non-actionable** (see
+§Actionability below) — exactly like the plan comment. Without it the agent's
+own soliciting comment would stay actionable forever (no terminal signal),
+permanently failing Gate 4 and blocking draft-clear/merge. Do **not**
+terminal-tag the engagement comment instead: the agent is awaiting approval,
+not finished with the item.
+
+Notification venue by Mode:
+
+- **Mode A** (separate bot account). Use the platform's PR review-request API,
+  targeting `operator_login` if set, otherwise the ticket assigner (same
+  selection mechanism §2.4.2 uses for human reviewers).
+- **Mode B** (shared credentials). The PR review-request API cannot target the
+  authenticated account, so use the same venues §2.4.2 specifies for Mode B
+  human-review engagement: a ticket comment tagging the operator first, then an
+  implementation-defined out-of-band channel. Operator identity is the
+  authenticated account itself.
+
+### Audience by visibility stage
+
+The lifecycle names states by **PR visibility**, not audience. Audience falls
+out of the mode:
+
+| State family       | Visibility           | Audience (solo mode) | Audience (team mode)            |
+| ------------------ | -------------------- | -------------------- | ------------------------------- |
+| `private_review_*` | draft (not cleared)  | unreachable          | operator                        |
+| `public_review_*`  | draft cleared        | operator             | non-operator team reviewer(s)   |
+
+In team mode the operator is **excluded** from the public reviewer set; the
+operator's binding signal is collected during `private_review_*` via Gate 6.
+
 ## Actionability (§2.2)
 
 The `pr-status` script applies these rules; the agent reads the resulting
 `actionable="true|false"`. For reference, a comment or thread is **non-actionable**
 iff any of:
 
-- the body is the calling agent's plan comment — a line-anchored
-  `<!-- agent-plan:... -->` sentinel AND a comment author matching the calling
-  gh identity. The agent edits its plan in place; it never needs to be
-  "addressed." (The author match keeps a *human* comment that merely quotes
-  the marker actionable.)
+- the body is one of the calling agent's artifact comments — a line-anchored
+  `<!-- agent-plan:... -->` (plan comment) or `<!-- agent-engagement:... -->`
+  (operator engagement comment) sentinel AND a comment author matching the
+  calling gh identity. These are the agent's own working/soliciting comments;
+  they never need to be "addressed." The engagement comment in particular
+  anchors operator approval (Gate 6) and must stay non-actionable while the
+  agent awaits a reaction/reply, else Gate 4 would block draft-clear/merge.
+  (The author match keeps a *human* comment that merely quotes a marker
+  actionable.)
 - the newest comment was written by the calling agent (gh-reported author
   equals the calling identity) AND carries an `<!-- agent-reply:... -->` marker
   AND its last non-empty line is a terminal signal (`Done.` / `Declined.` /

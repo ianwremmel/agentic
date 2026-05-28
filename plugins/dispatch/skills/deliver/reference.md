@@ -141,6 +141,18 @@ operator's binding signal is collected during `private_review_*` via Gate 6.
 
 ## Actionability (§2.2)
 
+**Why agents must not read PR state directly (§2.2.1).** A raw platform read —
+`gh pr view --json`, `gh pr checks`, `gh api …/comments|/reviews`, or an MCP PR
+read — returns thousands of tokens of mostly irrelevant fields, and that cost
+recurs on every poll until the context window fills. Worse, as a session grows,
+agents drift toward ad-hoc API calls and skip the established command, producing
+inconsistent snapshots that bypass the actionability classification (plan/own-reply
+suppression, thread resolution, `.ack`) and the disk cache the gates rely on.
+`scripts/pr-status` exists to fix exactly this: one coherent snapshot, heavy
+content written to stable disk paths, and a compact XML summary that answers every
+polling question at once. Route **all** PR-state reads through it; reserve direct
+`gh`/MCP calls for writes.
+
 The `pr-status` script applies these rules; the agent reads the resulting
 `actionable="true|false"`. For reference, a comment or thread is **non-actionable**
 iff any of:

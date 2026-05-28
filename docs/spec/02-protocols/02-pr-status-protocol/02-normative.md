@@ -11,6 +11,20 @@ The protocol covers:
 It does not cover the specific platform APIs queried to gather the underlying
 data.
 
+## Caller obligations
+
+A caller acting on PR state MUST route all platform state reads through
+`pr-status`. It MUST NOT call `gh pr view`, `gh pr checks`, `gh api …/comments`,
+`gh api …/reviews`, or any MCP PR read to evaluate gates or otherwise read PR
+state; the only platform reads a caller performs are the ones `pr-status`
+performs internally. A caller's direct platform calls are limited to **writes**
+(e.g. posting a reply, resolving a thread, requesting a review, marking a PR
+ready, adding a reaction).
+
+This obligation exists because direct reads burn context on every poll and
+bypass the actionability classification, summaries, and on-disk cache the
+snapshot owns (§2.2.1).
+
 ## Cache layout
 
 The per-PR cache root is:

@@ -145,6 +145,7 @@ Apply to every actionable item the XML emits, not just the first.
 
 These apply in every state; they are not states themselves.
 
+- **Read PR state only through `scripts/pr-status`.** Every gate evaluation and state read comes from a `pr-status` XML snapshot — never `gh pr view`, `gh pr checks`, `gh api …/comments|/reviews`, or MCP PR reads. Those raw reads burn context and bypass the actionability rules. The only platform *reads* `deliver` performs are the ones *inside* `pr-status`; the only direct `gh`/MCP calls `deliver` makes are *writes* (reply, resolve thread, request review, mark ready, react).
 - **Pre-push review.** Before every significant push, run an adversarial review consisting of **two passes**:
   1. *Spec-aware* — given the relevant spec/docs **and** the PR contents (diff + commit messages), find every place the code drifts from what the spec mandates: missing required behavior, extra behavior the spec doesn't sanction, or behavior that conflicts with the spec.
   2. *Spec-blind* — given **only** the PR contents (diff + commit messages), with no spec or external docs, find every bug, internal inconsistency, or claim-vs-implementation gap (judged against the PR's own commit messages, identifiers, and in-diff comments).

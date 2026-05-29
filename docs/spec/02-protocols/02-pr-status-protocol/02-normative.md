@@ -26,8 +26,9 @@ something emergent that the snapshot and cache do not cover — data not availab
 locally — it MAY fetch that data directly. The obligation is narrower but firm:
 the PR status a caller routes its lifecycle decisions through comes only from
 `dispatch pr-status`. A caller's routine direct platform calls are **writes**
-(e.g. posting a reply, resolving a thread, requesting a review, marking a PR
-ready, adding a reaction).
+(e.g. posting a reply, requesting a review, marking a PR ready, adding a
+reaction). Note that resolving a thread is not among an agent's writes — see
+§2.1.2 §Writing rules.
 
 This obligation exists because ad-hoc status reads burn context on every poll
 and bypass the actionability classification, summaries, and on-disk cache that

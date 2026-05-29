@@ -90,7 +90,12 @@ agent wrote. The output follows this pattern:
 4. Check `<checks state="...">` for CI rollup and `<merge-conflicts>` for
    conflicts.
 5. Check `<reviews>` for Copilot and human review state.
-6. Skim `<summary>` text on non-actionable items for context.
+6. Read `<terminal state="...">` for the resolved lifecycle terminal —
+   `open`/`draft` while live, or the binary `shipped`/`abandoned` once closed
+   (the command resolves merge-queue and squash/rebase landings, so a closed PR
+   whose change is in base reads `shipped` even when the platform never marked
+   it merged).
+7. Skim `<summary>` text on non-actionable items for context.
 
 The caller never reads platform state directly. All platform reads go through
 `dispatch pr-status`, which owns the cache.

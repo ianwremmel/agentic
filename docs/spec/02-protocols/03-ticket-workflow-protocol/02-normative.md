@@ -370,7 +370,7 @@ Every log entry MUST be a single line in this format:
 | `<ticket-link>` | Full URL to the ticket. `-` if no ticket.                                                     |
 | `<pr-link>`     | Full URL to the PR. `-` if no PR.                                                             |
 | `<role>`        | The protocol role, e.g. `in-progress`. `-` if no ticket.                                     |
-| `<pr-state>`    | `draft`, `open`, `merged`, or `closed`. `-` if no PR.                                        |
+| `<pr-state>`    | `draft`, `open`, `shipped`, or `abandoned` (the resolved PR-status terminal; `shipped` covers any way the change lands in base, `abandoned` is closed-without-landing). `-` if no PR. |
 | `<message>`     | Free text, one line. REQUIRED for `TRANSITION`, `WAIT`, `RESUME`, `BLOCK`, and `ERROR`.      |
 
 `<kind>` semantics:

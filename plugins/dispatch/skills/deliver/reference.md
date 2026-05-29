@@ -198,7 +198,11 @@ One line per entry:
 - `<timestamp>`: RFC 3339 with offset, second precision.
 - `<kind>`: `TRANSITION` | `WAIT` | `RESUME` | `BLOCK` | `INFO` | `ERROR`.
 - `ticket=` / `pr=`: full URLs, never bare IDs; `-` when absent.
-- `<pr-state>`: `draft` | `open` | `merged` | `closed`; `-` when no PR.
+- `<pr-state>`: the resolved `<terminal state>` from `pr-status` — `draft` |
+  `open` (non-terminal) or `shipped` | `abandoned` (terminal); `-` when no PR.
+  `shipped` covers every way a change lands in base (GitHub-merge, merge-queue
+  fast-forward, squash/rebase by external tooling); `abandoned` is closed with
+  the change absent from base.
 
 Kinds `deliver` emits:
 

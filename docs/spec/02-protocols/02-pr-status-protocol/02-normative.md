@@ -95,6 +95,7 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
 
 ```xml
 <pr-status repo="<owner>/<repo>" pr="42" head="<branch>">
+  <terminal state="open|draft|shipped|abandoned" gh-merged="true|false" ahead-by="0|<n>|-"/>
   <checks state="passing|failing|pending">
     <check name="lint" conclusion="failure" url="..." informational="false" stuck="false"/>
     <check name="test" conclusion="success" url="..."/>
@@ -138,6 +139,50 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
 | `repo`    | string | REQUIRED    | Repository in `<owner>/<repo>` form       |
 | `pr`      | int    | REQUIRED    | Pull request number                       |
 | `head`    | string | REQUIRED    | Current head branch name or commit SHA    |
+
+### `<terminal>`
+
+Resolves whether the PR's change has **shipped** — independent of how (or by
+whom) it landed. Emitted exactly once, as the first child of `<pr-status>`.
+
+| Attribute   | Type                            | Requirement | Meaning                                                                 |
+| ----------- | ------------------------------- | ----------- | ----------------------------------------------------------------------- |
+| `state`     | `open\|draft\|shipped\|abandoned` | REQUIRED  | Resolved lifecycle terminal; see resolution rules below                 |
+| `gh-merged` | `true\|false`                   | REQUIRED    | Whether the platform itself marked the PR merged (`state==MERGED` / `mergedAt` set) |
+| `ahead-by`  | `0\|<n>\|-`                     | REQUIRED    | `ahead_by` from the base…head three-dot compare; `-` when not computed  |
+
+`open` and `draft` are **non-terminal** (the PR is still live; `draft` iff the
+platform reports the PR as a draft). `shipped` and `abandoned` are **terminal**,
+emitted only once the PR is closed.
+
+**Resolution rules** (evaluated in order; first match wins). The intent is
+binary: *the change is shipped iff it is present in base, regardless of merge
+mechanism.* Steps are ordered cheapest-first; an implementation MUST NOT touch
+git before the final step.
+
+1. PR still open → `open` (or `draft` if the platform marks it draft). No
+   further work.
+2. `gh-merged` → `shipped`. (Platform-recorded merge; API only.)
+3. Closed without `gh-merged`, and the base…head three-dot compare reports
+   `ahead_by == 0` → `shipped`. Every head commit is already reachable from
+   base (plain merge, fast-forward, or a merge-queue close where the platform
+   never set merged). API only; the compare MUST accept the head **SHA** so it
+   works even after the head branch is deleted.
+4. Closed, `ahead_by > 0` → a **content check**: build the PR's combined net
+   patch (`merge-base(base,head)…head`) and reverse-apply it against the base
+   tip. Reverse-applies cleanly → the content is present → `shipped`; otherwise
+   → `abandoned`. This is squash/rebase-safe (n→1 squashes and rebase rewrites
+   match by combined content, which per-commit patch-id matching would miss).
+   An empty net patch (no-op PR) reverse-applies trivially → `shipped`.
+
+If the content check in step 4 cannot run (no repository available, fetch
+fails), the implementation MUST NOT guess: it emits `state="abandoned"` with an
+`error` attribute breadcrumb (e.g. `error="content-check-unavailable"`) so a
+human can reconcile rather than risk a false claim of delivery.
+
+| Attribute | Type   | Requirement | Meaning                                                              |
+| --------- | ------ | ----------- | -------------------------------------------------------------------- |
+| `error`   | string | OPTIONAL    | Present iff a terminal could not be resolved cleanly; carries a diagnostic breadcrumb and forces `state="abandoned"` |
 
 ### `<checks>`
 

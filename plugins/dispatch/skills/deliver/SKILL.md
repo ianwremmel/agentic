@@ -139,12 +139,12 @@ The `team_mode` userConfig (default `false`) selects between two delivery shapes
 
 Apply to every actionable item the XML emits, not just the first.
 
-| XML signal                                            | Action                                                                  |
-| ----------------------------------------------------- | ----------------------------------------------------------------------- |
-| `<merge-conflicts present="true"/>` (gate 2 fails)    | Rebase or merge the target branch; resolve.                             |
-| `<checks state="failing">` (gate 1 fails)             | Diagnose root cause; fix.                                               |
-| Actionable `<comment>` or `<thread>` (gates 4–5 fail) | Reply and apply a terminal signal — never resolve the thread. See below. |
-| Actionable `<annotation>` (gate 3 fails)              | Fix the code, OR dismiss with a `<cache>/$id.ack` carrying the rationale. |
+| XML signal                                            | Action                                                                     |
+| ----------------------------------------------------- | -------------------------------------------------------------------------- |
+| `<merge-conflicts present="true"/>` (gate 2 fails)    | Rebase or merge the target branch; resolve.                                |
+| `<checks state="failing">` (gate 1 fails)             | Diagnose root cause; fix.                                                   |
+| Actionable `<comment>` or `<thread>` (gates 4–5 fail) | Reply and apply a terminal signal — never resolve the thread. See below.   |
+| Actionable `<annotation>` (gate 3 fails)              | Fix the code, OR dismiss with a `<cache>/$id.ack` carrying the rationale.   |
 
 For an actionable `<comment>` or `<thread>`: reply per §2.1 with **either** a
 commit link describing what changed **or** a one-line dismissal rationale, then

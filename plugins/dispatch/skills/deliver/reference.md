@@ -66,10 +66,10 @@ A terminal signal means "finished with this item"; it suppresses re-evaluation
 on the next poll. Anything else means "still working."
 
 The agent signals "finished" **only** through a terminal signal — it MUST NOT
-resolve the thread. Thread resolution is the initiator's prerogative; a thread
-being non-actionable to the agent does not mean the initiator is satisfied.
-Platform-resolved threads are read (see §Actionability) but never written by the
-agent.
+resolve the thread, including one it opened itself. Resolution is a human's
+call; a thread being non-actionable to the agent does not mean a human
+participant is satisfied. Platform-resolved threads are read (see
+§Actionability) but never written by the agent.
 
 Reactions (preferred where supported):
 

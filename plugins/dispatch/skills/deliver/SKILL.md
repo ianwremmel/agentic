@@ -139,12 +139,19 @@ The `team_mode` userConfig (default `false`) selects between two delivery shapes
 
 Apply to every actionable item the XML emits, not just the first.
 
-| XML signal                                            | Action                                                                                                                                                             |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `<merge-conflicts present="true"/>` (gate 2 fails)    | Rebase or merge the target branch; resolve.                                                                                                                        |
-| `<checks state="failing">` (gate 1 fails)             | Diagnose root cause; fix.                                                                                                                                          |
-| Actionable `<comment>` or `<thread>` (gates 4–5 fail) | Reply per §2.1 with **either** a commit link describing what changed **or** a one-line dismissal rationale. Apply terminal signal. **Never resolve the thread** (even one you opened) — resolution is a human's call (§2.1); your terminal signal already suppresses re-evaluation. |
-| Actionable `<annotation>` (gate 3 fails)              | Fix the code, OR dismiss by writing `<cache>/$id.ack` with the rationale captured in the plan comment or commit body.                                              |
+| XML signal                                            | Action                                                                              |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `<merge-conflicts present="true"/>` (gate 2 fails)    | Rebase or merge the target branch; resolve.                                         |
+| `<checks state="failing">` (gate 1 fails)             | Diagnose root cause; fix.                                                            |
+| Actionable `<comment>` or `<thread>` (gates 4–5 fail) | Reply and apply a terminal signal — never resolve the thread. See below.            |
+| Actionable `<annotation>` (gate 3 fails)              | Fix the code, OR dismiss with a `<cache>/$id.ack` carrying the rationale.            |
+
+For an actionable `<comment>` or `<thread>`: reply per §2.1 with **either** a
+commit link describing what changed **or** a one-line dismissal rationale, then
+apply a terminal signal. **Never resolve the thread** — not even one you opened;
+resolution is a human's call (§2.1), and your terminal signal already suppresses
+re-evaluation. For a dismissed `<annotation>`, capture the `.ack` rationale in
+the plan comment or commit body.
 
 ## Cross-cutting behaviors
 

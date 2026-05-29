@@ -139,18 +139,25 @@ The `team_mode` userConfig (default `false`) selects between two delivery shapes
 
 Apply to every actionable item the XML emits, not just the first.
 
-| XML signal                                            | Action                                                                                                                                                             |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `<merge-conflicts present="true"/>` (gate 2 fails)    | Rebase or merge the target branch; resolve.                                                                                                                        |
-| `<checks state="failing">` (gate 1 fails)             | Diagnose root cause; fix.                                                                                                                                          |
-| Actionable `<comment>` or `<thread>` (gates 4–5 fail) | Reply per §2.1 with **either** a commit link describing what changed **or** a one-line dismissal rationale. Apply terminal signal. Resolve threads when satisfied. |
-| Actionable `<annotation>` (gate 3 fails)              | Fix the code, OR dismiss by writing `<cache>/$id.ack` with the rationale captured in the plan comment or commit body.                                              |
+| XML signal                                            | Action                                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------------------- |
+| `<merge-conflicts present="true"/>` (gate 2 fails)    | Rebase or merge the target branch; resolve.                               |
+| `<checks state="failing">` (gate 1 fails)             | Diagnose root cause; fix.                                                 |
+| Actionable `<comment>` or `<thread>` (gates 4–5 fail) | Reply and apply a terminal signal — never resolve the thread. See below.  |
+| Actionable `<annotation>` (gate 3 fails)              | Fix the code, OR dismiss with a `<cache>/$id.ack` carrying the rationale. |
+
+For an actionable `<comment>` or `<thread>`: reply per §2.1 with **either** a
+commit link describing what changed **or** a one-line dismissal rationale, then
+apply a terminal signal. **Never resolve the thread** — not even one you opened;
+resolution is a human's call (§2.1), and your terminal signal already suppresses
+re-evaluation. For a dismissed `<annotation>`, capture the `.ack` rationale in
+the plan comment or commit body.
 
 ## Cross-cutting behaviors
 
 These apply in every state; they are not states themselves.
 
-- **Read PR state only through `scripts/pr-status`.** Every gate evaluation and actionability decision comes from a `pr-status` XML snapshot and the on-disk cache it populates — never from `gh pr view`, `gh pr checks`, `gh api …/comments|/reviews`, or MCP PR reads. When you need a comment/thread/annotation's full text, read the cache file `pr-status` already wrote rather than re-fetching. Those ad-hoc status reads burn context and bypass the actionability rules. This isn't a blanket ban: if you must investigate something emergent the snapshot and cache don't cover, you may fetch that data directly — but the PR *status* you drive the lifecycle from comes only from `pr-status`, and your routine direct `gh`/MCP calls are *writes* (reply, resolve thread, request review, mark ready, react).
+- **Read PR state only through `scripts/pr-status`.** Every gate evaluation and actionability decision comes from a `pr-status` XML snapshot and the on-disk cache it populates — never from `gh pr view`, `gh pr checks`, `gh api …/comments|/reviews`, or MCP PR reads. When you need a comment/thread/annotation's full text, read the cache file `pr-status` already wrote rather than re-fetching. Those ad-hoc status reads burn context and bypass the actionability rules. This isn't a blanket ban: if you must investigate something emergent the snapshot and cache don't cover, you may fetch that data directly — but the PR *status* you drive the lifecycle from comes only from `pr-status`, and your routine direct `gh`/MCP calls are *writes* (reply, request review, mark ready, react — never resolve threads, not even your own; that's a human's call, §2.1).
 - **Pre-push review.** Before every significant push, run an adversarial review consisting of **two passes**:
   1. *Spec-aware* — given the relevant spec/docs **and** the PR contents (diff + commit messages), find every place the code drifts from what the spec mandates: missing required behavior, extra behavior the spec doesn't sanction, or behavior that conflicts with the spec.
   2. *Spec-blind* — given **only** the PR contents (diff + commit messages), with no spec or external docs, find every bug, internal inconsistency, or claim-vs-implementation gap (judged against the PR's own commit messages, identifiers, and in-diff comments).

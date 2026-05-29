@@ -206,6 +206,16 @@ Three write operations exist:
 
 Reactions carry no body and therefore require neither marker.
 
+An agent MUST NOT resolve a thread (e.g. GitHub's "Resolve conversation"
+button) — **including a thread the agent itself opened**. Resolution is the
+prerogative of a human: a thread having been acted on and no longer being
+actionable to the agent does not mean a human participant is satisfied with the
+action, and an agent acting as reviewer is no more entitled to close discussion
+than one acting as author. The agent signals "finished with this item" through a
+terminal signal (§Terminal signals), never by resolving the thread.
+Platform-resolved threads are still consumed on the read side (§Read-side rules)
+— the agent reads resolution, it does not write it.
+
 ## Review rules
 
 ### Requesting a review

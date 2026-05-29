@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "author": {
     "name": "Ian Remmel"
   },

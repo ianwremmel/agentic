@@ -167,8 +167,24 @@ don't cover may legitimately need a direct read — but the PR status you act on
 comes only from `pr-status`, and routine direct `gh`/MCP calls are writes.
 
 The `pr-status` script applies these rules; the agent reads the resulting
-`actionable="true|false"`. For reference, a comment or thread is **non-actionable**
-iff any of:
+`actionable="true|false"` and treats it as the **sole authority** — no gate or
+lifecycle decision is re-derived from anything else. A non-actionable item also
+carries a `reason=` token naming *why* it was suppressed (`resolved`,
+`agent-artifact`, `agent-terminal-reply`, `acked`) and may carry a `<summary>`
+for human context. The `<summary>` describes the item's *content*, not its
+resolution, so an item the agent already terminal-tagged will summarize as if the
+reviewer's point still stands — that is expected and is **not** grounds to reopen
+it. Trust the flag (and the `reason=`); never let summary prose re-actionable a
+suppressed item.
+
+A requested-but-undelivered review is surfaced separately under
+`<review-requests>` (one `<review-request reviewer=… mode="human|bot"/>` per
+outstanding request). It is in-flight, not absent: an empty thread set while a
+request is outstanding is not convergence, and a *pending/unsubmitted* review is
+not surfaced at all until it is submitted. Keep polling rather than chasing
+either through raw reads.
+
+For reference, a comment or thread is **non-actionable** iff any of:
 
 - the body is one of the calling agent's artifact comments — a line-anchored
   `<!-- agent-plan:... -->` (plan comment) or `<!-- agent-engagement:... -->`

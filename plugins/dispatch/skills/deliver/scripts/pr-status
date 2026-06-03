@@ -70,7 +70,7 @@ cache_item() {
 
 # --- fetch --------------------------------------------------------------------
 PR_JSON="$(gh pr view "$PR" --json \
-  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews)"
+  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews,reviewRequests)"
 
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
@@ -204,6 +204,29 @@ reviews_xml() {
   echo "  </reviews>"
 }
 
+# --- pending review requests --------------------------------------------------
+# A requested-but-undelivered review (a reviewer GitHub lists under
+# reviewRequests) is in-flight, not absent: Copilot in particular posts its
+# inline threads minutes after the request, so an empty thread set while a
+# request is outstanding is NOT convergence. Surfacing these lets the agent keep
+# polling instead of prematurely calling the PR clean. Mode classification
+# mirrors reviews_xml (bot iff GitHub types it a Bot or the login matches the
+# agent-identity regex).
+review_requests_xml() {
+  echo "  <review-requests>"
+  jq -r '.reviewRequests // [] | .[] | [((.login // .slug // .name) // ""), (.__typename // "")] | @tsv' <<<"$PR_JSON" |
+  while IFS=$'\t' read -r who typ; do
+    [[ -n "$who" ]] || continue
+    local mode="human"
+    if [[ "$typ" == "Bot" ]] || [[ "${who,,}" =~ (copilot|codex|claude|ai-agent) ]]; then
+      mode="bot"
+    fi
+    printf '    <review-request reviewer="%s" mode="%s"/>\n' \
+      "$(xml_attr "$who")" "$mode"
+  done
+  echo "  </review-requests>"
+}
+
 # Returns 0 iff $1's last non-empty line is a canonical terminal signal.
 # Anchoring to the last non-empty line matches reference.md ("must be the
 # last non-empty line"); inline mentions of "done" in prose stay actionable.
@@ -216,7 +239,13 @@ has_terminal_signal() {
 
 # --- actionability ------------------------------------------------------------
 # Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
-# Echoes "true" (actionable) or "false".
+# Echoes a tab-separated "<actionable>\t<reason>" pair: actionable is "true" or
+# "false"; reason is empty when actionable, else a stable token explaining *why*
+# the item is suppressed (`resolved`, `agent-artifact`, `agent-terminal-reply`).
+# The reason is surfaced as a `reason=` attribute so the agent never has to
+# re-derive suppression from the human-facing <summary> prose (which describes
+# the thread's *content* and will read as if an addressed reviewer point still
+# stands).
 # Full rules: reference.md → Actionability. Summary: non-actionable iff
 # thread-resolved, or the body is the calling agent's plan comment or
 # engagement comment (line-anchored agent-plan/agent-engagement sentinel +
@@ -228,7 +257,7 @@ has_terminal_signal() {
 # fails.
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
-  [[ "$resolved" == "true" ]] && { echo false; return; }
+  [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
 
   # Plan or engagement comment by the calling agent. Both are agent artifacts,
   # not reviewer items: the engagement comment in particular anchors operator
@@ -237,7 +266,7 @@ classify_actionable() {
   # "addresses" its own request.
   if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
       && grep -qE '^<!-- agent-(plan|engagement):[^ ]+ -->$' <<<"$body"; then
-    echo false; return
+    printf 'false\tagent-artifact\n'; return
   fi
 
   # Terminal-tagged reply by the calling agent.
@@ -245,18 +274,31 @@ classify_actionable() {
     if [[ -n "$CALLER_LOGIN" ]]; then
       if [[ "$author" == "$CALLER_LOGIN" ]] \
           && grep -qF '<!-- agent-reply:' <<<"$body"; then
-        echo false; return
+        printf 'false\tagent-terminal-reply\n'; return
       fi
     else
       # Degraded path: no caller identity; gate on the exact agent-id marker
       # alone. False-positive on a human quoting the exact marker + terminal
       # signal is preserved from the pre-fix behavior.
       if grep -qF "<!-- agent-reply:$DISPATCH_AGENT_ID -->" <<<"$body"; then
-        echo false; return
+        printf 'false\tagent-terminal-reply\n'; return
       fi
     fi
   fi
-  echo true
+  printf 'true\t\n'
+}
+
+# Parse a classify_actionable result into the globals $CA_ACTIONABLE and
+# $CA_REASON_ATTR (the latter ready to splice into a start tag, empty unless
+# non-actionable with a reason). Keeps the tab-splitting in one place.
+parse_actionable() {
+  CA_ACTIONABLE="${1%%$'\t'*}"
+  local reason="${1#*$'\t'}"
+  if [[ "$CA_ACTIONABLE" == "false" && -n "$reason" ]]; then
+    CA_REASON_ATTR=" reason=\"$(xml_attr "$reason")\""
+  else
+    CA_REASON_ATTR=""
+  fi
 }
 
 # Emit <reactions>…</reactions> for a reactions-node JSON array, or nothing if
@@ -290,7 +332,8 @@ comments_xml() {
     [[ -n "$raw_id" ]] || continue
     id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
-    local actionable; actionable="$(classify_actionable "$body" "$author" "false")"
+    parse_actionable "$(classify_actionable "$body" "$author" "false")"
+    local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"
     local inner=""
@@ -300,11 +343,11 @@ comments_xml() {
     fi
     inner+="$(reactions_xml_for "$reactions")"
     if [[ -z "$inner" ]]; then
-      printf '    <comment id="%s" actionable="%s" cache="%s"/>\n' \
-        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")"
+      printf '    <comment id="%s" actionable="%s"%s cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")"
     else
-      printf '    <comment id="%s" actionable="%s" cache="%s">%s</comment>\n' \
-        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")" "$inner"
+      printf '    <comment id="%s" actionable="%s"%s cache="%s">%s</comment>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")" "$inner"
     fi
   done
   echo "  </comments>"
@@ -323,7 +366,8 @@ threads_xml() {
     [[ -n "$id" ]] || continue
     id="${id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "threads" "$body"
-    local actionable; actionable="$(classify_actionable "$newest_body" "$newest_author" "$resolved")"
+    parse_actionable "$(classify_actionable "$newest_body" "$newest_author" "$resolved")"
+    local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/threads/$id.md"
     local sum_path="$DIR/threads/$id.summary.md"
     if [[ "$actionable" == "true" ]]; then
@@ -331,8 +375,8 @@ threads_xml() {
         "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
     else
       [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      printf '    <thread id="%s" actionable="false" cache="%s"><summary>%s</summary></thread>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      printf '    <thread id="%s" actionable="false"%s cache="%s"><summary>%s</summary></thread>\n' \
+        "$(xml_attr "$id")" "$reason_attr" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
     fi
   done
   echo "  </threads>"
@@ -361,7 +405,7 @@ annotations_xml() {
       local sum_path="$DIR/annotations/$id.summary.md"
       if [[ -f "$ack" ]]; then
         [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-        printf '    <annotation id="%s" actionable="false" cache="%s"><summary>%s</summary></annotation>\n' \
+        printf '    <annotation id="%s" actionable="false" reason="acked" cache="%s"><summary>%s</summary></annotation>\n' \
           "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
       else
         printf '    <annotation id="%s" actionable="true" cache="%s"/>\n' \
@@ -492,6 +536,7 @@ terminal_xml
 checks_xml
 conflicts_xml
 reviews_xml
+review_requests_xml
 comments_xml
 threads_xml
 annotations_xml

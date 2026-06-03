@@ -54,7 +54,12 @@ $(cat "$body")" > "$out" 2>/dev/null || echo "(summary unavailable)" > "$out"
 }
 
 # Args: <id> <subdir> <body>
-# Writes <id>.md (and regenerates summary on change); echoes 1 if summary present.
+# Writes <id>.md when the body changes. The summary is intentionally NOT deleted
+# on change: a summary, once generated for a settled (non-actionable) item, is a
+# recap the agent reads alongside the new content when the item later flips back
+# to actionable (a reviewer reply) — instead of re-reading the whole thread. It
+# is generated lazily (see the per-section emitters: only when an item is
+# non-actionable and no summary exists yet) and then persists.
 cache_item() {
   local id="$1" sub="$2" body="$3"
   local md="$DIR/$sub/$id.md"
@@ -64,7 +69,6 @@ cache_item() {
   if [[ ! -f "$md" || "$new_hash" != "$old_hash" ]]; then
     printf '%s' "$body" > "$md"
     printf '%s' "$new_hash" > "$hash_file"
-    [[ "$sub" != "annotations" ]] && rm -f "$DIR/$sub/$id.summary.md"
   fi
 }
 
@@ -180,9 +184,44 @@ conflicts_xml() {
 }
 
 # --- reviews ------------------------------------------------------------------
+# One persistent record per reviewer (PR #132 model): a reviewer who was
+# requested OR has reviewed appears exactly once, carrying a status that walks
+# pending -> commented/changes_requested/approved (plus dismissed). An
+# outstanding request OVERRIDES any prior verdict back to "pending" — a fresh
+# request "replaces" the old review until the reviewer re-reviews — so a
+# re-requested Copilot, or an operator re-requested after approving, reads as
+# pending and the agent keeps polling instead of treating the stale verdict as
+# current. `state="pending"` is the in-flight signal: an empty thread set while a
+# pending review stands is NOT convergence. Mode is bot iff GitHub types the
+# account a Bot or the login matches the agent-identity regex; role is operator
+# iff the login is the configured operator, else team (humans only).
 reviews_xml() {
   echo "  <reviews>"
-  jq -r '.reviews // [] | .[] | [(.author.login // ""), (.author.is_bot // false), (.state // "")] | @tsv' <<<"$PR_JSON" |
+  jq -r '
+    # Requested reviewers (currently-outstanding requests): login + bot-ness.
+    ( [ (.reviewRequests // [])[]
+        | { login: ((.login // .slug // .name) // ""), is_bot: ((.__typename // "") == "Bot") }
+        | select(.login != "") ] ) as $reqs
+    | ( [ $reqs[].login | ascii_downcase ] ) as $reqset
+    # Latest review per author, keyed by lowercased login.
+    | ( reduce (.reviews // [])[] as $r ({};
+          ( ($r.author.login // "") ) as $lg
+          | if $lg == "" then .
+            else .[($lg | ascii_downcase)] =
+                   { login: $lg, is_bot: ($r.author.is_bot // false), state: ($r.state // "COMMENTED") }
+            end
+        ) ) as $rev
+    # Add a pending stub for any requested reviewer that has not reviewed.
+    | ( $rev + ( reduce $reqs[] as $q ({};
+          ( $q.login | ascii_downcase ) as $k
+          | if ($rev[$k]) then . else .[$k] = { login: $q.login, is_bot: $q.is_bot, state: "PENDING" } end
+        ) ) )
+    # Pending override: an outstanding request forces the status back to pending.
+    | to_entries
+    | map( .key as $k | .value + { state: ( if ($reqset | index($k)) then "PENDING" else .value.state end ) } )
+    | .[]
+    | [ .login, (.is_bot | tostring), .state ] | @tsv
+  ' <<<"$PR_JSON" |
   while IFS=$'\t' read -r author is_bot state; do
     [[ -n "$author" ]] || continue
     local mode="human"
@@ -190,7 +229,7 @@ reviews_xml() {
       mode="bot"
     fi
     local s; s="$(tr '[:upper:]' '[:lower:]' <<<"$state")"
-    case "$s" in commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
+    case "$s" in pending|commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
     if [[ "$mode" == "human" ]]; then
       local role="team"
       [[ "${author,,}" == "$OPERATOR_LC" ]] && role="operator"
@@ -202,29 +241,6 @@ reviews_xml() {
     fi
   done
   echo "  </reviews>"
-}
-
-# --- pending review requests --------------------------------------------------
-# A requested-but-undelivered review (a reviewer GitHub lists under
-# reviewRequests) is in-flight, not absent: Copilot in particular posts its
-# inline threads minutes after the request, so an empty thread set while a
-# request is outstanding is NOT convergence. Surfacing these lets the agent keep
-# polling instead of prematurely calling the PR clean. Mode classification
-# mirrors reviews_xml (bot iff GitHub types it a Bot or the login matches the
-# agent-identity regex).
-review_requests_xml() {
-  echo "  <review-requests>"
-  jq -r '.reviewRequests // [] | .[] | [((.login // .slug // .name) // ""), (.__typename // "")] | @tsv' <<<"$PR_JSON" |
-  while IFS=$'\t' read -r who typ; do
-    [[ -n "$who" ]] || continue
-    local mode="human"
-    if [[ "$typ" == "Bot" ]] || [[ "${who,,}" =~ (copilot|codex|claude|ai-agent) ]]; then
-      mode="bot"
-    fi
-    printf '    <review-request reviewer="%s" mode="%s"/>\n' \
-      "$(xml_attr "$who")" "$mode"
-  done
-  echo "  </review-requests>"
 }
 
 # Returns 0 iff $1's last non-empty line is a canonical terminal signal.
@@ -336,11 +352,12 @@ comments_xml() {
     local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"
+    # Generate the recap lazily, only for a settled (non-actionable) item with no
+    # summary yet; once written it persists and is emitted in either state so the
+    # agent can read it when the item later flips back to actionable.
+    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
     local inner=""
-    if [[ "$actionable" == "false" ]]; then
-      [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
-    fi
+    [[ -f "$sum_path" ]] && inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
     inner+="$(reactions_xml_for "$reactions")"
     if [[ -z "$inner" ]]; then
       printf '    <comment id="%s" actionable="%s"%s cache="%s"/>\n' \
@@ -370,13 +387,17 @@ threads_xml() {
     local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/threads/$id.md"
     local sum_path="$DIR/threads/$id.summary.md"
-    if [[ "$actionable" == "true" ]]; then
-      printf '    <thread id="%s" actionable="true" cache="%s"/>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+    # Generate the recap lazily for a settled (non-actionable) thread with none
+    # yet; it persists and is emitted in either state. When the thread flips back
+    # to actionable (a reviewer reply), the agent reads this recap plus the new
+    # content from the cache file instead of re-reading the whole thread.
+    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+    if [[ -f "$sum_path" ]]; then
+      printf '    <thread id="%s" actionable="%s"%s cache="%s"><summary>%s</summary></thread>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
     else
-      [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      printf '    <thread id="%s" actionable="false"%s cache="%s"><summary>%s</summary></thread>\n' \
-        "$(xml_attr "$id")" "$reason_attr" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      printf '    <thread id="%s" actionable="%s"%s cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")"
     fi
   done
   echo "  </threads>"
@@ -536,7 +557,6 @@ terminal_xml
 checks_xml
 conflicts_xml
 reviews_xml
-review_requests_xml
 comments_xml
 threads_xml
 annotations_xml

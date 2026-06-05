@@ -225,12 +225,12 @@ exactly once. The script MUST deduplicate by reviewer (case-insensitive on
 `author`), collapsing a reviewer's history to a single element whose `state`
 reflects their current standing.
 
-| Attribute | Type                                                          | Requirement                                    | Meaning                                              |
-| --------- | ------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
-| `author`  | string                                                        | REQUIRED                                       | Platform login of the reviewer                       |
-| `mode`    | `bot\|human`                                                  | REQUIRED                                       | See §Mode classification below                       |
-| `role`    | `operator\|team`                                              | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer  |
-| `state`   | `pending\|commented\|approved\|changes_requested\|dismissed` | REQUIRED                                       | Reviewer's current standing — see rules below        |
+| Attribute | Type                                                         | Requirement                                    | Meaning                                             |
+| --------- | ------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------- |
+| `author`  | string                                                       | REQUIRED                                       | Platform login of the reviewer                      |
+| `mode`    | `bot\|human`                                                 | REQUIRED                                       | See §Mode classification below                      |
+| `role`    | `operator\|team`                                             | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer |
+| `state`   | `pending\|commented\|approved\|changes_requested\|dismissed` | REQUIRED                                       | Reviewer's current standing — see rules below       |
 
 **State derivation rule.** For each reviewer, `state` is computed as follows:
 

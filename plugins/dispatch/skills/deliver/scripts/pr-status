@@ -74,7 +74,7 @@ cache_item() {
 
 # --- fetch --------------------------------------------------------------------
 PR_JSON="$(gh pr view "$PR" --json \
-  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews,reviewRequests)"
+  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup)"
 
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
@@ -136,6 +136,38 @@ COMMENTS_JSON="$(gh api graphql --paginate \
       }
     }' --jq '.data.repository.pullRequest.comments.nodes[]' | jq -s '.')"
 
+# Reviews and review requests come from GraphQL, not `gh pr view --json`, because
+# the latter's exporter only marshals User/Team requested reviewers and silently
+# drops Bot-typed ones (e.g. Copilot) — which would break the pending override
+# for a re-requested bot review. GraphQL's RequestedReviewer union lets us pull
+# the login for User/Bot/Mannequin (and name/slug for Team), and the review
+# author's __typename gives an authoritative bot flag. Emits the pullRequest node
+# carrying both connections; reviews_xml reads `.reviews.nodes` and
+# `.reviewRequests.nodes` off it.
+REVIEWS_JSON="$(gh api graphql \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviews(first:100) {
+            nodes { author { login __typename } state }
+          }
+          reviewRequests(first:100) {
+            nodes {
+              requestedReviewer {
+                __typename
+                ... on User { login }
+                ... on Bot { login }
+                ... on Mannequin { login }
+                ... on Team { name slug }
+              }
+            }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest')"
+
 # GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
 reaction_emoji() {
   case "$1" in
@@ -194,21 +226,29 @@ conflicts_xml() {
 # current. `state="pending"` is the in-flight signal: an empty thread set while a
 # pending review stands is NOT convergence. Mode is bot iff GitHub types the
 # account a Bot or the login matches the agent-identity regex; role is operator
-# iff the login is the configured operator, else team (humans only).
+# iff the login is the configured operator, else team (humans only). Input is the
+# GraphQL pullRequest node ($REVIEWS_JSON): `.reviews.nodes` and
+# `.reviewRequests.nodes` (the latter wrapping a RequestedReviewer union).
 reviews_xml() {
   echo "  <reviews>"
   jq -r '
     # Requested reviewers (currently-outstanding requests): login + bot-ness.
-    ( [ (.reviewRequests // [])[]
+    # The GraphQL union nests under .requestedReviewer; User/Bot/Mannequin carry
+    # .login, Team carries .slug/.name.
+    ( [ (.reviewRequests.nodes // [])[]
+        | .requestedReviewer
         | { login: ((.login // .slug // .name) // ""), is_bot: ((.__typename // "") == "Bot") }
         | select(.login != "") ] ) as $reqs
     | ( [ $reqs[].login | ascii_downcase ] ) as $reqset
-    # Latest review per author, keyed by lowercased login.
-    | ( reduce (.reviews // [])[] as $r ({};
+    # Latest SUBMITTED review per author, keyed by lowercased login. PENDING here
+    # means an unsubmitted draft (visible only to its author, e.g. the agent
+    # itself); it is invisible to the protocol, so drop it — "pending" in the
+    # output comes from an outstanding REQUEST, never an unsubmitted review.
+    | ( reduce (.reviews.nodes // [])[] as $r ({};
           ( ($r.author.login // "") ) as $lg
-          | if $lg == "" then .
+          | if $lg == "" or ($r.state == "PENDING") then .
             else .[($lg | ascii_downcase)] =
-                   { login: $lg, is_bot: ($r.author.is_bot // false), state: ($r.state // "COMMENTED") }
+                   { login: $lg, is_bot: (($r.author.__typename // "") == "Bot"), state: ($r.state // "COMMENTED") }
             end
         ) ) as $rev
     # Add a pending stub for any requested reviewer that has not reviewed.
@@ -221,7 +261,7 @@ reviews_xml() {
     | map( .key as $k | .value + { state: ( if ($reqset | index($k)) then "PENDING" else .value.state end ) } )
     | .[]
     | [ .login, (.is_bot | tostring), .state ] | @tsv
-  ' <<<"$PR_JSON" |
+  ' <<<"$REVIEWS_JSON" |
   while IFS=$'\t' read -r author is_bot state; do
     [[ -n "$author" ]] || continue
     local mode="human"

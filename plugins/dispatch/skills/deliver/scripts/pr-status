@@ -141,18 +141,38 @@ COMMENTS_JSON="$(gh api graphql --paginate \
 # drops Bot-typed ones (e.g. Copilot) — which would break the pending override
 # for a re-requested bot review. GraphQL's RequestedReviewer union lets us pull
 # the login for User/Bot/Mannequin (and name/slug for Team), and the review
-# author's __typename gives an authoritative bot flag. Emits the pullRequest node
-# carrying both connections; reviews_xml reads `.reviews.nodes` and
-# `.reviewRequests.nodes` off it.
-REVIEWS_JSON="$(gh api graphql \
+# author's __typename gives an authoritative bot flag.
+#
+# The reviews connection must be fully paginated: every review event is a node,
+# so a long-running PR exceeds a single 100-node page, and a `first:100` cap
+# silently drops the newest reviews — breaking the "most recent submitted review
+# per reviewer" rule (a recent changes_requested, or a bot review that has since
+# landed against an outstanding request, would be missed). `--paginate` walks
+# every page via $endCursor; `--jq …nodes[]` emits one node per line, which
+# `jq -s` collects into a single array. reviewRequests is bounded by the
+# reviewer count (only currently-outstanding requests stand), so its single
+# 100-node page is sufficient and is fetched separately — `--paginate` follows
+# exactly one connection's cursor, so the two can't share a query.
+REVIEW_NODES="$(gh api graphql --paginate \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviews(first:100, after:$endCursor) {
+            nodes { author { login __typename } state }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviews.nodes[]' | jq -s '.')"
+
+REVIEW_REQUEST_NODES="$(gh api graphql \
   -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
   -f query='
     query($owner:String!, $repo:String!, $pr:Int!) {
       repository(owner:$owner, name:$repo) {
         pullRequest(number:$pr) {
-          reviews(first:100) {
-            nodes { author { login __typename } state }
-          }
           reviewRequests(first:100) {
             nodes {
               requestedReviewer {
@@ -166,7 +186,14 @@ REVIEWS_JSON="$(gh api graphql \
           }
         }
       }
-    }' --jq '.data.repository.pullRequest')"
+    }' --jq '.data.repository.pullRequest.reviewRequests.nodes // []')"
+
+# Re-wrap the two connections back into the {reviews:{nodes:…},
+# reviewRequests:{nodes:…}} pullRequest-node shape reviews_xml's jq reads.
+REVIEWS_JSON="$(jq -n \
+  --argjson reviews "$REVIEW_NODES" \
+  --argjson reqs "$REVIEW_REQUEST_NODES" \
+  '{reviews: {nodes: $reviews}, reviewRequests: {nodes: $reqs}}')"
 
 # GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
 reaction_emoji() {

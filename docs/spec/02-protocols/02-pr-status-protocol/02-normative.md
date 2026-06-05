@@ -104,9 +104,9 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
   <merge-conflicts present="true|false"/>
   <reviews>
     <review author="<login>" mode="bot"
-            state="commented|approved|changes_requested|dismissed"/>
+            state="pending|commented|approved|changes_requested|dismissed"/>
     <review author="<login>" mode="human" role="operator|team"
-            state="commented|approved|changes_requested|dismissed"/>
+            state="pending|commented|approved|changes_requested|dismissed"/>
   </reviews>
   <comments>
     <comment id="<comment-id>" actionable="true"  cache="<abs-path>"/>
@@ -219,15 +219,33 @@ implementation-defined configuration, not prescribed by this protocol.
 
 ### `<reviews>`
 
-One `<review>` element per submitted review. The script MUST emit all submitted
-reviews; it MUST NOT deduplicate by reviewer.
+One persistent `<review>` element per reviewer — not one per submitted review.
+A reviewer who has been requested OR has submitted at least one review appears
+exactly once. The script MUST deduplicate by reviewer (case-insensitive on
+`author`), collapsing a reviewer's history to a single element whose `state`
+reflects their current standing.
 
-| Attribute | Type                                                  | Requirement                                | Meaning                                              |
-| --------- | ----------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------- |
-| `author`  | string                                                | REQUIRED                                   | Platform login of the reviewer                       |
-| `mode`    | `bot\|human`                                          | REQUIRED                                   | See §Mode classification below                       |
-| `role`    | `operator\|team`                                      | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer |
-| `state`   | `commented\|approved\|changes_requested\|dismissed`   | REQUIRED                                   | Platform review state, normalized                    |
+| Attribute | Type                                                          | Requirement                                    | Meaning                                              |
+| --------- | ------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| `author`  | string                                                        | REQUIRED                                       | Platform login of the reviewer                       |
+| `mode`    | `bot\|human`                                                  | REQUIRED                                       | See §Mode classification below                       |
+| `role`    | `operator\|team`                                              | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer  |
+| `state`   | `pending\|commented\|approved\|changes_requested\|dismissed` | REQUIRED                                       | Reviewer's current standing — see rules below        |
+
+**State derivation rule.** For each reviewer, `state` is computed as follows:
+
+1. Start from the reviewer's most recent submitted review state (normalized:
+   `commented`, `approved`, `changes_requested`, or `dismissed`). A reviewer who
+   was requested but has never submitted a review starts at `pending`.
+2. **Outstanding-request override.** If the reviewer currently has an
+   outstanding review request, `state` MUST be `pending` regardless of any prior
+   verdict. A fresh request replaces the reviewer's previous review until they
+   re-review — so a re-requested bot (e.g. a Copilot re-review) or an operator
+   re-requested after approving reads `pending` again until the new review lands.
+
+`state="pending"` is the in-flight signal: the request is outstanding and that
+reviewer's review has not landed yet. An empty or stable inline-thread set while
+a review is `pending` is NOT convergence.
 
 **Role classification rule.** For each `<review mode="human">`: emit
 `role="operator"` iff `author` matches the supplied operator identity

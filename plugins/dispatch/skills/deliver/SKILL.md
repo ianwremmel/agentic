@@ -12,9 +12,11 @@ actionable concern, then evaluate the gates to decide whether to transition.
 authority. Role glossary in [`reference.md`](./reference.md#roles-1).
 
 **Running `pr-status`.** It requires env `DISPATCH_AGENT_ID`, `DISPATCH_SKILL`,
-`DISPATCH_OPERATOR_LOGIN` and hard-fails if any is unset. The operator is
-`CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN`; if it's unset, fail and ask the user to
-set an operator login — never fall back to the ticket assigner.
+`DISPATCH_OPERATOR_LOGIN` and hard-fails if any is unset. Resolve the operator
+login by mode and pass it as `DISPATCH_OPERATOR_LOGIN`: in **Mode A** it's
+`CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN` (required — if unset, fail and ask the
+user to set it; never fall back to the ticket assigner); in **Mode B** (shared
+credentials) it's the authenticated account (`gh api user`).
 
 ## Setup
 
@@ -151,7 +153,7 @@ of `public_review_requested`). Worktree cleanup happens on any closure.
 | `private_review_requested`         | (Team.) Await the operator's signal.                                                                            | reviewer |
 | `private_review_commented`         | (Team.) Address each item; push; re-request.                                                                    | no       |
 | `private_review_requested_changes` | (Team.) Address; push; **re-request required** — blocks public review.                                          | no       |
-| `private_review_approved`          | (Team.) **Don't clear draft** — the operator does. Observe the PR is no longer a draft, then → `ready_for_public_review`. | no       |
+| `private_review_approved`          | (Team.) **Don't clear draft** — the operator does. Poll until the PR is no longer a draft, then → `ready_for_public_review`. | reviewer |
 | `ready_for_public_review`          | Request public review. Solo: post the engagement comment (agent-reply + `agent-engagement` sentinel) and engage the operator. Team: request team reviewer(s), **excluding the operator**. Never self-request. Mode A/B per reference. | no       |
 | `public_review_requested`          | Await the public reviewer.                                                                                      | reviewer |
 | `public_review_commented`          | Address each item; push; re-request.                                                                            | no       |
@@ -181,6 +183,11 @@ agent in solo, the operator in team); guessing drives the wrong lifecycle.
   the agent — clears draft (moves the PR to ready); the agent observes it's
   non-draft and engages the rest of the team (Gate 7 during `public_review_*`).
   Operator is **excluded** from the public reviewer set.
+
+  *Early clear.* If the operator clears draft **before** Gate 6 is satisfied,
+  draft-clear alone is not approval — stay in `private_review_*` and keep
+  awaiting the operator's Gate 6 signal (re-engage if needed). Advance to
+  `ready_for_public_review` only once Gate 6 holds; the draft is already clear.
 
 **No eligible reviewer.** If no non-self human reviewer exists in
 `ready_for_public_review`, skip the request but still transition to
@@ -268,6 +275,7 @@ poll faster than once per minute.**
 | -------------------------------------- | ---------------------------------------------------------------------------------------- |
 | CI (`<checks state="pending">`)        | 60 s; lengthen to ~5 min once past the project's typical CI duration.                    |
 | Reviewer reply after a request         | 5 min for the first hour; then 30 min.                                                    |
+| Operator to clear draft (team)         | 5 min for the first hour; then 30 min.                                                    |
 | Merge after `ready_for_merge`          | 5 min for the first hour; then 30 min.                                                    |
 
 ### Mechanism

@@ -229,9 +229,10 @@ The Delivery Protocol supports two delivery shapes selected by a per-installatio
   skipped; Stage 3 (Public review) targets the operator.
 - **Team mode** (`team_mode=true`). The operator is one of several human
   reviewers. After Copilot, the agent runs Stage 2 (Private review) with the
-  PR still in draft, targeting the operator. Only after the operator approves
-  does the agent clear draft and run Stage 3 (Public review) with the rest of
-  the team — the operator is **excluded** from the Stage 3 reviewer set.
+  PR still in draft, targeting the operator. Only after the operator approves,
+  the operator — not the agent — clears draft (the agent MUST NOT); the agent
+  then runs Stage 3 (Public review) with the rest of the team — the operator is
+  **excluded** from the Stage 3 reviewer set.
 
 Stage names refer to **PR visibility**: Stage 2 happens while the PR is still
 in draft (`private_review_*` states); Stage 3 happens after draft is cleared
@@ -287,14 +288,15 @@ The notification venue by Mode:
 
 - **Mode A** (separate agent account). Use the platform's PR review-request
   API, targeting the operator's identity. The operator identity is supplied
-  via implementation-defined configuration (see §2.2.2 "Operator identity");
-  installations without an explicitly configured operator MAY fall back to the
-  ticket assigner (same selection mechanism Stage 3 uses for human reviewers).
-- **Mode B** (shared credentials). The PR review-request API cannot target the
-  authenticated account, so the agent MUST instead engage the operator through
-  the first available venue that can reach them, in the same order Stage 3
-  prescribes for Mode B engagement: a ticket comment tagging the operator
-  first, then an implementation-defined out-of-band channel.
+  via implementation-defined configuration (see §2.2.2 "Operator identity") and
+  is REQUIRED; if no operator is configured the agent MUST fail and ask for one
+  to be set, rather than falling back to the ticket assigner.
+- **Mode B** (shared credentials). The operator identity IS the authenticated
+  (shared) account. The PR review-request API cannot target it, so the agent
+  MUST instead engage the operator through the first available venue that can
+  reach them, in the same order Stage 3 prescribes for Mode B engagement: a
+  ticket comment tagging the operator first, then an implementation-defined
+  out-of-band channel.
 
 **Gate 6 — Operator-approved (always required).** Satisfied by ANY of the
 following signals on the engagement venue:
@@ -303,7 +305,7 @@ following signals on the engagement venue:
   next pr-status XML (Mode A formal review).
 - A `<reaction emoji="+1">` from the operator on the agent's engagement
   comment (surfaced via the `<reactions>` child of `<comment>` per §2.2.2).
-- A "go ahead" / "lgtm" / "ready" / "clear draft" reply from the operator on
+- A "go ahead" / "lgtm" / "ready" reply from the operator on
   the engagement comment, on the ticket, or via the out-of-band channel.
 - A ticket-side approval signal (e.g. status transition by the operator).
 
@@ -311,10 +313,16 @@ In team mode Gate 6 is satisfied during Stage 2. In solo mode (Stage 2
 skipped), Gate 6 is satisfied during Stage 3 via the same signals on the
 operator's public-review engagement.
 
-**Draft clearance.** Once Gate 6 is satisfied AND CI/Copilot conditions still
-hold, the agent MUST clear the draft and proceed to Stage 3. If the operator
-clicks "ready for review" themselves, the agent observes the same
-draft-cleared edge being fired by another actor and proceeds.
+**Draft clearance.** In **solo mode**, the agent clears draft after Copilot
+(per Mode selection above) and engages the operator; Gate 6 is then satisfied
+during Stage 3. In **team mode**, draft is cleared only after Gate 6 is
+satisfied in Stage 2 AND CI/Copilot conditions still hold — and the operator,
+**not** the agent, clears it (moving the PR from draft to ready). The agent MUST
+NOT clear draft in team mode; it observes the PR is no longer a draft and
+proceeds to Stage 3. If the operator clears draft BEFORE Gate 6 is satisfied,
+draft clearance alone does NOT satisfy Gate 6: the agent MUST remain in Stage 2,
+continue awaiting an operator approval signal (re-engaging if needed), and
+advance to Stage 3 only once Gate 6 holds.
 
 ### Stage 3 — Public review
 
@@ -336,8 +344,9 @@ agent MUST NOT request review from itself. The agent MUST follow §2.1 rules
 on alternative credentials if the platform restricts which accounts may
 request which review types.
 
-In **solo mode** the target is the operator (or the ticket assigner as
-fallback, same selection as Stage 2). In **team mode** the operator is
+In **solo mode** the target is the operator, resolved as in Stage 2: the
+configured operator identity in Mode A, or the authenticated account in Mode B —
+no ticket-assigner fallback. In **team mode** the operator is
 **excluded** from the reviewer set — the operator's binding signal was
 collected during Stage 2 via Gate 6; Stage 3 collects the team's binding
 signal via Gate 7 below.

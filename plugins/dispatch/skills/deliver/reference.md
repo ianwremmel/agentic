@@ -110,8 +110,7 @@ it instead: the agent is awaiting approval, not finished.
 Notification venue by Mode:
 
 - **Mode A** (separate bot account) — the platform's PR review-request API,
-  targeting `operator_login` if set, else the ticket assigner (the same selection
-  used for human reviewers).
+  targeting `operator_login` (required; the agent fails if it's unset).
 - **Mode B** (shared credentials) — the review-request API can't target the
   authenticated account, so use the Mode B human-review venues: a ticket comment
   tagging the operator first, then an implementation-defined out-of-band channel.
@@ -127,27 +126,20 @@ of the mode:
 | `private_review_*` | draft (not cleared) | unreachable     | operator                     |
 | `public_review_*`  | draft cleared       | operator        | non-operator team reviewer(s) |
 
-In team mode the operator is **excluded** from the public reviewer set; their
-binding signal is collected during `private_review_*` (Gate 6).
-
 ## Actionability
 
-A raw platform read returns thousands of tokens of mostly irrelevant fields, and
-that cost recurs every poll; ad-hoc reads also bypass the actionability
-classification and disk cache the gates rely on. `pr-status` fixes this: one
-snapshot, heavy content on disk, a compact XML summary. Drive **all** gate and
-actionability decisions from it, reading the cache files rather than re-fetching.
-Investigating *emergent* data the snapshot doesn't cover may need a direct read,
-but the PR status you act on comes only from `pr-status`, and routine `gh`/MCP
-calls are writes.
+Drive **all** gate and actionability decisions from `pr-status`, reading the
+cache files it wrote rather than re-fetching; raw `gh`/MCP reads are costly and
+bypass the classification the gates rely on. You may directly read *emergent*
+data the snapshot doesn't cover, but the PR status you act on comes only from
+`pr-status` — routine `gh`/MCP calls are writes.
 
 The agent reads `actionable="true|false"` and treats it as the **sole task
 source**. A non-actionable item carries a `reason=` token (`resolved`,
 `agent-artifact`, `agent-terminal-reply`, `acked`). A `<summary>` is a **reading
-aid, not a work queue**: read it plus new cache content when actionable; treat as
-context when not. It describes the item's *content*, not its resolution — an item
-already terminal-tagged summarizes as if the point still stands. Expected; not
-grounds to reopen. Trust the flag and `reason=`.
+aid, not a work queue**: it recaps the item's *content*, not its resolution, so a
+terminal-tagged item still reads as open — expected, not grounds to reopen. Trust
+the flag and `reason=`.
 
 Reviews are surfaced as one persistent record per reviewer under `<reviews>`,
 each `state` of `pending | commented | changes_requested | approved | dismissed`.

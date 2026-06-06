@@ -12,14 +12,14 @@ actionable concern, then evaluate the gates to decide whether to transition.
 authority. Role glossary in [`reference.md`](./reference.md#roles-1).
 
 **Running `pr-status`.** It requires env `DISPATCH_AGENT_ID`, `DISPATCH_SKILL`,
-`DISPATCH_OPERATOR_LOGIN` and hard-fails if any is unset. Resolve the operator
-before every call: `CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN` if set, else the ticket
-assigner. If neither exists, surface an error — don't skip the tick.
+`DISPATCH_OPERATOR_LOGIN` and hard-fails if any is unset. The operator is
+`CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN`; if it's unset, fail and ask the user to
+set an operator login — never fall back to the ticket assigner.
 
 ## Setup
 
-1. **Worktree.** Work in `<worktree_base>/<owner>/<repo>/<branch>`
-   (`worktree_base` default `~/.worktrees`). Locate via `git worktree list` —
+1. **Worktree.** Work in `<worktree_base>/<owner>/<repo>/<branch>` (the plugin
+   sets `worktree_base`; fail if it's unset). Locate via `git worktree list` —
    never guess. Reuse if present.
 2. **Open PR** (skip if one already exists for the branch):
    - `git commit --allow-empty -m "chore: open PR [skip ci]"` — never amend or
@@ -145,7 +145,7 @@ of `public_review_requested`). Worktree cleanup happens on any closure.
 | `ready_for_copilot_review`         | Request Copilot review.                                                                                         | no       |
 | `copilot_review_requested`         | Await Copilot's review.                                                                                         | CI       |
 | `copilot_commented`                | Address each actionable Copilot item; push fix(es).                                                             | no       |
-| `ready_for_private_review`         | (Team.) Engage the operator while in draft: post the engagement comment (agent-reply marker + `<!-- agent-engagement:<agent-id> -->` sentinel) and notify — Mode A: PR review request to `operator_login`/ticket assigner; Mode B: ticket/out-of-band ([reference.md](./reference.md#review-rules)). | no       |
+| `ready_for_private_review`         | (Team.) Engage the operator while in draft: post the engagement comment (agent-reply marker + `<!-- agent-engagement:<agent-id> -->` sentinel) and notify — Mode A: PR review request to `operator_login`; Mode B: ticket/out-of-band ([reference.md](./reference.md#review-rules)). | no       |
 | `private_review_requested`         | (Team.) Await the operator's signal.                                                                            | reviewer |
 | `private_review_commented`         | (Team.) Address each item; push; re-request.                                                                    | no       |
 | `private_review_requested_changes` | (Team.) Address; push; **re-request required** — blocks public review.                                          | no       |
@@ -314,9 +314,9 @@ From `userConfig` (env `CLAUDE_PLUGIN_OPTION_*`):
 | Key                 | Effect                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `copilot_available` | `false` → skip Copilot: `draft → ready_for_public_review` (solo) or `→ ready_for_private_review` (team) directly. Default `true`.            |
-| `worktree_base`     | Root for per-PR worktrees (`<base>/<owner>/<repo>/<branch>`). Default `~/.worktrees`.                                                        |
+| `worktree_base`     | Root for per-PR worktrees (`<base>/<owner>/<repo>/<branch>`). Set by the plugin; the agent fails if unset.                                   |
 | `team_mode`         | `true` → operator is one of several reviewers; insert `private_review_*` (draft) before clearing draft for `public_review_*`. Default `false`. |
-| `operator_login`    | Operator's GitHub login. Targets Mode A review requests and classifies `<review>` role (operator vs team). Unset → ticket assigner. Mode B ignores it. |
+| `operator_login`    | Operator's GitHub login. Targets Mode A review requests and classifies `<review>` role (operator vs team). Required — the agent fails if unset (no assigner fallback). Mode B ignores it. |
 
 ## References
 

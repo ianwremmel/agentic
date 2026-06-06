@@ -40,7 +40,8 @@
     "operator_login": {
       "type": "string",
       "title": "Operator GitHub login",
-      "description": "GitHub login of the operator directing this agent. Required in Mode A (separate bot account), where it targets the operator with PR review requests and classifies <review> elements in pr-status XML; if unset the agent fails and asks for it to be set rather than falling back to the ticket assigner. In Mode B (shared credentials) the operator identity is the authenticated account, so this option is ignored."
+      "description": "GitHub login of the operator directing this agent. Required — the deliver skill and pr-status script always assume it is set. Targets the operator with PR review requests (Mode A) and classifies <review> elements in pr-status XML; the agent never falls back to the ticket assigner. In Mode B (shared credentials) set this to the shared/authenticated account.",
+      "required": true
     }
   }
 }

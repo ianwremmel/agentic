@@ -12,11 +12,11 @@ actionable concern, then evaluate the gates to decide whether to transition.
 authority. Role glossary in [`reference.md`](./reference.md#roles-1).
 
 **Running `pr-status`.** It requires env `DISPATCH_AGENT_ID`, `DISPATCH_SKILL`,
-`DISPATCH_OPERATOR_LOGIN` and hard-fails if any is unset. Resolve the operator
-login by mode and pass it as `DISPATCH_OPERATOR_LOGIN`: in **Mode A** it's
-`CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN` (required — if unset, fail and ask the
-user to set it; never fall back to the ticket assigner); in **Mode B** (shared
-credentials) it's the authenticated account (`gh api user`).
+`DISPATCH_OPERATOR_LOGIN` and hard-fails if any is unset. Pass
+`CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN` as `DISPATCH_OPERATOR_LOGIN` — it's a
+**required** plugin option, so the skill and script always assume it's present
+(in Mode B it's the shared/authenticated account). Never fall back to the ticket
+assigner.
 
 ## Setup
 
@@ -328,7 +328,7 @@ From `userConfig` (env `CLAUDE_PLUGIN_OPTION_*`):
 | `copilot_available` | `false` → skip Copilot: `draft → ready_for_public_review` (solo) or `→ ready_for_private_review` (team) directly. Default `true`.            |
 | `worktree_base`     | Root for per-PR worktrees (`<base>/<owner>/<repo>/<branch>`). Set by the plugin; the agent fails if unset.                                   |
 | `team_mode`         | `true` → operator is one of several reviewers; insert `private_review_*` (draft) before clearing draft for `public_review_*`. Default `false`. |
-| `operator_login`    | Operator's GitHub login. Targets Mode A review requests and classifies `<review>` role (operator vs team). Required — the agent fails if unset (no assigner fallback). Mode B ignores it. |
+| `operator_login`    | Operator's GitHub login. **Required** (the agent/script always assume it's set; no assigner fallback). Targets Mode A review requests and classifies `<review>` role (operator vs team); in Mode B it's the shared/authenticated account. |
 
 ## References
 

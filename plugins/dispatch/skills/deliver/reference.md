@@ -114,7 +114,8 @@ Notification venue by Mode:
 - **Mode B** (shared credentials) — the review-request API can't target the
   authenticated account, so use the Mode B human-review venues: a ticket comment
   tagging the operator first, then an implementation-defined out-of-band channel.
-  Operator identity is the authenticated account.
+  Operator identity is `operator_login`, which here is the shared/authenticated
+  account.
 
 ### Audience by visibility stage
 

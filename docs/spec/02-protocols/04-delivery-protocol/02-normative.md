@@ -292,11 +292,11 @@ The notification venue by Mode:
   is REQUIRED; if no operator is configured the agent MUST fail and ask for one
   to be set, rather than falling back to the ticket assigner.
 - **Mode B** (shared credentials). The operator identity IS the authenticated
-  account, so no operator login need be configured. The PR review-request API
-  cannot target the authenticated account, so the agent MUST instead engage the
-  operator through the first available venue that can reach them, in the same
-  order Stage 3 prescribes for Mode B engagement: a ticket comment tagging the
-  operator first, then an implementation-defined out-of-band channel.
+  (shared) account. The PR review-request API cannot target it, so the agent
+  MUST instead engage the operator through the first available venue that can
+  reach them, in the same order Stage 3 prescribes for Mode B engagement: a
+  ticket comment tagging the operator first, then an implementation-defined
+  out-of-band channel.
 
 **Gate 6 — Operator-approved (always required).** Satisfied by ANY of the
 following signals on the engagement venue:

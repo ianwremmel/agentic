@@ -1,13 +1,10 @@
 # deliver — protocol reference
 
-Condensed from the dispatch spec (§2.1 Communication, §2.2 PR Status, §2.3
-Logging) — only the parts `deliver` uses, bundled so the skill is self-contained.
-The full spec is authoritative where they differ.
+The communication, PR-status, and logging rules `deliver` relies on. With
+[`SKILL.md`](./SKILL.md) and `scripts/pr-status`, this is the complete authority
+for the skill.
 
-`scripts/pr-status` is this skill's bundled implementation of the reader the spec
-calls `dispatch pr-status` (#66); same reader under either name.
-
-## Roles (§1)
+## Roles
 
 - **Agent** — the agentic coding assistant doing the work (this skill).
 - **Operator** — the one individual directing the agent. Exactly one per
@@ -16,7 +13,7 @@ calls `dispatch pr-status` (#66); same reader under either name.
 - **Reviewer** — any participant leaving review feedback (Copilot, another agent,
   or a human). The operator may also be a reviewer.
 
-## Mode detection (§2.1)
+## Mode detection
 
 Determined by the credentials held at write time.
 
@@ -27,7 +24,7 @@ Determined by the credentials held at write time.
 - **Mode B** (human-credentialed) otherwise. **On any ambiguity, default to Mode
   B.**
 
-## Wire format (§2.1)
+## Wire format
 
 Every agent-authored post (new post or thread reply — not reactions) carries one
 machine marker as its **first line**, alone, no leading whitespace:
@@ -53,13 +50,13 @@ Never in Mode A. The plan-comment sentinel `<!-- agent-plan:<agent-id> -->` goes
 **inside** the body (after the marker in Mode A, after the opening sparkle in
 Mode B), never as the leading line.
 
-## Terminal signals (§2.1)
+## Terminal signals
 
 A terminal signal means "finished with this item"; it suppresses re-evaluation
 next poll. Anything else means "still working." The agent signals finished
 **only** via a terminal signal — it MUST NOT resolve the thread, even one it
 opened. Resolution is a human's call. Platform-resolved threads are read (see
-§Actionability) but never written by the agent.
+[§Actionability](#actionability)) but never written by the agent.
 
 Reactions (preferred where supported):
 
@@ -78,7 +75,7 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
 | `Declined.` | Terminal (≡ `-1`)     |
 | `Shipped.`  | Terminal (≡ `rocket`) |
 
-## Review rules (§2.1)
+## Review rules
 
 - An agent MUST NOT request review from the account it is authenticated as.
 - A Mode A agent MAY use alternative human credentials to request a
@@ -113,11 +110,11 @@ it instead: the agent is awaiting approval, not finished.
 Notification venue by Mode:
 
 - **Mode A** (separate bot account) — the platform's PR review-request API,
-  targeting `operator_login` if set, else the ticket assigner (§2.4.2's
-  mechanism).
+  targeting `operator_login` if set, else the ticket assigner (the same selection
+  used for human reviewers).
 - **Mode B** (shared credentials) — the review-request API can't target the
-  authenticated account, so use §2.4.2's Mode B venues: a ticket comment tagging
-  the operator first, then an implementation-defined out-of-band channel.
+  authenticated account, so use the Mode B human-review venues: a ticket comment
+  tagging the operator first, then an implementation-defined out-of-band channel.
   Operator identity is the authenticated account.
 
 ### Audience by visibility stage
@@ -133,7 +130,7 @@ of the mode:
 In team mode the operator is **excluded** from the public reviewer set; their
 binding signal is collected during `private_review_*` (Gate 6).
 
-## Actionability (§2.2)
+## Actionability
 
 A raw platform read returns thousands of tokens of mostly irrelevant fields, and
 that cost recurs every poll; ad-hoc reads also bypass the actionability
@@ -176,7 +173,7 @@ A comment or thread is **non-actionable** iff any of:
 A reviewer reply after the agent's last turn re-actionables the item. An
 annotation is actionable unless `<cache>/<id>.ack` exists.
 
-## Operational logging (§2.3)
+## Operational logging
 
 One line per entry:
 
@@ -201,7 +198,7 @@ Kinds `deliver` emits:
 | `TRANSITION` | (Ticket-driven runs) a ticket role change.                                             |
 
 When a linked ticket's role changes, also post a state-change comment to the PR
-(or ticket) per §2.1, body exactly:
+(or ticket) in wire format, body exactly:
 
 ```
 State: <prev-role> → <new-role>

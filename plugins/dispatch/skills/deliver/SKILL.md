@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Drive a code change to merge through a draft PR — CI, reviews, iteration, monitor until close. Use whenever the unit of work is "land this change," prompt- or ticket-triggered. Implements the Delivery Protocol (§2.4) over the PR Status Protocol (§2.2).
+description: Drive a code change to merge through a draft PR — CI, reviews, iteration, monitor until close. Use whenever the unit of work is "land this change," prompt- or ticket-triggered.
 ---
 
 # deliver
@@ -27,8 +27,8 @@ assigner. If neither exists, surface an error — don't skip the tick.
    - Push; open a **draft** PR. Body: Motivation, Ticket link (omit if none —
      no bare IDs), Test plan. **No execution plan in the body.**
    - Post the plan as a top-level comment with `<!-- agent-plan:<agent-id> -->`
-     inside the §2.1 body (after the marker/sparkle, not as the first line). Pin
-     if supported.
+     inside the wire-format body (after the marker/sparkle, not as the first
+     line; see [`reference.md`](./reference.md#wire-format)). Pin if supported.
 3. **Resume.** PR exists → reuse worktree, skip the open sequence, find the plan
    comment by its `agent-plan` marker (post one if missing). Never open a second
    PR or rewrite the body.
@@ -121,14 +121,14 @@ in team mode. If the operator clicks "ready for review" first, the agent
 observes the same edge and proceeds.
 
 **Universal terminal** (from any state): PR closed, or operator "stop" → read
-`<terminal>` from `pr-status` → acknowledge per §2.1 → `merged` → `done`.
-`<terminal state>` is binary — *did the change ship*, not *how*:
+`<terminal>` from `pr-status` → acknowledge with a terminal signal → `merged` →
+`done`. `<terminal state>` is binary — *did the change ship*, not *how*:
 
 - **`shipped`** — change present in base (merged, fast-forward, or squash/rebase
   by external tooling). Acknowledge delivered (`Shipped.`/`rocket`). For a
   linked ticket, advance to delivered/verified **only if this PR completes the
-  ticket** (§2.3 multi-PR rule forbids `delivered` until every required PR
-  lands); otherwise just record the shipped PR.
+  ticket** (a multi-PR ticket must not be marked `delivered` until every
+  required PR lands); otherwise just record the shipped PR.
 - **`abandoned`** — closed with change absent. Acknowledge not-delivered, don't
   advance the ticket. Surface any `error=` breadcrumb — never claim delivery on
   a guess.
@@ -145,7 +145,7 @@ of `public_review_requested`). Worktree cleanup happens on any closure.
 | `ready_for_copilot_review`         | Request Copilot review.                                                                                         | no       |
 | `copilot_review_requested`         | Await Copilot's review.                                                                                         | CI       |
 | `copilot_commented`                | Address each actionable Copilot item; push fix(es).                                                             | no       |
-| `ready_for_private_review`         | (Team.) Engage the operator while in draft: post the engagement comment (agent-reply marker + `<!-- agent-engagement:<agent-id> -->` sentinel) and notify — Mode A: PR review request to `operator_login`/ticket assigner; Mode B: ticket/out-of-band (§Review rules). | no       |
+| `ready_for_private_review`         | (Team.) Engage the operator while in draft: post the engagement comment (agent-reply marker + `<!-- agent-engagement:<agent-id> -->` sentinel) and notify — Mode A: PR review request to `operator_login`/ticket assigner; Mode B: ticket/out-of-band ([reference.md](./reference.md#review-rules)). | no       |
 | `private_review_requested`         | (Team.) Await the operator's signal.                                                                            | reviewer |
 | `private_review_commented`         | (Team.) Address each item; push; re-request.                                                                    | no       |
 | `private_review_requested_changes` | (Team.) Address; push; **re-request required** — blocks public review.                                          | no       |
@@ -156,7 +156,7 @@ of `public_review_requested`). Worktree cleanup happens on any closure.
 | `public_review_requested_changes`  | Address; push; **re-request required** — blocks merge.                                                          | no       |
 | `public_review_approved`           | Confirm gates 1–5 still hold; else fix in place.                                                                | no       |
 | `ready_for_merge`                  | Await merge. **Don't self-merge unless instructed.**                                                            | merge    |
-| `merged`                           | Read `<terminal>`. **shipped** → acknowledge delivered; advance a linked ticket only if this PR completes it (§2.3). **abandoned** → acknowledge not-delivered, leave the ticket (surface any `error=`). Either way, remove any worktree you created. | no       |
+| `merged`                           | Read `<terminal>`. **shipped** → acknowledge delivered; advance a linked ticket only if this PR completes it. **abandoned** → acknowledge not-delivered, leave the ticket (surface any `error=`). Either way, remove any worktree you created. | no       |
 | `done`                             | Terminal.                                                                                                       | —        |
 
 **Coding only happens in `draft`** — and in any other state only as the fix to a
@@ -194,7 +194,7 @@ Apply to **every** actionable item, not just the first.
 | ----------------------------------------------------- | ------------------------------------------------------------------------- |
 | `<merge-conflicts present="true"/>` (gate 2)          | Rebase or merge the target branch; resolve.                               |
 | `<checks state="failing">` (gate 1)                   | Diagnose root cause; fix.                                                 |
-| Actionable `<comment>` or `<thread>` (gates 4–5)      | Reply (commit link **or** one-line dismissal naming what's dismissed) and apply a terminal signal. **Never resolve the thread** — even your own; that's a human's call (§2.1), and the terminal signal already suppresses re-evaluation. |
+| Actionable `<comment>` or `<thread>` (gates 4–5)      | Reply (commit link **or** one-line dismissal naming what's dismissed) and apply a terminal signal. **Never resolve the thread** — even your own; that's a human's call, and the terminal signal already suppresses re-evaluation. |
 | Actionable `<annotation>` (gate 3)                    | Fix the code, OR dismiss with a `<cache>/$id.ack` carrying the rationale (also record it in the plan comment or commit body). |
 
 ## Cross-cutting behaviors
@@ -246,8 +246,8 @@ Apply in every state.
   ones. The PR body's Motivation/Test plan stay stable.
 - **First green.** Gate 1 needs a green rollup achieved *after* the agent first
   attempts to leave `draft`. Earlier greens don't count.
-- **Heartbeats.** While polling, emit INFO heartbeats per §2.3 (`ticket=-` when
-  none).
+- **Heartbeats.** While polling, emit INFO heartbeats (see
+  [`reference.md`](./reference.md#operational-logging); `ticket=-` when none).
 - **Termination is narrow.** Only PR closure or explicit operator "stop"
   terminates. Plan completion, green CI, review requests, `ready_for_merge`, and
   "nobody to ask" do not. The agent runs the loop through itself (§Polling) and
@@ -321,6 +321,5 @@ From `userConfig` (env `CLAUDE_PLUGIN_OPTION_*`):
 ## References
 
 Mode A/B detection, the machine marker + sparkle wrapper, terminal signals,
-actionability, and the log-line format are condensed in
-[`reference.md`](./reference.md), bundled so the skill is self-contained. It
-points to the full dispatch spec (§2.1, §2.2, §2.3, §2.4) where they differ.
+actionability, and the log-line format live in
+[`reference.md`](./reference.md).

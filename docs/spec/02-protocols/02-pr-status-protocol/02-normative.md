@@ -66,15 +66,15 @@ The per-PR cache root is:
 
 ### Cache files
 
-| Path                              | Contents                                                              |
-| --------------------------------- | --------------------------------------------------------------------- |
-| `comments/<id>.md`                | Verbatim top-level comment content                                    |
-| `comments/<id>.summary.md`        | 1–3-sentence model summary; present iff comment is non-actionable    |
-| `threads/<id>.md`                 | Verbatim thread content, oldest comment first                         |
-| `threads/<id>.summary.md`         | 1–3-sentence model summary; present iff thread is non-actionable     |
-| `annotations/<id>.md`             | Verbatim annotation body                                              |
-| `annotations/<id>.summary.md`     | 1–3-sentence model summary; present iff annotation non-actionable    |
-| `annotations/<id>.ack`            | Empty marker file; presence means annotation is non-actionable        |
+| Path                          | Contents                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| `comments/<id>.md`            | Verbatim top-level comment content                                                   |
+| `comments/<id>.summary.md`    | 1–3-sentence model summary; written once the comment first settles, then persists    |
+| `threads/<id>.md`             | Verbatim thread content, oldest comment first                                        |
+| `threads/<id>.summary.md`     | 1–3-sentence model summary; written once the thread first settles, then persists     |
+| `annotations/<id>.md`         | Verbatim annotation body                                                             |
+| `annotations/<id>.summary.md` | 1–3-sentence model summary; written once the annotation first settles, then persists |
+| `annotations/<id>.ack`        | Empty marker file; presence means annotation is non-actionable                       |
 
 ### Cache lifecycle
 
@@ -104,13 +104,13 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
   <merge-conflicts present="true|false"/>
   <reviews>
     <review author="<login>" mode="bot"
-            state="commented|approved|changes_requested|dismissed"/>
+            state="pending|commented|approved|changes_requested|dismissed"/>
     <review author="<login>" mode="human" role="operator|team"
-            state="commented|approved|changes_requested|dismissed"/>
+            state="pending|commented|approved|changes_requested|dismissed"/>
   </reviews>
   <comments>
     <comment id="<comment-id>" actionable="true"  cache="<abs-path>"/>
-    <comment id="<comment-id>" actionable="false" cache="<abs-path>">
+    <comment id="<comment-id>" actionable="false" reason="<token>" cache="<abs-path>">
       <summary>1–3-sentence summary.</summary>
       <reactions>
         <reaction author="<login>" emoji="+1"/>
@@ -120,13 +120,13 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
   </comments>
   <threads>
     <thread id="<thread-id>" actionable="true"  cache="<abs-path>"/>
-    <thread id="<thread-id>" actionable="false" cache="<abs-path>">
+    <thread id="<thread-id>" actionable="false" reason="<token>" cache="<abs-path>">
       <summary>1–3-sentence summary.</summary>
     </thread>
   </threads>
   <annotations>
     <annotation id="<annotation-id>" actionable="true"  cache="<abs-path>"/>
-    <annotation id="<annotation-id>" actionable="false" cache="<abs-path>">
+    <annotation id="<annotation-id>" actionable="false" reason="acked" cache="<abs-path>">
       <summary>1–3-sentence summary.</summary>
     </annotation>
   </annotations>
@@ -219,15 +219,33 @@ implementation-defined configuration, not prescribed by this protocol.
 
 ### `<reviews>`
 
-One `<review>` element per submitted review. The script MUST emit all submitted
-reviews; it MUST NOT deduplicate by reviewer.
+One persistent `<review>` element per reviewer — not one per submitted review.
+A reviewer who has been requested OR has submitted at least one review appears
+exactly once. The script MUST deduplicate by reviewer (case-insensitive on
+`author`), collapsing a reviewer's history to a single element whose `state`
+reflects their current standing.
 
-| Attribute | Type                                                  | Requirement                                | Meaning                                              |
-| --------- | ----------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------- |
-| `author`  | string                                                | REQUIRED                                   | Platform login of the reviewer                       |
-| `mode`    | `bot\|human`                                          | REQUIRED                                   | See §Mode classification below                       |
-| `role`    | `operator\|team`                                      | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer |
-| `state`   | `commented\|approved\|changes_requested\|dismissed`   | REQUIRED                                   | Platform review state, normalized                    |
+| Attribute | Type                                                         | Requirement                                    | Meaning                                             |
+| --------- | ------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------- |
+| `author`  | string                                                       | REQUIRED                                       | Platform login of the reviewer                      |
+| `mode`    | `bot\|human`                                                 | REQUIRED                                       | See §Mode classification below                      |
+| `role`    | `operator\|team`                                             | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer |
+| `state`   | `pending\|commented\|approved\|changes_requested\|dismissed` | REQUIRED                                       | Reviewer's current standing — see rules below       |
+
+**State derivation rule.** For each reviewer, `state` is computed as follows:
+
+1. Start from the reviewer's most recent submitted review state (normalized:
+   `commented`, `approved`, `changes_requested`, or `dismissed`). A reviewer who
+   was requested but has never submitted a review starts at `pending`.
+2. **Outstanding-request override.** If the reviewer currently has an
+   outstanding review request, `state` MUST be `pending` regardless of any prior
+   verdict. A fresh request replaces the reviewer's previous review until they
+   re-review — so a re-requested bot (e.g. a Copilot re-review) or an operator
+   re-requested after approving reads `pending` again until the new review lands.
+
+`state="pending"` is the in-flight signal: the request is outstanding and that
+reviewer's review has not landed yet. An empty or stable inline-thread set while
+a review is `pending` is NOT convergence.
 
 **Role classification rule.** For each `<review mode="human">`: emit
 `role="operator"` iff `author` matches the supplied operator identity
@@ -240,14 +258,18 @@ described in §Operator identity below. The classifier MUST NOT emit `role` on
 Every top-level PR comment MUST appear. Top-level PR comments are the flat
 chronological stream on the PR, distinct from inline review threads.
 
-For `actionable="true"` elements: the `<summary>` child element MUST be absent.
-For `actionable="false"` elements: `<summary>` MUST be present with 1–3 sentences.
+The `<summary>` child is a persisted recap (see §Summaries). For
+`actionable="false"` elements it MUST be present. For `actionable="true"`
+elements it MAY be present — it appears iff the item was `actionable="false"` on
+an earlier run (a recap was persisted then) and has since flipped back to
+actionable; a never-settled actionable item carries no `<summary>`.
 
-| Attribute    | Type          | Requirement | Meaning                                        |
-| ------------ | ------------- | ----------- | ---------------------------------------------- |
-| `id`         | string        | REQUIRED    | Platform-stable comment ID                     |
-| `actionable` | `true\|false` | REQUIRED    | Whether the agent must act on this comment     |
-| `cache`      | abs-path      | REQUIRED    | Absolute path to the `comments/<id>.md` file   |
+| Attribute    | Type          | Requirement                                                      | Meaning                                               |
+| ------------ | ------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
+| `id`         | string        | REQUIRED                                                         | Platform-stable comment ID                            |
+| `actionable` | `true\|false` | REQUIRED                                                         | Whether the agent must act on this comment            |
+| `reason`     | token         | REQUIRED when `actionable="false"`; MUST be absent when `"true"` | Why the item is suppressed — see §Suppression reasons |
+| `cache`      | abs-path      | REQUIRED                                                         | Absolute path to the `comments/<id>.md` file          |
 
 #### `<reactions>` (top-level comments only)
 
@@ -272,14 +294,16 @@ comments only; `<thread>` and `<annotation>` elements do NOT carry
 Every inline review thread and annotation present on the PR MUST appear,
 regardless of actionability.
 
-For `actionable="true"` elements: `<summary>` MUST be absent.
-For `actionable="false"` elements: `<summary>` MUST be present with 1–3 sentences.
+The `<summary>` child follows the same rule as for `<comment>`: present for
+`actionable="false"`, and present for `actionable="true"` only when a recap was
+persisted on an earlier run (see §Summaries).
 
-| Attribute    | Type          | Requirement | Meaning                                    |
-| ------------ | ------------- | ----------- | ------------------------------------------ |
-| `id`         | string        | REQUIRED    | Platform-stable thread or annotation ID    |
-| `actionable` | `true\|false` | REQUIRED    | Whether the agent must act on this item    |
-| `cache`      | abs-path      | REQUIRED    | Absolute path to the `.md` cache file      |
+| Attribute    | Type          | Requirement                                                      | Meaning                                               |
+| ------------ | ------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
+| `id`         | string        | REQUIRED                                                         | Platform-stable thread or annotation ID               |
+| `actionable` | `true\|false` | REQUIRED                                                         | Whether the agent must act on this item               |
+| `reason`     | token         | REQUIRED when `actionable="false"`; MUST be absent when `"true"` | Why the item is suppressed — see §Suppression reasons |
+| `cache`      | abs-path      | REQUIRED                                                         | Absolute path to the `.md` cache file                 |
 
 ## Actionability rules
 
@@ -317,26 +341,47 @@ exists in the cache directory.
 Writing the `.ack` marker is the calling agent's responsibility, not the
 script's. The script MUST NOT create `.ack` files.
 
+## Suppression reasons
+
+When an item is `actionable="false"`, the element MUST carry a `reason` attribute
+naming *why* it is suppressed, so the agent reads the cause from the contract
+rather than re-deriving it from the human-facing `<summary>` prose (which
+describes the item's *content* and can read as if an addressed point still
+stands). The vocabulary is a closed set of stable tokens:
+
+| Token                  | Applies to        | Meaning                                                                                  |
+| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------- |
+| `resolved`             | threads           | The platform has explicitly resolved the thread.                                         |
+| `agent-artifact`       | comments, threads | The calling agent's own plan/engagement comment (line-anchored sentinel + author match). |
+| `agent-terminal-reply` | comments, threads | The calling agent's terminal-tagged reply.                                               |
+| `acked`                | annotations       | An `<id>.ack` marker exists in the cache directory.                                      |
+
+An `actionable="true"` element MUST NOT carry a `reason`.
+
 ## Summaries
 
-Summaries for non-actionable items MUST be:
+A summary is a persisted recap of an item, stored at `<id>.summary.md` alongside
+the `<id>.md` cache file. It MUST be 1–3 sentences describing the outcome of the
+comment, thread, or annotation.
 
-- 1–3 sentences describing the outcome of the comment, thread, or annotation.
-- Stored at `<id>.summary.md` alongside the corresponding `<id>.md` cache file.
+### Generation and persistence rules
 
-### Regeneration rules
+1. A summary is generated **lazily**: only when an item is `actionable="false"`
+   AND no `<id>.summary.md` exists yet. A still-actionable item that has never
+   settled gets no summary.
+2. Once written, a summary **persists**. The script MUST NOT delete or regenerate
+   it when the item's cached body later changes, and MUST NOT regenerate it on
+   subsequent runs. The recap is deliberately a point-in-time snapshot of the
+   settled item.
+3. A persisted summary is emitted in **either** actionability state (per the
+   per-element rules above). When an item flips from non-actionable back to
+   actionable — e.g. a reviewer replies to a settled thread — the agent reads the
+   persisted `<summary>` plus the new content from the `<id>.md` cache file
+   instead of re-reading the whole item.
 
-The script MUST apply the following rules in order:
-
-1. If `<id>.md` does not exist: write it, generate a summary, write
-   `<id>.summary.md`.
-2. If `<id>.md` exists and its content has not changed since the last run:
-   reuse the existing `<id>.summary.md` without regenerating.
-3. If `<id>.md` exists and its content has changed: overwrite `<id>.md`,
-   regenerate the summary, overwrite `<id>.summary.md`.
-
-The script SHOULD detect "content has not changed" with a stored content hash
-rather than a full byte-for-byte read on every run. The exact mechanism is
+The `<id>.md` cache file itself is rewritten whenever the item's body changes;
+the script SHOULD detect "content changed" with a stored content hash rather than
+a full byte-for-byte read on every run. The exact mechanism is
 implementation-defined.
 
 ## Mode classification

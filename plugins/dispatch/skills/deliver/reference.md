@@ -167,8 +167,30 @@ don't cover may legitimately need a direct read — but the PR status you act on
 comes only from `pr-status`, and routine direct `gh`/MCP calls are writes.
 
 The `pr-status` script applies these rules; the agent reads the resulting
-`actionable="true|false"`. For reference, a comment or thread is **non-actionable**
-iff any of:
+`actionable="true|false"` and treats it as the **sole task source** — no gate or
+lifecycle decision is re-derived from anything else. A non-actionable item also
+carries a `reason=` token naming *why* it was suppressed (`resolved`,
+`agent-artifact`, `agent-terminal-reply`, `acked`). A `<summary>` is a **reading
+aid, not a work queue**: a recap of the item so far, so that when the item is
+`actionable="true"` the agent reads the summary plus the new content from the
+`cache` file instead of re-reading the whole thread, and when it is
+`actionable="false"` the summary is just context. The summary describes the
+item's *content*, not its resolution, so an item the agent already terminal-tagged
+will summarize as if the reviewer's point still stands — that is expected and is
+**not** grounds to reopen it or to enumerate summaries as a to-do list. Trust the
+flag (and the `reason=`); never let summary prose re-actionable a suppressed item.
+
+Reviews are surfaced as one persistent record per reviewer under `<reviews>`,
+each with a `state` of `pending | commented | changes_requested | approved`
+(plus `dismissed`). `state="pending"` is a requested-but-undelivered review: it
+is in-flight, not absent — an empty thread set while a review is `pending` is not
+convergence (a bot reviewer's inline threads can land minutes later). An
+outstanding request **overrides** any prior verdict back to `pending` until the
+reviewer re-reviews ("remain until replaced"). A review still being *drafted*
+(unsubmitted) is not surfaced at all until it is submitted. Keep polling rather
+than chasing either through raw reads.
+
+For reference, a comment or thread is **non-actionable** iff any of:
 
 - the body is one of the calling agent's artifact comments — a line-anchored
   `<!-- agent-plan:... -->` (plan comment) or `<!-- agent-engagement:... -->`

@@ -54,7 +54,12 @@ $(cat "$body")" > "$out" 2>/dev/null || echo "(summary unavailable)" > "$out"
 }
 
 # Args: <id> <subdir> <body>
-# Writes <id>.md (and regenerates summary on change); echoes 1 if summary present.
+# Writes <id>.md when the body changes. The summary is intentionally NOT deleted
+# on change: a summary, once generated for a settled (non-actionable) item, is a
+# recap the agent reads alongside the new content when the item later flips back
+# to actionable (a reviewer reply) — instead of re-reading the whole thread. It
+# is generated lazily (see the per-section emitters: only when an item is
+# non-actionable and no summary exists yet) and then persists.
 cache_item() {
   local id="$1" sub="$2" body="$3"
   local md="$DIR/$sub/$id.md"
@@ -64,13 +69,12 @@ cache_item() {
   if [[ ! -f "$md" || "$new_hash" != "$old_hash" ]]; then
     printf '%s' "$body" > "$md"
     printf '%s' "$new_hash" > "$hash_file"
-    [[ "$sub" != "annotations" ]] && rm -f "$DIR/$sub/$id.summary.md"
   fi
 }
 
 # --- fetch --------------------------------------------------------------------
 PR_JSON="$(gh pr view "$PR" --json \
-  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup,reviews)"
+  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup)"
 
 HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 
@@ -132,6 +136,65 @@ COMMENTS_JSON="$(gh api graphql --paginate \
       }
     }' --jq '.data.repository.pullRequest.comments.nodes[]' | jq -s '.')"
 
+# Reviews and review requests come from GraphQL, not `gh pr view --json`, because
+# the latter's exporter only marshals User/Team requested reviewers and silently
+# drops Bot-typed ones (e.g. Copilot) — which would break the pending override
+# for a re-requested bot review. GraphQL's RequestedReviewer union lets us pull
+# the login for User/Bot/Mannequin (and name/slug for Team), and the review
+# author's __typename gives an authoritative bot flag.
+#
+# The reviews connection must be fully paginated: every review event is a node,
+# so a long-running PR exceeds a single 100-node page, and a `first:100` cap
+# silently drops the newest reviews — breaking the "most recent submitted review
+# per reviewer" rule (a recent changes_requested, or a bot review that has since
+# landed against an outstanding request, would be missed). `--paginate` walks
+# every page via $endCursor; `--jq …nodes[]` emits one node per line, which
+# `jq -s` collects into a single array. reviewRequests is bounded by the
+# reviewer count (only currently-outstanding requests stand), so its single
+# 100-node page is sufficient and is fetched separately — `--paginate` follows
+# exactly one connection's cursor, so the two can't share a query.
+REVIEW_NODES="$(gh api graphql --paginate \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviews(first:100, after:$endCursor) {
+            nodes { author { login __typename } state }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviews.nodes[]' | jq -s '.')"
+
+REVIEW_REQUEST_NODES="$(gh api graphql \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviewRequests(first:100) {
+            nodes {
+              requestedReviewer {
+                __typename
+                ... on User { login }
+                ... on Bot { login }
+                ... on Mannequin { login }
+                ... on Team { name slug }
+              }
+            }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviewRequests.nodes // []')"
+
+# Re-wrap the two connections back into the {reviews:{nodes:…},
+# reviewRequests:{nodes:…}} pullRequest-node shape reviews_xml's jq reads.
+REVIEWS_JSON="$(jq -n \
+  --argjson reviews "$REVIEW_NODES" \
+  --argjson reqs "$REVIEW_REQUEST_NODES" \
+  '{reviews: {nodes: $reviews}, reviewRequests: {nodes: $reqs}}')"
+
 # GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
 reaction_emoji() {
   case "$1" in
@@ -180,9 +243,52 @@ conflicts_xml() {
 }
 
 # --- reviews ------------------------------------------------------------------
+# One persistent record per reviewer (PR #132 model): a reviewer who was
+# requested OR has reviewed appears exactly once, carrying a status that walks
+# pending -> commented/changes_requested/approved (plus dismissed). An
+# outstanding request OVERRIDES any prior verdict back to "pending" — a fresh
+# request "replaces" the old review until the reviewer re-reviews — so a
+# re-requested Copilot, or an operator re-requested after approving, reads as
+# pending and the agent keeps polling instead of treating the stale verdict as
+# current. `state="pending"` is the in-flight signal: an empty thread set while a
+# pending review stands is NOT convergence. Mode is bot iff GitHub types the
+# account a Bot or the login matches the agent-identity regex; role is operator
+# iff the login is the configured operator, else team (humans only). Input is the
+# GraphQL pullRequest node ($REVIEWS_JSON): `.reviews.nodes` and
+# `.reviewRequests.nodes` (the latter wrapping a RequestedReviewer union).
 reviews_xml() {
   echo "  <reviews>"
-  jq -r '.reviews // [] | .[] | [(.author.login // ""), (.author.is_bot // false), (.state // "")] | @tsv' <<<"$PR_JSON" |
+  jq -r '
+    # Requested reviewers (currently-outstanding requests): login + bot-ness.
+    # The GraphQL union nests under .requestedReviewer; User/Bot/Mannequin carry
+    # .login, Team carries .slug/.name.
+    ( [ (.reviewRequests.nodes // [])[]
+        | .requestedReviewer
+        | { login: ((.login // .slug // .name) // ""), is_bot: ((.__typename // "") == "Bot") }
+        | select(.login != "") ] ) as $reqs
+    | ( [ $reqs[].login | ascii_downcase ] ) as $reqset
+    # Latest SUBMITTED review per author, keyed by lowercased login. PENDING here
+    # means an unsubmitted draft (visible only to its author, e.g. the agent
+    # itself); it is invisible to the protocol, so drop it — "pending" in the
+    # output comes from an outstanding REQUEST, never an unsubmitted review.
+    | ( reduce (.reviews.nodes // [])[] as $r ({};
+          ( ($r.author.login // "") ) as $lg
+          | if $lg == "" or ($r.state == "PENDING") then .
+            else .[($lg | ascii_downcase)] =
+                   { login: $lg, is_bot: (($r.author.__typename // "") == "Bot"), state: ($r.state // "COMMENTED") }
+            end
+        ) ) as $rev
+    # Add a pending stub for any requested reviewer that has not reviewed.
+    | ( $rev + ( reduce $reqs[] as $q ({};
+          ( $q.login | ascii_downcase ) as $k
+          | if ($rev[$k]) then . else .[$k] = { login: $q.login, is_bot: $q.is_bot, state: "PENDING" } end
+        ) ) )
+    # Pending override: an outstanding request forces the status back to pending.
+    | to_entries
+    | map( .key as $k | .value + { state: ( if ($reqset | index($k)) then "PENDING" else .value.state end ) } )
+    | .[]
+    | [ .login, (.is_bot | tostring), .state ] | @tsv
+  ' <<<"$REVIEWS_JSON" |
   while IFS=$'\t' read -r author is_bot state; do
     [[ -n "$author" ]] || continue
     local mode="human"
@@ -190,7 +296,7 @@ reviews_xml() {
       mode="bot"
     fi
     local s; s="$(tr '[:upper:]' '[:lower:]' <<<"$state")"
-    case "$s" in commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
+    case "$s" in pending|commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
     if [[ "$mode" == "human" ]]; then
       local role="team"
       [[ "${author,,}" == "$OPERATOR_LC" ]] && role="operator"
@@ -216,7 +322,13 @@ has_terminal_signal() {
 
 # --- actionability ------------------------------------------------------------
 # Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
-# Echoes "true" (actionable) or "false".
+# Echoes a tab-separated "<actionable>\t<reason>" pair: actionable is "true" or
+# "false"; reason is empty when actionable, else a stable token explaining *why*
+# the item is suppressed (`resolved`, `agent-artifact`, `agent-terminal-reply`).
+# The reason is surfaced as a `reason=` attribute so the agent never has to
+# re-derive suppression from the human-facing <summary> prose (which describes
+# the thread's *content* and will read as if an addressed reviewer point still
+# stands).
 # Full rules: reference.md → Actionability. Summary: non-actionable iff
 # thread-resolved, or the body is the calling agent's plan comment or
 # engagement comment (line-anchored agent-plan/agent-engagement sentinel +
@@ -228,7 +340,7 @@ has_terminal_signal() {
 # fails.
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
-  [[ "$resolved" == "true" ]] && { echo false; return; }
+  [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
 
   # Plan or engagement comment by the calling agent. Both are agent artifacts,
   # not reviewer items: the engagement comment in particular anchors operator
@@ -237,7 +349,7 @@ classify_actionable() {
   # "addresses" its own request.
   if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
       && grep -qE '^<!-- agent-(plan|engagement):[^ ]+ -->$' <<<"$body"; then
-    echo false; return
+    printf 'false\tagent-artifact\n'; return
   fi
 
   # Terminal-tagged reply by the calling agent.
@@ -245,18 +357,31 @@ classify_actionable() {
     if [[ -n "$CALLER_LOGIN" ]]; then
       if [[ "$author" == "$CALLER_LOGIN" ]] \
           && grep -qF '<!-- agent-reply:' <<<"$body"; then
-        echo false; return
+        printf 'false\tagent-terminal-reply\n'; return
       fi
     else
       # Degraded path: no caller identity; gate on the exact agent-id marker
       # alone. False-positive on a human quoting the exact marker + terminal
       # signal is preserved from the pre-fix behavior.
       if grep -qF "<!-- agent-reply:$DISPATCH_AGENT_ID -->" <<<"$body"; then
-        echo false; return
+        printf 'false\tagent-terminal-reply\n'; return
       fi
     fi
   fi
-  echo true
+  printf 'true\t\n'
+}
+
+# Parse a classify_actionable result into the globals $CA_ACTIONABLE and
+# $CA_REASON_ATTR (the latter ready to splice into a start tag, empty unless
+# non-actionable with a reason). Keeps the tab-splitting in one place.
+parse_actionable() {
+  CA_ACTIONABLE="${1%%$'\t'*}"
+  local reason="${1#*$'\t'}"
+  if [[ "$CA_ACTIONABLE" == "false" && -n "$reason" ]]; then
+    CA_REASON_ATTR=" reason=\"$(xml_attr "$reason")\""
+  else
+    CA_REASON_ATTR=""
+  fi
 }
 
 # Emit <reactions>…</reactions> for a reactions-node JSON array, or nothing if
@@ -290,21 +415,23 @@ comments_xml() {
     [[ -n "$raw_id" ]] || continue
     id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
-    local actionable; actionable="$(classify_actionable "$body" "$author" "false")"
+    parse_actionable "$(classify_actionable "$body" "$author" "false")"
+    local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"
+    # Generate the recap lazily, only for a settled (non-actionable) item with no
+    # summary yet; once written it persists and is emitted in either state so the
+    # agent can read it when the item later flips back to actionable.
+    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
     local inner=""
-    if [[ "$actionable" == "false" ]]; then
-      [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
-    fi
+    [[ -f "$sum_path" ]] && inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
     inner+="$(reactions_xml_for "$reactions")"
     if [[ -z "$inner" ]]; then
-      printf '    <comment id="%s" actionable="%s" cache="%s"/>\n' \
-        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")"
+      printf '    <comment id="%s" actionable="%s"%s cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")"
     else
-      printf '    <comment id="%s" actionable="%s" cache="%s">%s</comment>\n' \
-        "$(xml_attr "$id")" "$actionable" "$(xml_attr "$cache_path")" "$inner"
+      printf '    <comment id="%s" actionable="%s"%s cache="%s">%s</comment>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")" "$inner"
     fi
   done
   echo "  </comments>"
@@ -323,16 +450,21 @@ threads_xml() {
     [[ -n "$id" ]] || continue
     id="${id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "threads" "$body"
-    local actionable; actionable="$(classify_actionable "$newest_body" "$newest_author" "$resolved")"
+    parse_actionable "$(classify_actionable "$newest_body" "$newest_author" "$resolved")"
+    local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/threads/$id.md"
     local sum_path="$DIR/threads/$id.summary.md"
-    if [[ "$actionable" == "true" ]]; then
-      printf '    <thread id="%s" actionable="true" cache="%s"/>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+    # Generate the recap lazily for a settled (non-actionable) thread with none
+    # yet; it persists and is emitted in either state. When the thread flips back
+    # to actionable (a reviewer reply), the agent reads this recap plus the new
+    # content from the cache file instead of re-reading the whole thread.
+    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+    if [[ -f "$sum_path" ]]; then
+      printf '    <thread id="%s" actionable="%s"%s cache="%s"><summary>%s</summary></thread>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
     else
-      [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-      printf '    <thread id="%s" actionable="false" cache="%s"><summary>%s</summary></thread>\n' \
-        "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      printf '    <thread id="%s" actionable="%s"%s cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")"
     fi
   done
   echo "  </threads>"
@@ -361,7 +493,7 @@ annotations_xml() {
       local sum_path="$DIR/annotations/$id.summary.md"
       if [[ -f "$ack" ]]; then
         [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-        printf '    <annotation id="%s" actionable="false" cache="%s"><summary>%s</summary></annotation>\n' \
+        printf '    <annotation id="%s" actionable="false" reason="acked" cache="%s"><summary>%s</summary></annotation>\n' \
           "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
       else
         printf '    <annotation id="%s" actionable="true" cache="%s"/>\n' \

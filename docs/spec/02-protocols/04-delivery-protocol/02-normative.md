@@ -229,10 +229,10 @@ The Delivery Protocol supports two delivery shapes selected by a per-installatio
   skipped; Stage 3 (Public review) targets the operator.
 - **Team mode** (`team_mode=true`). The operator is one of several human
   reviewers. After Copilot, the agent runs Stage 2 (Private review) with the
-  PR still in draft, targeting the operator. The agent MUST NOT clear draft;
-  the operator clears it themselves (moving the PR from draft to ready) when
-  satisfied, and the agent then runs Stage 3 (Public review) with the rest of
-  the team — the operator is **excluded** from the Stage 3 reviewer set.
+  PR still in draft, targeting the operator. Only after the operator approves,
+  the operator — not the agent — clears draft (the agent MUST NOT); the agent
+  then runs Stage 3 (Public review) with the rest of the team — the operator is
+  **excluded** from the Stage 3 reviewer set.
 
 Stage names refer to **PR visibility**: Stage 2 happens while the PR is still
 in draft (`private_review_*` states); Stage 3 happens after draft is cleared
@@ -300,8 +300,6 @@ The notification venue by Mode:
 **Gate 6 — Operator-approved (always required).** Satisfied by ANY of the
 following signals on the engagement venue:
 
-- The operator clearing draft themselves (team mode) — moving the PR from draft
-  to ready is itself the approval, and the canonical Stage 2 signal.
 - A `<review mode="human" role="operator" state="approved">` element in the
   next pr-status XML (Mode A formal review).
 - A `<reaction emoji="+1">` from the operator on the agent's engagement
@@ -310,16 +308,17 @@ following signals on the engagement venue:
   the engagement comment, on the ticket, or via the out-of-band channel.
 - A ticket-side approval signal (e.g. status transition by the operator).
 
-In team mode Gate 6 is satisfied during Stage 2 — canonically by the operator
-clearing draft. In solo mode (Stage 2 skipped), Gate 6 is satisfied during
-Stage 3 via the same signals on the operator's public-review engagement.
+In team mode Gate 6 is satisfied during Stage 2. In solo mode (Stage 2
+skipped), Gate 6 is satisfied during Stage 3 via the same signals on the
+operator's public-review engagement.
 
-**Draft clearance.** In **solo mode**, once the CI/Copilot conditions hold the
-agent MUST clear the draft and proceed to Stage 3 (Gate 6 is then satisfied
-during Stage 3). In **team mode**, the agent MUST NOT clear the draft; the
-operator clears it themselves (moving the PR from draft to ready), and that act
-both satisfies Gate 6 and authorizes Stage 3. The agent observes the PR is no
-longer a draft and proceeds.
+**Draft clearance.** In **solo mode**, the agent clears draft after Copilot
+(per Mode selection above) and engages the operator; Gate 6 is then satisfied
+during Stage 3. In **team mode**, draft is cleared only after Gate 6 is
+satisfied in Stage 2 AND CI/Copilot conditions still hold — and the operator,
+**not** the agent, clears it (moving the PR from draft to ready). The agent MUST
+NOT clear draft in team mode; it observes the PR is no longer a draft and
+proceeds to Stage 3.
 
 ### Stage 3 — Public review
 

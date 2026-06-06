@@ -44,8 +44,6 @@ Seven binary signals read from each `pr-status` XML:
 4. **No actionable comments** — zero `<comment actionable="true">`.
 5. **No actionable threads** — zero `<thread actionable="true">`.
 6. **Operator-approved** (always required). Any of:
-   - the operator clearing draft (team mode — moving the PR from draft to ready
-     is itself the approval), or
    - `<review mode="human" role="operator" state="approved">` (Mode A), or
    - `<reaction emoji="+1">` from the operator on the engagement comment, or
    - a "go ahead"/"lgtm"/"ready"/"clear draft" reply from the operator (on the
@@ -178,12 +176,11 @@ agent in solo, the operator in team); guessing drives the wrong lifecycle.
   agent clears draft and engages the operator as the public reviewer.
   `private_review_*` unreachable. Gate 6 satisfied during `public_review_*`;
   Gate 7 trivial.
-- **Team.** Operator gets a private pre-review while still draft. The agent
-  **never** clears draft — when satisfied, the operator clears it themselves
-  (moving the PR to ready), and that act is the operator's approval (Gate 6
-  during `private_review_*`). The agent then engages the rest of the team
-  (Gate 7 during `public_review_*`). Operator is **excluded** from the public
-  reviewer set.
+- **Team.** Operator gets a private pre-review while still draft. After the
+  operator approves (Gate 6 during `private_review_*`), the operator — **not**
+  the agent — clears draft (moves the PR to ready); the agent observes it's
+  non-draft and engages the rest of the team (Gate 7 during `public_review_*`).
+  Operator is **excluded** from the public reviewer set.
 
 **No eligible reviewer.** If no non-self human reviewer exists in
 `ready_for_public_review`, skip the request but still transition to

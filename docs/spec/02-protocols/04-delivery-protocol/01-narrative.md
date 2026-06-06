@@ -112,11 +112,12 @@ does, the operator's feedback can't shape the framing the team encounters.
 
 The private review stage gives the operator first look while the PR is still
 in draft. The agent engages the operator (via PR review request in Mode A, or
-ticket/out-of-band channel in Mode B) and waits for the operator to clear draft
-themselves — moving the PR from draft to ready, which is both their approval and
-the public act that advances the flow. The agent never clears draft in team
-mode; once it observes the PR is no longer a draft, it engages the rest of the
-team.
+ticket/out-of-band channel in Mode B) and waits for an approval signal — a
+formal review approval, a `+1` reaction on the engagement comment, a "go
+ahead" / "lgtm" text reply, or a ticket-side approval. Once approved, the
+operator — not the agent — clears draft (moving the PR from draft to ready);
+the agent never clears draft in team mode, and once it observes the PR is no
+longer a draft it engages the rest of the team.
 
 In solo mode the operator IS the only human reviewer, so this stage adds
 nothing — the agent skips it and engages the operator publicly. The lifecycle

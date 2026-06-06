@@ -48,7 +48,7 @@ Seven binary signals read from each `pr-status` XML:
 6. **Operator-approved** (always required). Any of:
    - `<review mode="human" role="operator" state="approved">` (Mode A), or
    - `<reaction emoji="+1">` from the operator on the engagement comment, or
-   - a "go ahead"/"lgtm"/"ready"/"clear draft" reply from the operator (on the
+   - a "go ahead"/"lgtm"/"ready" reply from the operator (on the
      engagement comment, the ticket, or out-of-band), or
    - a ticket-side approval (e.g. operator status transition).
 

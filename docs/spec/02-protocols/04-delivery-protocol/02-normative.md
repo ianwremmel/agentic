@@ -305,7 +305,7 @@ following signals on the engagement venue:
   next pr-status XML (Mode A formal review).
 - A `<reaction emoji="+1">` from the operator on the agent's engagement
   comment (surfaced via the `<reactions>` child of `<comment>` per §2.2.2).
-- A "go ahead" / "lgtm" / "ready" / "clear draft" reply from the operator on
+- A "go ahead" / "lgtm" / "ready" reply from the operator on
   the engagement comment, on the ticket, or via the out-of-band channel.
 - A ticket-side approval signal (e.g. status transition by the operator).
 

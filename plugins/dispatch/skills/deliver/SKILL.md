@@ -44,6 +44,8 @@ Seven binary signals read from each `pr-status` XML:
 4. **No actionable comments** — zero `<comment actionable="true">`.
 5. **No actionable threads** — zero `<thread actionable="true">`.
 6. **Operator-approved** (always required). Any of:
+   - the operator clearing draft (team mode — moving the PR from draft to ready
+     is itself the approval), or
    - `<review mode="human" role="operator" state="approved">` (Mode A), or
    - `<reaction emoji="+1">` from the operator on the engagement comment, or
    - a "go ahead"/"lgtm"/"ready"/"clear draft" reply from the operator (on the
@@ -93,7 +95,7 @@ stateDiagram-v2
     private_review_commented --> ready_for_private_review: addressed · gates 1-5 · re-request
     private_review_requested_changes --> ready_for_private_review: addressed · gates 1-5 · re-request (required to unblock)
 
-    private_review_approved --> ready_for_public_review: draft cleared
+    private_review_approved --> ready_for_public_review: operator cleared draft
 
     ready_for_public_review --> public_review_requested: review requested (operator excluded in team mode)
     ready_for_public_review --> public_review_requested: no eligible non-self reviewer (skip request)
@@ -114,11 +116,13 @@ stateDiagram-v2
     done --> [*]
 ```
 
-`private_review_*` is unreachable in solo mode. **Draft clears on exactly one
-edge target: any edge into `ready_for_public_review`** — out of
-`copilot_review_requested`/`draft` in solo mode, out of `private_review_approved`
-in team mode. If the operator clicks "ready for review" first, the agent
-observes the same edge and proceeds.
+`private_review_*` is unreachable in solo mode. **Who clears draft depends on
+mode.** In solo mode the agent clears draft on the edge into
+`ready_for_public_review` (out of `copilot_review_requested`, or `draft` when
+Copilot is unavailable). In team mode the agent **never** clears draft — the
+operator moves the PR from draft to ready themselves; the agent observes the PR
+is no longer a draft and proceeds into `ready_for_public_review`. (In solo mode,
+if the operator clears draft first, the agent likewise just proceeds.)
 
 **Universal terminal** (from any state): PR closed, or operator "stop" → read
 `<terminal>` from `pr-status` → acknowledge with a terminal signal → `merged` →
@@ -149,7 +153,7 @@ of `public_review_requested`). Worktree cleanup happens on any closure.
 | `private_review_requested`         | (Team.) Await the operator's signal.                                                                            | reviewer |
 | `private_review_commented`         | (Team.) Address each item; push; re-request.                                                                    | no       |
 | `private_review_requested_changes` | (Team.) Address; push; **re-request required** — blocks public review.                                          | no       |
-| `private_review_approved`          | (Team.) Clear draft; → `ready_for_public_review`.                                                               | no       |
+| `private_review_approved`          | (Team.) **Don't clear draft** — the operator does. Observe the PR is no longer a draft, then → `ready_for_public_review`. | no       |
 | `ready_for_public_review`          | Request public review. Solo: post the engagement comment (agent-reply + `agent-engagement` sentinel) and engage the operator. Team: request team reviewer(s), **excluding the operator**. Never self-request. Mode A/B per reference. | no       |
 | `public_review_requested`          | Await the public reviewer.                                                                                      | reviewer |
 | `public_review_commented`          | Address each item; push; re-request.                                                                            | no       |
@@ -167,16 +171,19 @@ gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
 
 **Read `CLAUDE_PLUGIN_OPTION_TEAM_MODE` at startup — never infer it.** The
 harness always exports it (configured value or declared default), so there's no
-unset case. Mode picks which states are reachable and which gate clears draft;
-guessing drives the wrong lifecycle.
+unset case. Mode picks which states are reachable and who clears draft (the
+agent in solo, the operator in team); guessing drives the wrong lifecycle.
 
-- **Solo** (default). Operator is the only human reviewer. After Copilot, clear
-  draft and engage the operator as the public reviewer. `private_review_*`
-  unreachable. Gate 6 satisfied during `public_review_*`; Gate 7 trivial.
-- **Team.** Operator gets a private pre-review while still draft. Clear draft
-  only after operator approval (Gate 6 during `private_review_*`); then engage
-  the rest of the team (Gate 7 during `public_review_*`). Operator is
-  **excluded** from the public reviewer set.
+- **Solo** (default). Operator is the only human reviewer. After Copilot, the
+  agent clears draft and engages the operator as the public reviewer.
+  `private_review_*` unreachable. Gate 6 satisfied during `public_review_*`;
+  Gate 7 trivial.
+- **Team.** Operator gets a private pre-review while still draft. The agent
+  **never** clears draft — when satisfied, the operator clears it themselves
+  (moving the PR to ready), and that act is the operator's approval (Gate 6
+  during `private_review_*`). The agent then engages the rest of the team
+  (Gate 7 during `public_review_*`). Operator is **excluded** from the public
+  reviewer set.
 
 **No eligible reviewer.** If no non-self human reviewer exists in
 `ready_for_public_review`, skip the request but still transition to

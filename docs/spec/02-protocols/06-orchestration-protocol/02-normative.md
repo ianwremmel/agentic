@@ -24,13 +24,13 @@ and instruct the operator to re-invoke outside it.
 
 The orchestrator MUST respect these responsibility boundaries:
 
-| Actor              | Owns                                                                                | Defined in |
-| ------------------ | ----------------------------------------------------------------------------------- | ---------- |
-| orchestrator       | merged graph, slot accounting, dispatch/redispatch, lock reconciliation, completion | §2.6       |
-| ticket coordinator | one ticket end-to-end, ticket↔PR mapping, role transitions, decomposition           | §2.5       |
-| delivery worker    | one PR from first commit to merge                                                   | §2.4       |
-| review agent       | one milestone's review when it is ready-for-review                                  | §2.3       |
-| verification agent | one verification-only (no-PR) ticket                                                | §2.6       |
+| Actor              | Owns                                                                                 | Defined in |
+| ------------------ | ------------------------------------------------------------------------------------ | ---------- |
+| orchestrator       | merged graph, slot accounting, dispatch/re-dispatch, lock reconciliation, completion | §2.6       |
+| ticket coordinator | one ticket end-to-end, ticket↔PR mapping, role transitions, decomposition            | §2.5       |
+| delivery worker    | one PR from first commit to merge                                                    | §2.4       |
+| review agent       | one milestone's review when it is ready-for-review                                   | §2.3       |
+| verification agent | one verification-only (no-PR) ticket                                                 | §2.6       |
 
 The orchestrator MUST NOT read raw ticket bodies, evaluate CI/review/Copilot
 state, or perform a milestone review itself. It acts only on the derived sections
@@ -161,8 +161,9 @@ following MUST occur each tick, in order:
 
 4. For each active unit (from on-disk active set / sentinels), by kind:
      coordinator | bare worker:
-        closure = coarse forge/tracker closure check (PR merged | closed) or the
-                  unit's outcome artifact — NOT a §2.2 gate evaluation
+        closure = coarse closure check — the PR merged/closed (bare worker), or
+                  the ticket reached a terminal §2.3 role (coordinator) — or the
+                  unit's outcome artifact; NOT a §2.2 gate evaluation
         if closed/terminal: run the residual §2.3 transition + cleanup; drop it
         elif no live owner (no / stale lock): re-dispatch the same unit
         else: live owner — nothing this tick
@@ -173,7 +174,8 @@ following MUST occur each tick, in order:
         elif outcome is a retryable verification failure, or no live owner: re-dispatch
         else: live owner — nothing this tick
 
-5. Honor human-blocked nodes (graph `human-blocked` ∪ worker-parked):
+5. Honor human-blocked nodes (graph `human-blocked`, which already includes both
+   the explicit-signal and worker-discovered parkings):
      ensure the ticket is parked in `awaiting-external` (transition it if the
         explicit signal left it elsewhere); ensure exactly one outstanding human
         alert (§Human-interactive tickets); never dispatch a worker; slot-exempt

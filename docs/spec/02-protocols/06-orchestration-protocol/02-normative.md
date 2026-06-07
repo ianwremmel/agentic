@@ -110,8 +110,11 @@ identically regardless of tracker or access mechanism.
   ranking, cycle detection — so the document the orchestrator reads is already
   derived.
 - The producer MUST accept the orchestrator's exclusion inputs (the identifiers
-  of tickets already in flight, done, or failed) so in-flight and terminal
-  tickets are not re-offered in `available`.
+  of tickets already in flight, done, or failed). Exclusions affect only the
+  derived scheduling sections — an excluded ticket MUST NOT appear in `available`
+  — and MUST NOT suppress node/edge updates: a sync or delta MUST still emit the
+  current state of an excluded ticket, so the durable cache never goes stale for
+  in-flight or terminal work.
 
 **Access style is orthogonal to credential mode.** Whether a producer reaches the
 tracker via API, CLI, or MCP is an adapter detail selected by configuration. It
@@ -188,7 +191,8 @@ following MUST occur each tick, in order:
         elif target-kind == human-only: handle per step 5 (never dispatch worker)
         elif used < MAX_PARALLEL: dispatch a ticket coordinator (§2.5); used += 1
 
-8. Persist active set + cursor atomically (write-temp-then-rename)
+8. Persist active set atomically (write-temp-then-rename); the cursor was already
+   persisted with the graph cache in step 1 — it has a single source of truth
 
 9. Completion check:
      if every selected project's counts are terminal: stop (see §Termination)

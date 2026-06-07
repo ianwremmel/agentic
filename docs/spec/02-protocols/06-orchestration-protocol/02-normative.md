@@ -180,9 +180,10 @@ following MUST occur each tick, in order:
 
 5. Honor human-blocked nodes (graph `human-blocked`, which already includes both
    the explicit-signal and worker-discovered parkings):
-     ensure the ticket is parked in `awaiting-external` (transition it if the
-        explicit signal left it elsewhere); ensure exactly one outstanding human
-        alert (§Human-interactive tickets); never dispatch a worker; slot-exempt
+     ensure the ticket is parked in `awaiting-external` (or `paused` if the
+        tracker lacks it), transitioning it there if the explicit signal left it
+        elsewhere; ensure exactly one outstanding human alert; never dispatch a
+        worker or coordinator (§Human-interactive tickets); slot-exempt
 
 6. Milestone-review gate:
      for each milestone ready-for-review AND NOT review-recorded with no live

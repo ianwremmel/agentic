@@ -39,8 +39,12 @@ Before doing any work the coordinator MUST claim the ticket:
 2. If the ticket is already in a `started` role assigned to a *different* agent
    identity, the coordinator MUST NOT proceed (§2.3 multi-agent coordination).
 3. Assign the ticket to the coordinator's own agent identity.
-4. Transition the ticket `available → in-progress` per §2.3, emitting the
-   state-change comment and `TRANSITION` log entry.
+4. Transition the ticket to `in-progress` per §2.3 **only if it is not already
+   there**: from `available`, emit the `available → in-progress` transition with
+   its state-change comment and `TRANSITION` log entry. If the ticket is already
+   `in-progress` assigned to this identity — a re-dispatch after a stale/dead lock,
+   or a resumed run — the coordinator proceeds **without** re-emitting the
+   transition; the claim is idempotent.
 
 If the ticket is in a parked role (`paused`, `awaiting-external`), the
 coordinator MUST first observe the §2.3 resume rule (parked → `available` →

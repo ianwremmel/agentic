@@ -49,6 +49,20 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | [01-narrative.md](02-protocols/04-delivery-protocol/01-narrative.md)   | Design goals, stage overview, automation-first rationale |
 | [02-normative.md](02-protocols/04-delivery-protocol/02-normative.md)   | Worktree rules, PR-open sequence, CI gates, termination  |
 
+### §2.5 — Ticket Coordination Protocol
+
+| File                                                                            | Contents                                                                      |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [01-narrative.md](02-protocols/05-ticket-coordination-protocol/01-narrative.md) | Why a coordinator, ticket↔PR mapping, human-handoff, standalone vs dispatched |
+| [02-normative.md](02-protocols/05-ticket-coordination-protocol/02-normative.md) | Claiming, decomposition, PR production, role transitions, DoD, reporting      |
+
+### §2.6 — Orchestration Protocol
+
+| File                                                                      | Contents                                                     |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| [01-narrative.md](02-protocols/06-orchestration-protocol/01-narrative.md) | Three tiers, graph-frontier, producers/adapters, injection   |
+| [02-normative.md](02-protocols/06-orchestration-protocol/02-normative.md) | Graph document, producer/cursor contract, tick, slots, gates |
+
 ---
 
 ## §3 — CLI and Daemon
@@ -78,3 +92,4 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | 2026-05-13 | Added §1; split §3 into daemon and commands                  |
 | 2026-05-13 | Added §2.1–§2.4, §3.1–§3.2; retired all pre-spec source docs  |
 | 2026-05-14 | Review feedback: §2.2 adds comments channel, checks precedence; §2.3 fixes milestones and Asana; §2.4 fixes review gating; §3 refactors commands |
+| 2026-06-07 | Added §2.5 Ticket Coordination and §2.6 Orchestration protocols |

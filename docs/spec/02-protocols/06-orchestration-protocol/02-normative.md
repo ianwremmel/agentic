@@ -168,10 +168,14 @@ following MUST occur each tick, in order:
         elif no live owner (no / stale lock): re-dispatch the same unit
         else: live owner — nothing this tick
      review agent | verification agent (sentinel-tracked):
-        if its outcome artifact is present: apply the outcome (record the review,
-           or move the verification ticket per §2.3), clean up the sentinel — the
-           gate/check opens and dependents unblock via the next fetch
-        elif outcome is a retryable verification failure, or no live owner: re-dispatch
+        if outcome artifact present:
+           review                       -> record the review (§2.3); clean sentinel
+           verification = verified       -> move the ticket (§2.3); clean sentinel —
+                                            the gate opens, dependents unblock next fetch
+           verification = retryable-failure -> consume the artifact; re-dispatch
+           verification = blocked-failure   -> park the gate; surface to operator;
+                                            no re-dispatch (dependents stay blocked)
+        elif no live owner (no / stale lock): re-dispatch
         else: live owner — nothing this tick
 
 5. Honor human-blocked nodes (graph `human-blocked`, which already includes both
@@ -301,8 +305,12 @@ For any human-interactive node the orchestrator MUST:
    the explicit-signal path the orchestrator transitions it there per §2.3 if it
    is not already parked. Both paths thus converge on the same parked role.
 2. Never dispatch a code worker or coordinator that would attempt the work.
-3. Ensure exactly one outstanding human alert exists. The alert is a §2.1 comment
-   carrying a durable human-alert sentinel:
+3. Ensure exactly one outstanding human alert exists. The alert is a §2.1
+   comment: its first line is the required `<!-- agent-reply:<orchestrator-id> -->`
+   machine marker, and a durable human-alert sentinel sits **inside** the body
+   (after that marker in Mode A, after the opening sparkle in Mode B — never
+   displacing the leading marker), mirroring how §2.4 places its plan and
+   engagement sentinels:
 
    ```
    <!-- agent-human-alert:<orchestrator-id> -->

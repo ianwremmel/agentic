@@ -50,9 +50,11 @@ coordinator MUST first observe the §2.3 resume rule (parked → `available` →
 
 The coordinator MUST apply the §2.3 decomposition rule:
 
-- **Too large** — file subtasks via the tracker's native subtask mechanism and
-  operate on them individually. The parent ticket remains `in-progress` until all
-  subtasks reach `verified` or `canceled`. Log the subtask creation as `INFO`.
+- **Too large** — file subtasks via the tracker's native subtask mechanism. Each
+  subtask is then handled as an independent unit by its own coordinator run (per
+  the paragraph below); this coordinator does not drive them itself. The parent
+  ticket remains `in-progress` until all subtasks reach `verified` or `canceled`.
+  Log the subtask creation as `INFO`.
 - **Out-of-scope blocker** — file a new ticket for the blocker, link it as a
   `blocks` edge to the current ticket, and log a `BLOCK` entry. The coordinator
   then either parks the current ticket (`awaiting-external`, or `paused` if

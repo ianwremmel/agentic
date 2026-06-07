@@ -3,8 +3,8 @@
 ## Applicability
 
 This protocol applies to an agent driving one or more **projects** to completion
-by dispatching ticket coordinators (§2.5) and, for ad-hoc PRs, delivery workers
-(§2.4). The agent is the **orchestrator**.
+by dispatching ticket coordinators (§2.5) — which internally drive §2.4 delivery
+workers — and milestone review agents. The agent is the **orchestrator**.
 
 All selected projects MUST live on the same tracker. Cross-tracker orchestration
 is out of scope (§2.3: a ticket on one tracker MUST NOT depend on a ticket on
@@ -24,13 +24,19 @@ and instruct the operator to re-invoke outside it.
 
 The orchestrator MUST respect these responsibility boundaries:
 
-| Actor              | Owns                                                                                 | Defined in |
-| ------------------ | ------------------------------------------------------------------------------------ | ---------- |
-| orchestrator       | merged graph, slot accounting, dispatch/re-dispatch, lock reconciliation, completion | §2.6       |
-| ticket coordinator | one ticket end-to-end, ticket↔PR mapping, role transitions, decomposition            | §2.5       |
-| delivery worker    | one PR from first commit to merge                                                    | §2.4       |
-| review agent       | one milestone's review when it is ready-for-review                                   | §2.3       |
-| verification agent | one verification-only (no-PR) ticket                                                 | §2.6       |
+| Actor                  | Owns                                                                                                                                    | Defined in |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| orchestrator           | merged graph, slot ledger, coordinator dispatch/re-dispatch, lock reconciliation, completion                                            | §2.6       |
+| ticket coordinator     | one work item end-to-end — its PR(s), a no-PR verification, or a single injected PR; ticket↔PR mapping; role transitions; decomposition | §2.5       |
+| milestone review agent | one milestone's review when it is ready-for-review                                                                                      | §2.3, §2.6 |
+
+The orchestrator dispatches **only** coordinators and milestone-review agents.
+There is no separate verification agent or orchestrator-dispatched bare worker:
+verification-only tickets and injected bare PRs are both worked by a coordinator,
+which keeps the orchestrator a clean graph→coordinator dispatcher with no per-kind
+special cases. A coordinator internally drives §2.4 **delivery workers** (one per
+PR); those workers are not dispatched by the orchestrator but draw compute slots
+from the same ledger (§Slot accounting).
 
 The orchestrator MUST NOT read raw ticket bodies, evaluate CI/review/Copilot
 state, or perform a milestone review itself. It acts only on the derived sections
@@ -151,57 +157,72 @@ following MUST occur each tick, in order:
        (or producer.sync(...) on first run / recovery / cursor gap / no delta support)
      merge delta into durable graph cache; persist (graph, cursor)
 
-2. Drain injection inbox (see §Runtime injection): inject tickets as graph nodes
-   and bare PRs as top-priority active-set entries
+2. Drain injection inbox (§Runtime injection): inject tickets as graph nodes;
+   record injected bare PRs as top-priority active-set entries (each driven by a
+   coordinator)
 
-3. Reconcile orphaned locks:
-     for each lock (PR / coordinator / verification / review) older than the
-        staleness threshold: clear it (and any mirrored "working" label); the
-        unit is presumed dead and becomes eligible for re-dispatch
+3. Reconcile orphaned locks and stale slots:
+     for each coordinator lock (ticket-keyed or PR-keyed) or milestone-review lock
+        older than the staleness threshold: clear it (and any mirrored "working"
+        label); the unit is presumed dead and eligible for re-dispatch
+     for each ledger entry whose owner's heartbeat is stale: reclaim it, so a
+        crashed agent cannot leak capacity (§Slot accounting)
 
-4. For each active unit (from on-disk active set / sentinels), by kind:
-     coordinator | bare worker:
-        closure = coarse closure check — the PR merged/closed (bare worker), or
-                  the ticket reached a terminal §2.3 role (coordinator) — or the
-                  unit's outcome artifact; NOT a §2.2 gate evaluation
-        if closed/terminal: run the residual §2.3 transition + cleanup; drop it
-        elif no live owner (no / stale lock): re-dispatch the same unit
+4. Reconcile each active coordinator (from the active set), by its outcome artifact
+   if one was written, else by liveness. The §2.5 outcomes are handled exhaustively:
+     outcome present:
+        verified | canceled                  -> cleanup + drop (terminal; coordinator owns the §2.3 transitions)
+        delivered                            -> cleanup + drop; a separate verification work item takes the ticket to `verified`
+        human-blocked                        -> cleanup + drop; the parked ticket is handled at step 6
+        decomposed                           -> cleanup; record the parent as a deferred-finalization entry (§Dispatch contract)
+        failed, verification + retryable     -> re-dispatch
+        failed, verification + not retryable -> park (the gate stays blocked); surface to the operator; no re-dispatch
+        failed, other                        -> cleanup + drop; surface to the operator; no auto-re-dispatch
+     no outcome artifact:
+        if the work item is terminal (ticket at a terminal §2.3 role, or a bare PR
+           merged/closed): cleanup + drop
+        elif no live owner (no / stale lock): re-dispatch the same coordinator
         else: live owner — nothing this tick
-     review agent | verification agent (sentinel-tracked):
-        if outcome artifact present:
-           review                       -> record the review (§2.3); clean sentinel
-           verification = verified       -> move the ticket (§2.3); clean sentinel —
-                                            the gate opens, dependents unblock next fetch
-           verification = retryable-failure -> consume the artifact; re-dispatch
-           verification = blocked-failure   -> park the gate; surface to operator;
-                                            no re-dispatch (dependents stay blocked)
-        elif no live owner (no / stale lock): re-dispatch
-        else: live owner — nothing this tick
 
-5. Honor human-blocked nodes (graph `human-blocked`, which already includes both
-   the explicit-signal and worker-discovered parkings):
-     ensure the ticket is parked in `awaiting-external` (or `paused` if the
-        tracker lacks it), transitioning it there if the explicit signal left it
-        elsewhere; ensure exactly one outstanding human alert; never dispatch a
-        worker or coordinator (§Human-interactive tickets); slot-exempt
+5. Reconcile each milestone-review agent (sentinel-tracked):
+     if the review outcome is recorded: clean the sentinel — the gate opens and
+        gated tickets unblock via the next fetch
+     elif no live owner (no / stale lock): re-dispatch
+     else: live owner — nothing this tick
 
-6. Milestone-review gate:
+6. Honor human-blocked nodes (graph `human-blocked`, which already includes the
+   explicit-signal and worker-discovered parkings):
+     ensure the ticket is parked in `awaiting-external` (or `paused` if the tracker
+        lacks it), transitioning it there if an explicit signal left it elsewhere;
+        ensure exactly one outstanding human alert; never dispatch a coordinator
+        for it (§Human-interactive tickets)
+
+7. Milestone-review gate:
      for each milestone ready-for-review AND NOT review-recorded with no live
-        review agent: dispatch a review agent (milestone-keyed sentinel; slot-exempt)
+        milestone-review agent: dispatch one (milestone-keyed sentinel)
 
-7. Fill slots:
-     used = non-stale coordinator locks + non-stale bare-worker locks (§Slot accounting)
-     dispatch injected bare PRs first (top priority), each consuming one slot,
-        while used < MAX_PARALLEL (used += 1 each)
-     then for each ticket in `available` (ranked), highest first:
-        if target-kind == verification: dispatch verification agent (slot-exempt)
-        elif target-kind == human-only: handle per step 5 (never dispatch worker)
-        elif used < MAX_PARALLEL: dispatch a ticket coordinator (§2.5); used += 1
+8. Fill work (gated on local-compute capacity, §Slot accounting):
+     budget = number of free ledger entries at the START of this step
+     while budget > 0 AND startable work remains:
+        next = first available, in priority order:
+                 (a) an injected bare PR,
+                 (b) a deferred-finalization parent whose subtasks are all
+                     `verified`/`canceled` (per the graph),
+                 (c) the highest-ranked `available` ticket with target-kind `pr`
+                     or `verification`
+               (`human-only` tickets are handled at step 6, never dispatched)
+        if no `next`: break
+        dispatch a coordinator (§2.5) for `next`; budget -= 1
+     Dispatch reserves no ledger entry — the coordinator and its delivery workers
+     acquire their own as they reach compute stages (§Slot accounting). Capping this
+     tick's dispatches at the start-of-step free count keeps one tick from admitting
+     more agents than the host can currently compute; the atomic acquire stays the
+     hard bound.
 
-8. Persist active set atomically (write-temp-then-rename); the cursor was already
-   persisted with the graph cache in step 1 — it has a single source of truth
+9. Persist active set atomically (the cursor was already persisted in step 1 — it
+   has a single source of truth)
 
-9. Completion check:
+10. Completion check:
      if every selected project's counts are terminal: stop (see §Termination)
      else exit tick (context released)
 ```
@@ -216,7 +237,7 @@ Conformance requirements on the tick:
 - The orchestrator MUST NOT use a detached background poll loop, and MUST NOT
   re-dispatch a unit that already has a live (non-stale) lock — a second dispatch
   races the first on the same ticket/PR.
-- State persistence (step 8) MUST complete before the completion/termination
+- State persistence (step 9) MUST complete before the completion/termination
   check, so the final tick's cleanup and terminal transitions are never lost to an
   early stop.
 - Per-unit failures (a producer error for one project, a closure-check failure for
@@ -225,69 +246,92 @@ Conformance requirements on the tick:
 
 ## Slot accounting
 
-Concurrency is bounded by `MAX_PARALLEL`, an implementation-defined configuration
-value, counted over in-flight **PR-bound units**.
+A **slot** represents local-system **compute capacity** — the right to write
+code, install dependencies, build, or run tests on the host the agents share.
+`MAX_PARALLEL` (implementation-defined) bounds how many agents may be in such a
+stage at once, so concurrent local work never exhausts the machine. Slots are
+about **local compute, not work-in-flight**: a PR that is merely open and awaiting
+CI, review, or merge holds **no** slot.
 
-- The **used** count is the number of non-stale **locks** held by PR-bound units:
-  one per active ticket coordinator plus one per active bare worker. Locks are the
-  single source of truth, so the tick's slot math and this count never diverge.
-- A ticket coordinator reserves its slot the moment it is dispatched (it holds a
-  coordinator lock) and SHOULD run its PRs **sequentially** — one active delivery
-  worker — so one coordinator = one slot = one in-flight PR. Reserving at dispatch
-  prevents a just-dispatched coordinator, before it has spawned its worker, from
-  being double-counted into an over-dispatch.
-- A coordinator MAY run PRs concurrently only when the orchestrator has free slots
-  to grant; each additional concurrent worker then consumes an additional slot. By
-  default a coordinator runs exactly one worker.
-- A bare injected PR (no coordinator) holds a worker lock and counts as one slot.
-- Verification agents, review agents, and human-blocked tickets are
-  **slot-exempt** — tracked by sentinels, not slots — so a gate, check, or pending
-  human is never starved by a full slot budget.
+- Slots live in a single shared on-disk **ledger** of `MAX_PARALLEL` entries. Every
+  agent that may compute — coordinators and the §2.4 delivery workers they spawn —
+  draws from this one ledger. It is the single source of truth for the bound. Each
+  entry records its **owner** and a heartbeat.
+- An agent MUST atomically **acquire** a ledger entry before entering any stage
+  that may write code, install, build, or run tests, and MUST **release** it on
+  leaving that stage for any wait (CI, review, merge, a human handoff, idle
+  polling) or on exit. If no entry is free when an agent reaches a compute stage,
+  it waits and retries — it never exceeds the bound.
+- The orchestrator does **not** pre-reserve entries at dispatch. It gates *new
+  coordinator dispatch* on the ledger having free capacity — a soft admission check
+  that avoids spawning far more agents than can compute — but the binding bound is
+  the atomic acquire above: two coordinators admitted in the same tick still
+  serialize at the ledger when they reach their compute stages.
+- A delivery worker is not an orchestrator-dispatched actor and holds no
+  orchestrator lock, but it draws its compute entry from this same global ledger.
+  That is how a worker's reservation bubbles up: every concurrent build — whichever
+  coordinator spawned it — counts against the one `MAX_PARALLEL` bound. A
+  coordinator running several independent PRs holds one entry per
+  concurrently-building worker.
+- The orchestrator's tick (step 3) reclaims any entry whose owner's heartbeat is
+  stale, so a crashed coordinator or worker cannot leak capacity. Terminal cleanup
+  never force-releases a *live* worker's entry — entries are released only by their
+  owner or by stale reclamation.
+- Because every wait releases the entry, nothing is permanently reserved and
+  nothing is starved: an agent parked on CI, a reviewer, or a human holds no entry,
+  so a milestone-review agent or a freshly-unblocked ticket always finds capacity
+  as in-flight work idles.
 
 ## Dispatch contract
 
 When dispatching, the orchestrator passes only the data the unit needs to act; it
-never passes ticket *content*. Inputs differ by unit kind:
+never passes ticket *content*. It dispatches two kinds of unit:
 
-- **Ticket coordinator** (§2.5): `ticket_id`, `ticket_url`, `target-kind`, any
-  branch-name hint, the identity/mode context (§Credential modes), and the §2.3
-  hook responsibilities the coordinator owns.
-- **Bare worker** (§2.4): the PR's forge identity — `repo`, `pr_number`,
-  `pr_url`, and `branch` — plus identity/mode context. A bare PR has no
-  coordinator, so the orchestrator (not a coordinator) applies any residual §2.3
-  ticket transition on closure when the PR is linked to a ticket.
-- **Review agent** (§2.3): the milestone identifier and its project; it records
-  the review outcome on the §2.3 review artifact.
-- **Verification agent**: the `ticket_id`/`ticket_url` of the verification-only
-  ticket; it validates the deployed result and writes an outcome artifact.
+- **Ticket coordinator** (§2.5) — for every `pr` and `verification` ticket, and
+  for each injected bare PR. Inputs: `ticket_id` and `ticket_url` (for a bare PR
+  with no ticket, the PR's forge identity instead — `repo`, `pr_number`,
+  `pr_url`, `branch`), `target-kind`, any branch-name hint, the identity/mode
+  context (§Credential modes), and the §2.3 hook responsibilities the coordinator
+  owns. The coordinator branches on `target-kind`: drive PR(s) via §2.4, or run a
+  no-PR verification.
+- **Milestone review agent** (§2.3, §2.6) — for a milestone that is
+  ready-for-review and not yet review-recorded. Inputs: the milestone identifier
+  and its project. It records the review outcome on the §2.3 review artifact and
+  routes any human-input request through that artifact's comments (§2.3).
 
 The orchestrator MUST require each dispatched unit to maintain liveness and
 reporting artifacts:
 
-- A **lock** — PR-keyed (worker), ticket-keyed (coordinator / verification), or
-  milestone-keyed (review) — heartbeated on a fixed interval; staleness is judged
-  by lock age.
+- A **lock** — ticket-keyed (a coordinator with a ticket), PR-keyed (a bare-PR
+  coordinator with no ticket), or milestone-keyed (milestone review agent) — heartbeated on a
+  fixed interval; staleness is judged by lock age. A coordinator's §2.4 delivery
+  workers hold their own compute-slot entries (§Slot accounting), not separate
+  orchestrator locks.
 - An **outcome artifact** the unit writes as its final action, which the
-  orchestrator reads to reconcile: coordinator outcomes per §2.5 §Reporting;
-  verification outcomes are `verified` / `retryable-failure` / `blocked-failure`;
-  a review outcome is the recorded-review signal.
+  orchestrator reads to reconcile. Coordinator outcomes are per §2.5 §Reporting; a
+  verification coordinator's `failed` outcome additionally carries a `retryable`
+  boolean — when `retryable` it re-dispatches on a later tick, otherwise the
+  verification gate is parked and surfaced to the operator (tick step 4). A review
+  agent's outcome is the recorded-review signal.
 - A mirrored "working" signal on the forge/tracker where one is available, kept
   in sync with the lock.
 
-On a unit's outcome the orchestrator MUST run the residual §2.3 work the unit
-could not (e.g. advancing a linked ticket's role on PR merge when a bare worker
-had no coordinator; recording a milestone review; opening a verification gate) and
-MUST clean up the lock, label, worktree (if any), and artifact. A
-`retryable-failure` verification re-dispatches on a later tick; a `blocked-failure`
-parks the gate and is surfaced to the operator.
+Because every work item now runs through a coordinator, the coordinator owns all
+of its ticket's §2.3 transitions and verification/DoD artifacts. On a coordinator's
+terminal outcome the orchestrator therefore performs **cleanup only** — lock,
+"working" label, worktree (if any), and the artifact. Compute-slot entries are not
+force-released here: a terminal coordinator's workers have already released theirs,
+and any straggler is reclaimed by the stale-heartbeat sweep (§Slot accounting). For
+a milestone-review agent, the orchestrator confirms the review outcome was
+recorded, then cleans the sentinel.
 
 A `decomposed` coordinator outcome leaves the parent `in-progress` and effectively
 blocked by its new subtasks (§2.5 §Decomposition). The orchestrator MUST track the
-parent as a **slot-exempt deferred-finalization** entry — it is neither `available`
-nor owned by a live unit — and MUST re-dispatch a coordinator to finalize the
-parent once the graph reports every subtask `verified`/`canceled`. This is what
-keeps an in-progress parent from being either lost or re-dispatched in a loop while
-its subtasks are still running.
+parent as a **deferred-finalization** entry — neither `available` nor owned by a
+live unit, holding no slot — and MUST dispatch a coordinator to finalize the parent
+once the graph reports every subtask `verified`/`canceled`. This keeps an
+in-progress parent from being lost or re-dispatched in a loop while its subtasks
+run.
 
 ## Human-interactive tickets
 
@@ -305,7 +349,7 @@ For any human-interactive node the orchestrator MUST:
    lacks `awaiting-external`). The worker-discovered path already parked it; for
    the explicit-signal path the orchestrator transitions it there per §2.3 if it
    is not already parked. Both paths thus converge on the same parked role.
-2. Never dispatch a code worker or coordinator that would attempt the work.
+2. Never dispatch a coordinator that would attempt the work.
 3. Ensure exactly one outstanding human alert exists. The alert is a §2.1
    comment: its first line is the required `<!-- agent-reply:<orchestrator-id> -->`
    machine marker, and a durable human-alert sentinel sits **inside** the body
@@ -321,8 +365,8 @@ For any human-interactive node the orchestrator MUST:
    unresolved alert bearing this sentinel and post only if none exists; this is
    what makes "exactly one" enforceable across stateless ticks. An alert is
    resolved per §2.3 (a human responds with addressable content).
-4. Keep the node slot-exempt and re-check it each tick; treat its dependents as
-   `blocked` until its role leaves the parked group.
+4. Re-check it each tick; treat its dependents as `blocked` until its role leaves
+   the parked group. A parked ticket holds no slot — it is not computing.
 
 When the human resolves it (a role change visible on the next fetch), the
 orchestrator emits `RESUME`; the ticket returns to `available` per §2.3's
@@ -334,12 +378,23 @@ park-resume rule and re-enters the frontier.
 ## Milestone-review gate
 
 When a milestone is `ready-for-review` and not `review-recorded`, the
-orchestrator MUST dispatch a **review agent** to run the §2.3 milestone review,
-tracked by a milestone-keyed sentinel lock and slot-exempt. The orchestrator MUST
-NOT perform the review itself and MUST NOT advance any ticket gated on the
-milestone until the graph reports `review-recorded`. The review agent files any
-follow-up tickets in the current milestone per §2.3; those re-block advancement
-and reach the orchestrator only as a changed frontier.
+orchestrator MUST dispatch a **milestone review agent** to run the §2.3 milestone
+review, tracked by a milestone-keyed sentinel lock. The orchestrator MUST NOT
+perform the review itself and MUST NOT advance any ticket gated on the milestone
+until the graph reports `review-recorded`. The review agent files any follow-up
+tickets in the current milestone per §2.3; those re-block advancement and reach
+the orchestrator only as a changed frontier.
+
+Milestone review frequently needs human judgment. §2.3 already designates the
+milestone's **review artifact** (a Linear project update, a GitHub Milestone
+closure comment, an Asana milestone-task comment) as where a milestone review's
+outcome is recorded. The milestone review agent MUST solicit any human input it
+needs as a comment on that same review artifact, tagging a human — never through
+the session — and MUST NOT record the review outcome until that input resolves.
+This keeps the conversation in the tracker, consistent with the §2.3 communication
+restriction. (A team that wants a human to *own* the review outright can model the
+milestone-review item as `human-interactive` and let that path handle it; the
+default is agent-run with comment-routed human input.)
 
 ## Runtime injection
 
@@ -348,14 +403,16 @@ The orchestrator MUST drain an on-disk **injection inbox** each tick:
 - An injected **ticket** is added to the graph as an ordinary node. The producer
   MUST pull in its transitive dependency ancestors on the next fetch. The injected
   ticket (and any newly-pulled ancestor that is unblocked) is ranked to the **top
-  of the available frontier** but MUST NOT preempt work already in flight — it
-  takes the next freed slot.
+  of the available frontier** but MUST NOT preempt work already in flight — it is
+  dispatched ahead of lower-ranked tickets at the next tick that has free ledger
+  capacity.
 - An injected **PR** is recorded with its forge identity (`repo`, `pr_number`,
-  `pr_url`, `branch`) and added to the active set as a bare delivery worker (no
-  coordinator) at top priority (§Dispatch contract). It consumes a worker slot
-  that would otherwise go to a ticket and MUST NOT preempt work already in flight.
+  `pr_url`, `branch`) and added to the active set as a top-priority entry driven by
+  a **coordinator** scoped to that PR (§Dispatch contract) — not a bare worker. It
+  is dispatched ahead of a lower-ranked ticket and MUST NOT preempt work already in
+  flight.
 
-Injection MUST NOT reclaim a slot from an in-flight unit.
+Injection MUST NOT interrupt or reclaim resources from a unit already in flight.
 
 ## Credential modes
 
@@ -370,15 +427,16 @@ mode places no constraint on the access style.
 All orchestrator state MUST live on disk or in the tracker/forge, never only in
 memory:
 
-| State                  | Location                                               |
-| ---------------------- | ------------------------------------------------------ |
-| Durable graph + cursor | on-disk normalized cache                               |
-| Active work set        | on-disk file (PR-bound + verification + human-blocked) |
-| Liveness locks         | on-disk, PR-keyed / ticket-keyed / milestone-keyed     |
-| Unit status artifacts  | on-disk, written by each dispatched unit               |
-| Milestone summaries    | on-disk, written at milestone boundaries               |
-| Ticket roles & history | the tracker (authoritative)                            |
-| PR terminal state      | the forge (authoritative)                              |
+| State                  | Location                                                                   |
+| ---------------------- | -------------------------------------------------------------------------- |
+| Durable graph + cursor | on-disk normalized cache                                                   |
+| Active work set        | on-disk file (coordinators + deferred-finalization + human-blocked)        |
+| Slot ledger            | on-disk, `MAX_PARALLEL` compute entries (shared by all agents)             |
+| Liveness locks         | on-disk, ticket-keyed or PR-keyed (coordinator) / milestone-keyed (review) |
+| Outcome artifacts      | on-disk, written by each dispatched unit                                   |
+| Milestone summaries    | on-disk, written at milestone boundaries                                   |
+| Ticket roles & history | the tracker (authoritative)                                                |
+| PR terminal state      | the forge (authoritative)                                                  |
 
 After a loss of on-disk state the orchestrator MUST be able to recover from a full
 producer sync plus the forge's open-PR list: missing locks mean no live units;
@@ -401,7 +459,7 @@ The orchestrator terminates — stops ticking and exits — when EITHER:
   `canceled`, or permanently-blocked, per the document's `counts`; or
 - **The operator explicitly instructs it to stop**, acknowledged per §2.1.
 
-The orchestrator MUST NOT terminate merely because the slot budget is empty, the
+The orchestrator MUST NOT terminate merely because every compute slot is held, the
 available frontier is momentarily empty while work is in flight, a milestone
 completed, or a human handoff is outstanding. Resuming is by re-invocation; the
 new run reads state from disk and the tracker and continues.

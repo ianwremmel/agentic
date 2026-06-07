@@ -3,10 +3,21 @@
 ## Applicability
 
 This protocol applies to any agent responsible for driving a **single tracked
-ticket** to a terminal §2.3 role by producing and landing the pull request(s) its
-aims require — usually one, sometimes several. A coordinator may land **no** PR at
-all when the ticket is decomposed, handed to a human, or canceled before any
-implementation begins. The agent is a **coordinator**.
+work item** to a terminal §2.3 role. The agent is a **coordinator**, and the work
+item is one of:
+
+- an ordinary **ticket**, driven to terminal by producing and landing the pull
+  request(s) its aims require — usually one, sometimes several, occasionally none
+  (when the ticket is decomposed, handed to a human, or canceled before any
+  implementation begins);
+- a **no-PR verification** ticket, validated against a deployed target with no
+  code change (§Verification work); or
+- a **single injected PR** the orchestrator handed over, driven to merge via §2.4
+  with no decomposition.
+
+The coordinator branches on the work item's `target-kind`. Because the
+orchestrator (§2.6) routes every kind through a coordinator, the coordinator — not
+the orchestrator — owns the kind-specific behavior.
 
 A coordinator MAY be invoked standalone (a human names one ticket) or dispatched
 by an orchestrator (§2.6). The rules below are identical in both contexts; only
@@ -21,19 +32,31 @@ implementation-defined and orthogonal to the §2.1 mode.
 
 ## Inputs
 
-A coordinator MUST be able to operate from only:
+A coordinator's required inputs depend on the work item's kind (a discriminated
+union):
 
-- `ticket_id` — the tracker-native identifier.
-- `ticket_url` — the canonical URL.
+- **Ticket-backed work** (`pr` or `verification`): `ticket_id` and `ticket_url`.
+- **Ticketless injected PR**: the PR's forge identity — `repo`, `pr_number`,
+  `pr_url`, `branch` — and no ticket fields (§Injected bare PR).
 
 A caller MAY additionally supply non-authoritative hints (a branch-name seed, a
-target-kind hint, a commit scope). A coordinator MUST NOT require any ticket
-*content* to be passed in. It MUST fetch the ticket's description, acceptance
-criteria, dependencies, and links itself.
+`target-kind` hint, a commit scope). A coordinator MUST NOT require any ticket
+*content* to be passed in. For ticket-backed work it MUST fetch the ticket's
+description, acceptance criteria, dependencies, and links itself.
+
+A coordinator MAY also read **read-only** context from its **immediate** dependency
+neighbors — its direct predecessors (what shipped just before) and direct
+successors (what is planned next), one dependency edge away — when that context
+shapes how it delivers. It MUST NOT walk the transitive graph or reason over it
+(ranking, blocking, and dispatch are the orchestrator's, §2.6); its read stays
+bounded to those one-edge neighbors.
 
 ## Claiming
 
-Before doing any work the coordinator MUST claim the ticket:
+Claiming applies when the work item is a ticket. A coordinator for a **ticketless
+injected PR** has no ticket to claim — it skips this section entirely (see
+§Injected bare PR). Before doing any work on a ticket the coordinator MUST claim
+it:
 
 1. Resolve the ticket's current §2.3 role.
 2. If the ticket is already in a `started` role assigned to a *different* agent
@@ -73,8 +96,9 @@ graph; a standalone coordinator reports them and stops).
 
 Because the parent stays `in-progress` while its subtasks run (§2.3), its
 **finalization** — verifying the parent's aims once the subtasks land, then
-transitioning it to `verified` (or `canceled`) — is a later, separate coordinator
-pass, not part of this run. The decomposing coordinator MUST record each subtask
+advancing it along the §2.3 forward path to `verified` (or `canceled`) without
+emitting any unenumerated transition — is a later, separate coordinator pass, not
+part of this run. The decomposing coordinator MUST record each subtask
 as a `blocks` edge to the parent (§2.3 §Dependencies) so the parent is effectively
 blocked by its subtasks, emit a `decomposed` outcome (§Reporting), and stop. Under
 an orchestrator the parent's finalization is scheduled per §2.6 (it re-enters work
@@ -87,12 +111,14 @@ For each in-scope unit of work, the coordinator MUST drive a pull request to a
 terminal state through the Delivery Protocol (§2.4). Each PR is a distinct §2.4
 Delivery instance.
 
-- The coordinator SHOULD run its PRs **sequentially** — at most one non-terminal
-  PR at a time — to keep PRs small and to consume a single orchestrator slot.
-- It MAY run PRs concurrently only when the ticket's work is genuinely independent
-  **and** the orchestrator has free slots to grant; each additional concurrent
-  worker consumes an additional slot (§2.6 §Slot accounting). Absent a free-slot
-  grant, the coordinator MUST sequence.
+- The coordinator SHOULD run its PRs **sequentially** — at most one actively
+  building PR at a time — to keep PRs small and its draw on the shared compute-slot
+  ledger (§2.6 §Slot accounting) minimal.
+- Each delivery worker MUST hold a compute-slot ledger entry while it may write
+  code, install, build, or run tests, and MUST release it while its PR awaits CI,
+  review, or merge. A coordinator MAY run PRs concurrently when the work is
+  genuinely independent, acquiring one ledger entry per concurrently-building PR;
+  when no entry is free it MUST sequence.
 - The coordinator MUST record the ticket↔PR mapping on the ticket (a progress
   entry per the tracker's convention) so an observer can see which PRs satisfy
   the ticket.
@@ -131,6 +157,46 @@ ticket to `in-progress` with a corrective-transition comment per §2.3.
 Merging a PR is never sufficient on its own. The coordinator evaluates the
 ticket's stated aims, not merely the merge.
 
+## Verification work
+
+When the work item is a **no-PR verification** ticket (`target-kind`
+`verification`), the coordinator produces no PR. Instead it:
+
+1. Reads the ticket to identify the **named conformance suite** and the **deployed
+   target** to validate (a live release, an ephemeral preview, etc.).
+2. Confirms the target is reachable and at the expected revision, then runs the
+   suite **read-only** against it — a verification never mutates the target. If
+   passing would require a mutation, that is a structural failure (below).
+3. Attaches the evidence to the ticket per §2.1/§2.3 (what ran, where, the result).
+4. Advances the ticket along the §2.3 **forward path** to `verified` — the running
+   suite is its `in-review`/`delivered` work, a passing suite its delivery — and
+   records the §Definition of done artifact at `verified`. (No PR exists, so the
+   path collapses onto whatever roles the tracker provides, per §2.3's
+   graceful-degradation rule; the coordinator MUST NOT emit an unenumerated
+   transition.) It holds a compute slot only while actually running the suite.
+
+A verification that cannot pass reports a `failed` outcome (§Reporting) carrying a
+`retryable` flag: **retryable** for a transient cause (target not yet at the
+expected revision, image still building, flaky infrastructure — safe to re-run) or
+**non-retryable** for a structural cause (acceptance is unmet in a way a re-run
+cannot fix — needs a follow-up ticket and/or human action). The coordinator MUST
+NOT transition a failed verification to `verified`.
+
+## Injected bare PR
+
+When the work item is a **single injected PR with no linked ticket**, the
+coordinator's inputs are the PR's forge identity (`repo`, `pr_number`, `pr_url`,
+`branch`) instead of `ticket_id`/`ticket_url`. With no ticket there is nothing to
+claim, decompose, or transition: the coordinator simply drives the one PR to a
+terminal state through §2.4 Delivery and reports a PR-terminal outcome —
+`delivered` when the PR merges (terminal here, since a ticketless PR has no
+separate verification step) or `canceled`/`failed` when it closes without merging.
+Its liveness lock is **PR-keyed** (§2.6 §Dispatch contract), not ticket-keyed.
+
+If the injected PR **is** linked to a ticket, the coordinator instead behaves as a
+normal ticket coordinator for that ticket — claiming it, owning its §2.3
+transitions — with the PR as one of its §2.4 Delivery instances.
+
 ## Human handoff (worker-discovered)
 
 When the coordinator determines that the ticket cannot proceed without a human
@@ -159,14 +225,14 @@ A **dispatched** coordinator MUST, as its final action, write an **outcome
 artifact** for its caller. The artifact's location and transport are defined by the
 dispatch contract (§2.6); its content MUST encode the outcome, which is one of:
 
-| Outcome         | Meaning                                                                                          | Terminal? | How work resumes                                                                                             |
-| --------------- | ------------------------------------------------------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------ |
-| `verified`      | Ticket reached `verified`; aims validated and DoD artifact posted.                               | yes       | —                                                                                                            |
-| `canceled`      | Ticket canceled per §2.3 with a rationale.                                                       | yes       | —                                                                                                            |
-| `delivered`     | All required PRs landed but verification is owned elsewhere (e.g. a separate verification gate). | no        | a verification agent / gate (§2.6) takes it to `verified`.                                                   |
-| `human-blocked` | Parked in `awaiting-external` pending a human; alert posted.                                     | no        | re-dispatched from a fresh claim once the human resolves it.                                                 |
-| `decomposed`    | Split into subtasks; parent stays `in-progress`, effectively blocked by the subtasks.            | no        | parent re-enters work and is finalized once all subtasks reach `verified`/`canceled` (§Decomposition, §2.6). |
-| `failed`        | Could not complete; reason recorded on the ticket and in the artifact.                           | no        | operator decides (retry, re-scope, or cancel).                                                               |
+| Outcome         | Meaning                                                                                                                                    | Terminal?                 | How work resumes                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `verified`      | Ticket-backed only: aims validated and the §2.3 DoD artifact posted; ticket at `verified`.                                                 | yes                       | —                                                                                                                                       |
+| `canceled`      | Work abandoned: a ticket canceled per §2.3 with a rationale, or a ticketless bare PR closed without merging.                               | yes                       | —                                                                                                                                       |
+| `delivered`     | The change landed. Ticket-backed: all required PRs merged but verification is owned elsewhere. Ticketless bare PR: the PR merged.          | ticket: no / bare PR: yes | (ticket-backed) a separate verification coordinator (§2.6) takes it to `verified`; a bare PR is done.                                   |
+| `human-blocked` | Parked in `awaiting-external` pending a human; alert posted.                                                                               | no                        | re-dispatched from a fresh claim once the human resolves it.                                                                            |
+| `decomposed`    | Split into subtasks; parent stays `in-progress`, effectively blocked by the subtasks.                                                      | no                        | parent re-enters work and is finalized once all subtasks reach `verified`/`canceled` (§Decomposition, §2.6).                            |
+| `failed`        | Could not complete; reason recorded (on the ticket, or in the artifact for a ticketless PR). Verification work carries a `retryable` flag. | no                        | a `retryable` verification failure auto-re-dispatches on a later tick (§2.6); otherwise the operator decides (retry, re-scope, cancel). |
 
 A **standalone** coordinator has no artifact obligation; it reports the same
 outcome to the session and stops.

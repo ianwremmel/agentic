@@ -16,8 +16,12 @@ too large or blocked, and decide when the ticket's stated aims are actually
 verified.
 
 That owner is the **coordinator**. One coordinator is responsible for exactly one
-ticket. It is the bridge between §2.3 (the ticket) and §2.4 (the change), and it
-is the unit the Orchestration Protocol (§2.6) dispatches.
+tracked work item — usually a ticket, but also a no-PR verification or a single
+injected PR (which may have no ticket at all). It is the bridge between §2.3 (the
+ticket) and §2.4 (the change), and it is the unit the Orchestration Protocol (§2.6)
+dispatches. In fact the orchestrator routes **every** kind of work through a
+coordinator, so the coordinator is where each kind is actually carried out and the
+orchestrator itself stays kind-agnostic.
 
 ## What the coordinator owns
 
@@ -31,9 +35,11 @@ is the unit the Orchestration Protocol (§2.6) dispatches.
   blocker.
 - **One or more PRs.** For each unit of work the coordinator drives a PR to a
   terminal state through §2.4 Delivery. Single-PR is the common case; multi-PR is
-  the general one. PRs run sequentially by default — small PRs review faster and
-  one active PR per ticket keeps the orchestrator's slot budget honest — but a
-  ticket whose work genuinely parallelizes MAY run several at once.
+  the general one. PRs run sequentially by default — small PRs review faster, and
+  one active build at a time keeps the coordinator's draw on the shared
+  compute-slot ledger (§2.6) minimal — but a ticket whose work genuinely
+  parallelizes MAY run several at once, taking one slot per concurrently-building
+  PR.
 - **The ticket's role.** As its PRs progress, the coordinator transitions the
   ticket through the §2.3 roles (`in-progress` → `in-review` → `delivered` →
   `verified`), emitting the state-change comment and log entries §2.3 requires.
@@ -44,10 +50,15 @@ is the unit the Orchestration Protocol (§2.6) dispatches.
 ## What the coordinator does NOT own
 
 It does not own the PR lifecycle — Delivery (§2.4) does. It does not own the
-graph, slot accounting, or dispatch — the orchestrator (§2.6) does. It does not
-know about sibling tickets except through the dependency edges §2.3 already
-resolved for it. A coordinator handed a ticket whose blockers are unmet should
-not have been dispatched; deciding *that* is the orchestrator's job.
+graph, ranking, the global slot policy (`MAX_PARALLEL`), or dispatch — the
+orchestrator (§2.6) does, and the coordinator does not reason over the whole graph;
+it only acquires and releases its own compute-slot entries from the shared ledger.
+It MAY, though, read context from its **immediate** dependency neighbors — its
+direct predecessors (what shipped just before) and direct successors (what's
+planned next), one edge away — when that shapes how it delivers; knowing what came
+before or comes next can genuinely change the right implementation. A coordinator
+handed a ticket whose blockers are unmet should not have been dispatched; deciding
+*that* is the orchestrator's job.
 
 ## The human-handoff path
 
@@ -73,12 +84,7 @@ A coordinator runs in two contexts with one set of rules:
 - **Standalone** — a human invokes it directly on one ticket
   (`/work-ticket DEV-123`). There is no orchestrator; the coordinator claims the
   ticket, works it to a terminal role, and reports to the session.
-- **Dispatched** — the orchestrator (§2.6) hands it a ticket and expects it to
-  report terminal outcome through the dispatch artifacts §2.6 defines (a status
-  file, a heartbeated lock). The coordination rules are identical; only the
+- **Dispatched** — the orchestrator (§2.6) hands it a work item and expects it to
+  report terminal outcome through the dispatch artifacts §2.6 defines (an outcome
+  artifact, a heartbeated lock). The coordination rules are identical; only the
   reporting surface differs.
-
-Because the coordinator is buildable and useful on its own — you can run it
-against a single ticket with no orchestration in sight — it is the natural first
-implementation milestone, and the orchestrator (§2.6) then dispatches it as a
-proven unit.

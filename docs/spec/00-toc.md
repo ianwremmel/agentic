@@ -92,4 +92,4 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | 2026-05-13 | Added §1; split §3 into daemon and commands                  |
 | 2026-05-13 | Added §2.1–§2.4, §3.1–§3.2; retired all pre-spec source docs  |
 | 2026-05-14 | Review feedback: §2.2 adds comments channel, checks precedence; §2.3 fixes milestones and Asana; §2.4 fixes review gating; §3 refactors commands |
-| 2026-06-07 | Added §2.5 Ticket Coordination and §2.6 Orchestration protocols |
+| 2026-06-07 | Added §2.5 Ticket Coordination + §2.6 Orchestration          |

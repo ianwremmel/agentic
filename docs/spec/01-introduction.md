@@ -3,9 +3,9 @@
 ## What this spec covers
 
 This specification defines the protocols and operational contracts that govern
-how Dispatch agents communicate, track work, and advance pull requests from
-first commit to merge. It covers four conformance protocols and one operational
-layer:
+how Dispatch agents communicate, track work, advance pull requests from first
+commit to merge, and orchestrate whole projects across a dependency graph. It
+covers six conformance protocols and one operational layer:
 
 - **§2.1 Agent Communication Protocol** — the on-the-wire format for every
   comment an agent writes into a PR, issue, or ticket thread.
@@ -17,6 +17,13 @@ layer:
 - **§2.4 Delivery Protocol** — the rules any agent must follow when changing
   code: worktree isolation, the PR-open sequence, pre-push review, CI and
   reviewer gating, and termination.
+- **§2.5 Ticket Coordination Protocol** — how one agent drives a single ticket
+  to a terminal role by producing and landing one or more PRs (§2.4), applying
+  the §2.3 transitions, decomposing, and handing off to a human when needed.
+- **§2.6 Orchestration Protocol** — how a thin, graph-driven dispatcher works a
+  whole project (or several) by fanning out §2.5 coordinators over a merged
+  dependency graph: the project-graph document, the producer/cursor contract,
+  the stateless tick, slot accounting, the milestone-review gate, and injection.
 - **§3.1 Daemon** — the daemon process model, spawn contract for agent
   sessions, event taxonomy, and prompt template system.
 - **§3.2 Commands** — the full `dispatch` CLI command reference, including the
@@ -121,7 +128,7 @@ in full.
 
 ## Architecture overview
 
-The diagram below shows how the four protocols relate and where the daemon
+The diagram below shows how the six protocols relate and where the daemon
 sits. Arrows indicate "depends on" / "references."
 
 ```mermaid
@@ -130,12 +137,21 @@ graph TD
     PSP["§2.2 PR Status Protocol<br/><i>how to read PR state</i>"]
     TWP["§2.3 Ticket Workflow Protocol<br/><i>lifecycle vocabulary &amp; logging</i>"]
     DWP["§2.4 Delivery Protocol<br/><i>worktree → draft PR → CI → merge</i>"]
+    TCP["§2.5 Ticket Coordination Protocol<br/><i>one ticket → one or more PRs</i>"]
+    ORC["§2.6 Orchestration Protocol<br/><i>graph-frontier dispatcher</i>"]
     DMN["§3.1 Daemon<br/><i>operational driver</i>"]
     CMD["§3.2 Commands<br/><i>CLI primitives</i>"]
 
     DWP --> ACP
     DWP --> PSP
     DWP --> TWP
+    TCP --> TWP
+    TCP --> DWP
+    TCP --> ACP
+    ORC --> TWP
+    ORC --> TCP
+    ORC --> DWP
+    ORC --> ACP
     DMN --> ACP
     DMN --> PSP
     DMN --> TWP
@@ -145,5 +161,5 @@ graph TD
     TWP --> ACP
 ```
 
-**Reading order for implementors:** §2.1 → §2.2 → §2.3 → §2.4 → §3. Each
-section is written to be readable in isolation once §2.1 is understood.
+**Reading order for implementors:** §2.1 → §2.2 → §2.3 → §2.4 → §2.5 → §2.6 →
+§3. Each section is written to be readable in isolation once §2.1 is understood.

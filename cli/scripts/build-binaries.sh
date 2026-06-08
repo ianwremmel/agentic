@@ -33,7 +33,18 @@ for t in "${targets[@]}"; do
   if ! rustup target list --installed 2>/dev/null | grep -qx "$t"; then
     rustup target add "$t" >&2 2>/dev/null || true
   fi
-  if ! cargo build --release --target "$t" 2>&1 | sed 's/^/    /' >&2; then
+  # Apple targets need a Mach-O linker + macOS libc; cargo-zigbuild supplies
+  # both (via zig), so we can cross-build them from Linux without the Apple
+  # SDK. The Linux targets link with cc / the configured cross-linker.
+  build_cmd=(cargo build)
+  case "$t" in
+    *-apple-darwin)
+      if command -v cargo-zigbuild >/dev/null 2>&1; then
+        build_cmd=(cargo zigbuild)
+      fi
+      ;;
+  esac
+  if ! "${build_cmd[@]}" --release --target "$t" 2>&1 | sed 's/^/    /' >&2; then
     echo "    skipped $t (build failed — cross toolchain missing?)" >&2
     continue
   fi

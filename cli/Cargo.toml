@@ -18,7 +18,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 regex = "1"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# `std` only (no `clock`): we read the wall clock via std and use chrono purely
+# for RFC3339 parsing. Dropping `clock` avoids the macOS CoreFoundation link
+# (iana-time-zone), which keeps cross-compilation to Apple targets clean.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = "z"

@@ -249,7 +249,7 @@ pub fn run(args: PrStatusArgs) -> Result<()> {
         },
         info_re,
         stuck_after,
-        now: chrono::Utc::now().timestamp(),
+        now: now_unix(),
         pr_json,
     };
 
@@ -287,6 +287,16 @@ pub fn run(args: PrStatusArgs) -> Result<()> {
 }
 
 // --- env / paths -------------------------------------------------------------
+
+/// Current wall-clock time as a unix timestamp (seconds). Uses `std` so the
+/// binary doesn't pull chrono's `clock` feature (and its macOS framework link).
+fn now_unix() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 fn require_env(name: &str) -> Result<String> {
     match env::var(name) {

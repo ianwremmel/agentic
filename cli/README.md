@@ -40,8 +40,31 @@ thin shim that delegates to the launcher.
 ## Building and committing binaries
 
 CI builds and tests every target on each push (`.github/workflows/cli.yml`), but
-**never commits** — staging the per-platform binaries is a developer step,
-because no single host can cross-build all of them.
+**never commits** — staging the per-platform binaries is a developer step.
+
+All four targets cross-compile from a single host (Linux or macOS). The Apple
+targets are linked with [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild),
+which uses `zig` as the linker and bundles the macOS libc stubs, so no Apple SDK
+is required; the Linux ARM64 target uses the GNU cross-linker.
+
+### One-time toolchain setup
+
+```sh
+rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+                  x86_64-apple-darwin aarch64-apple-darwin
+
+# Apple targets (Mach-O linker, via zig):
+pip3 install ziglang            # bundles the zig compiler; cargo-zigbuild finds it
+cargo install cargo-zigbuild
+
+# Linux ARM64 target (cross-linker), on a Debian/Ubuntu host:
+sudo apt-get install -y gcc-aarch64-linux-gnu
+```
+
+The aarch64-linux linker is wired up in `cli/.cargo/config.toml`; the build
+script invokes `cargo zigbuild` for `*-apple-darwin` automatically.
+
+### Build + stage
 
 ```sh
 # Build every target this host can produce and stage them under the plugin.
@@ -51,9 +74,9 @@ cli/scripts/build-binaries.sh
 TARGETS="x86_64-apple-darwin aarch64-apple-darwin" cli/scripts/build-binaries.sh
 ```
 
-`build-binaries.sh` skips targets it can't build (missing cross toolchain) with
-a warning — so on Linux you stage the Linux binaries and on a Mac you stage the
-Darwin ones. Commit whatever it stages under `plugins/dispatch/bin/`.
+`build-binaries.sh` skips any target whose toolchain is missing (with a
+warning) rather than failing the whole run. Commit whatever it stages under
+`plugins/dispatch/bin/`.
 
 ### Freshness
 

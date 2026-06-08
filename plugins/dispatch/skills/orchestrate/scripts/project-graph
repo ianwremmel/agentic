@@ -1,0 +1,2736 @@
+#!/usr/bin/env node
+// project-graph — Linear PRODUCER for the orchestrate skill.
+//
+// Emits the tracker-neutral project-graph document defined in
+// ../reference.md (§Project-graph document) — the §2.6 Producer contract — for
+// one or more named Linear projects. The orchestrator consumes this document
+// and MUST NOT re-derive blocking, ranking, or cycle detection; this producer
+// performs ALL of that graph reasoning before the document is emitted.
+//
+// Usage:
+//   project-graph [--mode full|delta] [--since <cursor>] \
+//                 [--exclude <id,id,...>] [--failed <id,id,...>] \
+//                 [--team-map <json|@file>] [--state-root <dir>] \
+//                 <project> [<project> ...]
+//
+//   --mode full        Emit the complete document (default when --since absent).
+//   --mode delta       Emit only nodes changed since --since, plus all derived
+//                      sections refreshed in full. Requires --since.
+//   --since <cursor>   Prior opaque cursor (a Linear updatedAt RFC-3339 stamp).
+//                      Implies --mode delta. `-` means "no prior cursor" (full).
+//   --exclude <ids>    Comma-joined ticket ids the orchestrator has in flight /
+//                      done. They are suppressed from the SCHEDULING sections
+//                      (<available>) ONLY — never from node updates, and they do
+//                      NOT feed the permanent-block cascade.
+//   --failed <ids>     Comma-joined ticket ids the orchestrator has FAILED. These
+//                      feed the §2.3 permanent-block cascade as failed/parked
+//                      ancestors (cause="ancestor-failed-parked"). Kept SEPARATE
+//                      from --exclude: a failed ancestor permanently-blocks its
+//                      dependents; a merely-excluded ticket does not.
+//   --team-map <json>  Optional per-team native-state -> {group, role} override
+//                      map, applied BEFORE the §2.3 Linear default. Either inline
+//                      JSON or `@/path/to/file.json`. Shape:
+//                        { "<state-name>": {"group":"started","role":"in-review"},
+//                          "type:<state-type>": {"group":"...","role":"..."} }
+//                      A key may be a state NAME (case-insensitive, trimmed) or
+//                      `type:<linear-state-type>`. An uncovered state is a fatal
+//                      error (non-zero exit), never a guess (§2.3 tagging rule).
+//   --state-root <dir> Where the producer keeps its durable per-selection id-set
+//                      cache used for delta tombstone detection. Default:
+//                      $DISPATCH_STATE_ROOT or
+//                      ${XDG_STATE_HOME:-$HOME/.local/state}/dispatch.
+//   <project> ...      One or more Linear project NAMES (matched case-insensitively
+//                      against the workspace's projects). All MUST share the one
+//                      tracker (Linear); cross-tracker orchestration is out of
+//                      scope (§2.6).
+//
+// ---------------------------------------------------------------------------
+// ACCESS MECHANISM
+// ---------------------------------------------------------------------------
+// This adapter is a SELF-CONTAINED Linear GraphQL client. It POSTs directly to
+//   https://api.linear.app/graphql
+// with the Authorization header set to a read-only Linear personal API key from
+// $LINEAR_API_KEY. There is NO external binary, NO MCP server, and NO apps-repo
+// CLI shell-out: only Node built-ins (fs, path, os, crypto) and the global
+// `fetch`. Requires Node >= 18 (global fetch). All graph reasoning
+// (effective-blocking, ranking, cycle detection, milestone gating, counts,
+// anomalies, delta framing) happens locally on the fetched data.
+//
+// Per §2.6 "Access style is orthogonal to credential mode": choosing a direct
+// API client here places no constraint on the §2.1 mode, which governs only
+// identity attribution and human-input routing.
+//
+// ---------------------------------------------------------------------------
+// CURSOR / DELTA APPROACH (CURSOR-BOUNDARY correctness)
+// ---------------------------------------------------------------------------
+// The opaque cursor is the MAX Linear `updatedAt` (RFC-3339) across all fetched
+// in-project nodes. To avoid LOSING same-second updates at the boundary, the
+// delta change-set uses `updatedAt >= since` (NOT strictly `>`) combined with a
+// "seen-id" dedup against the persisted prior id-set: nodes whose updatedAt
+// equals the cursor are RE-EMITTED on the next delta. Re-emitting an unchanged
+// node is harmless (the orchestrator merge replaces the cached node with an
+// identical one); DROPPING a same-second update would silently desync the cache.
+// We always fetch the FULL project on every call (Linear has no cheap
+// server-side incremental issue feed that also returns relations), then frame
+// the delta client-side from updatedAt + the prior id-set. This keeps the
+// producer self-contained and the boundary lossless.
+// ---------------------------------------------------------------------------
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+
+const LINEAR_GRAPHQL_URL = 'https://api.linear.app/graphql';
+
+// ===========================================================================
+// §2.3 Linear default role mapping
+// ===========================================================================
+// Source of truth: docs/spec/02-protocols/03-ticket-workflow-protocol/02-normative.md
+// (§Per-tracker default mappings → Linear). Linear's five top-level workflow
+// `type` categories are immutable and map directly to the protocol GROUPS. The
+// ROLE is refined from the customizable state NAME within a group. §2.3 tagging
+// rule resolves "team override → default mapping → error"; this producer
+// implements that order: a --team-map entry wins, then the default below, then a
+// fatal error on an uncovered native state.
+//
+// Linear workflow-state `type` -> protocol group:
+//   backlog   -> backlog
+//   unstarted -> unstarted
+//   started   -> started
+//   completed -> completed
+//   canceled  -> canceled
+//   triage    -> backlog (pre-backlog intake; never eligible for the frontier)
+const GROUP_BY_STATE_TYPE = {
+  backlog: 'backlog',
+  unstarted: 'unstarted',
+  started: 'started',
+  completed: 'completed',
+  canceled: 'canceled',
+  triage: 'backlog',
+};
+
+// Groups whose Linear top-level `type` ALONE fully determines the §2.3 role:
+// Linear exposes exactly one workflow position for these, so mapping type ->
+// role is the §2.3 "default mapping", not a guess. (Per §2.3 Linear table:
+// TODO/unstarted -> available, Done/completed -> verified, Canceled -> canceled.)
+const SINGLE_ROLE_BY_GROUP = {
+  unstarted: 'available',
+  completed: 'verified',
+  canceled: 'canceled',
+};
+
+// Name-refined groups (`started`, `backlog`) carry MULTIPLE possible §2.3 roles,
+// so the role is refined from the customizable state NAME. The default mapping
+// covers exactly the §2.3 Linear default-table names (plus the common backlog
+// parks). A name NOT covered here (and not covered by a --team-map override) is
+// the §2.3 "neither override nor default covers it" case and MUST ERROR rather
+// than collapse to an arbitrary group default (Fix 4).
+const NAME_ROLE_OVERRIDES = {
+  started: {
+    'in progress': 'in-progress',
+    'in review': 'in-review',
+    finished: 'finished',
+    delivered: 'delivered',
+  },
+  backlog: {
+    backlog: 'backlog',
+    triage: 'backlog',
+    paused: 'paused',
+    blocked: 'awaiting-external',
+    'awaiting external': 'awaiting-external',
+    'awaiting-external': 'awaiting-external',
+  },
+};
+
+// Roles whose group is "completed" or "canceled" are terminal for §2.3.
+const TERMINAL_ROLES = new Set(['verified', 'canceled']);
+
+// resolveRole resolves a native Linear state to {group, role} per §2.3's
+// "team override → default mapping → error" order. `teamMap` is the optional
+// --team-map override (keyed by lower-cased state name OR `type:<state-type>`).
+function makeRoleResolver(teamMap) {
+  return function resolveRole(stateType, stateName) {
+    const nameKey = String(stateName || '').trim().toLowerCase();
+    const typeKey = `type:${String(stateType || '').trim().toLowerCase()}`;
+    // 1. team override — name key wins over type key.
+    if (teamMap) {
+      const ov = teamMap[nameKey] || teamMap[typeKey];
+      if (ov) {
+        if (!ov.group || !ov.role) {
+          throw new Error(
+            `team-map entry for "${stateName || stateType}" must have both ` +
+              `group and role`
+          );
+        }
+        return {group: ov.group, role: ov.role};
+      }
+    }
+    // 2. default mapping.
+    const group = GROUP_BY_STATE_TYPE[stateType];
+    if (!group) {
+      // 3a. error — unknown TYPE, surface rather than guess (§2.3 tagging rule).
+      throw new Error(
+        `unmapped Linear state type=${stateType} name=${stateName}; ` +
+          `no team override and no default mapping covers it`
+      );
+    }
+    // Single-role group: the type fully determines the role.
+    const single = SINGLE_ROLE_BY_GROUP[group];
+    if (single) return {group, role: single};
+    // Name-refined group (started/backlog): the role comes from the state NAME.
+    const overrides = NAME_ROLE_OVERRIDES[group] || {};
+    const role = overrides[nameKey];
+    if (!role) {
+      // 3b. error — known group but an unrecognized substate NAME. Collapsing to
+      // a group default would be a guess; §2.3 requires an error (Fix 4).
+      throw new Error(
+        `unmapped Linear state name="${stateName}" (type=${stateType}, ` +
+          `group=${group}); no team override and no default substate mapping ` +
+          `covers it. Add a --team-map entry for this state.`
+      );
+    }
+    return {group, role};
+  };
+}
+
+// ===========================================================================
+// label-derived facts (§2.6): human-interactive + target-kind
+// ===========================================================================
+// human-interactive is true iff the issue carries the configured label
+//   $DISPATCH_HUMAN_INTERACTIVE_LABEL (default "human-interactive").
+// target-kind:
+//   human-interactive label present       -> human-interactive=true, human-only
+//   verification label present             -> verification
+//   else                                   -> pr
+// The verification label is $DISPATCH_VERIFICATION_LABEL (default "verification").
+const HUMAN_INTERACTIVE_LABEL = (
+  process.env.DISPATCH_HUMAN_INTERACTIVE_LABEL || 'human-interactive'
+).toLowerCase();
+const VERIFICATION_LABEL = (
+  process.env.DISPATCH_VERIFICATION_LABEL || 'verification'
+).toLowerCase();
+
+function isHumanInteractive(node) {
+  return node.labels.some((l) => l.toLowerCase() === HUMAN_INTERACTIVE_LABEL);
+}
+function targetKindOf(node, humanInteractive) {
+  if (humanInteractive) return 'human-only';
+  if (node.labels.some((l) => l.toLowerCase() === VERIFICATION_LABEL)) {
+    return 'verification';
+  }
+  return 'pr';
+}
+
+// ===========================================================================
+// Argument parsing
+// ===========================================================================
+function parseArgs(argv) {
+  const out = {
+    mode: null,
+    since: null,
+    exclude: new Set(),
+    failed: new Set(),
+    teamMap: null,
+    stateRoot: null,
+    projects: [],
+  };
+  const splitIds = (raw, sink) => {
+    for (const id of String(raw || '').split(',')) {
+      const t = id.trim();
+      if (t) sink.add(t);
+    }
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    switch (a) {
+      case '--mode':
+        out.mode = argv[++i];
+        break;
+      case '--since':
+        out.since = argv[++i];
+        break;
+      case '--exclude':
+        splitIds(argv[++i], out.exclude);
+        break;
+      case '--failed':
+        splitIds(argv[++i], out.failed);
+        break;
+      case '--team-map':
+        out.teamMap = loadTeamMap(argv[++i]);
+        break;
+      case '--state-root':
+        out.stateRoot = argv[++i];
+        break;
+      case '-h':
+      case '--help':
+        out.help = true;
+        break;
+      default:
+        if (a.startsWith('--')) throw new Error(`unknown flag ${a}`);
+        out.projects.push(a);
+    }
+  }
+
+  // --since implies delta; `-`/empty means "no prior cursor" => full.
+  if (out.since === '-' || out.since === '') out.since = null;
+  if (out.mode == null) out.mode = out.since ? 'delta' : 'full';
+  if (out.mode === 'delta' && !out.since) {
+    // A delta with no prior cursor degrades to a full sync per §2.6.
+    out.mode = 'full';
+  }
+  if (out.help) return out;
+  if (out.mode !== 'full' && out.mode !== 'delta') {
+    throw new Error(`--mode must be full|delta, got ${out.mode}`);
+  }
+  if (out.projects.length === 0) {
+    throw new Error('at least one <project> name is required');
+  }
+  if (!out.stateRoot) {
+    out.stateRoot =
+      process.env.DISPATCH_STATE_ROOT ||
+      path.join(
+        process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'),
+        'dispatch'
+      );
+  }
+  return out;
+}
+
+function loadTeamMap(arg) {
+  if (!arg) throw new Error('--team-map requires a value');
+  let raw = arg;
+  if (arg.startsWith('@')) raw = fs.readFileSync(arg.slice(1), 'utf8');
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`--team-map is not valid JSON: ${e.message}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('--team-map must be a JSON object of state -> {group, role}');
+  }
+  // Normalize keys to lower-case so name matching is case-insensitive.
+  const norm = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    norm[String(k).trim().toLowerCase()] = v;
+  }
+  return norm;
+}
+
+const USAGE =
+  'usage: project-graph [--mode full|delta] [--since <cursor>] ' +
+  '[--exclude <id,...>] [--failed <id,...>] [--team-map <json|@file>] ' +
+  '[--state-root <dir>] <project> [<project> ...]';
+
+// ===========================================================================
+// Linear GraphQL client (self-contained; only built-ins + fetch)
+// ===========================================================================
+//
+// `fetchImpl` is injectable for the self-test path (--self-test): a fake fetch
+// replaces the network so the entire derivation can be exercised offline.
+
+async function gqlRequest(fetchImpl, apiKey, query, variables) {
+  const res = await fetchImpl(LINEAR_GRAPHQL_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: apiKey,
+    },
+    body: JSON.stringify({query, variables}),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = await res.text();
+    } catch (_) {
+      /* ignore */
+    }
+    throw new Error(
+      `Linear GraphQL HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 500)}`
+    );
+  }
+  const json = await res.json();
+  if (json.errors && json.errors.length) {
+    throw new Error(
+      `Linear GraphQL errors: ${json.errors.map((e) => e.message).join('; ')}`
+    );
+  }
+  return json.data;
+}
+
+// The issue selection set. `relations`/`inverseRelations` are filtered to the
+// `blocks` relation type only (client-side). In Linear's model a relation of
+// type `blocks` is directed: `issue` blocks `relatedIssue`. From the viewpoint
+// of the issue carrying the connection:
+//   - relations[type=blocks]         => THIS issue is `issue`; `relatedIssue` is
+//     the DEPENDENT I block (a descendant). Edge: me -> relatedIssue.
+//   - inverseRelations[type=blocks]  => THIS issue is `relatedIssue`; `issue` is
+//     the ANCESTOR that blocks me (i.e. I am blocked-BY `issue`). Edge:
+//     issue -> me. So blocked-by = inverseRelations[type=blocks].issue, NOT
+//     `.relatedIssue` (Fix 2: consuming relatedIssue here resolves blocked-by to
+//     SELF, producing self-deps and false cycles).
+//
+// Edge completeness (Fix 15): labels, relations, and inverseRelations are each
+// paginated connections; capping them silently drops extra labels or dependency
+// edges. We page all three to exhaustion via pageInfo/endCursor below
+// (fetchIssueEdges), requesting only the first page inline here.
+const ISSUE_FIELDS = `
+  id
+  identifier
+  url
+  branchName
+  priority
+  updatedAt
+  state { name type }
+  assignee { name }
+  labels(first: 50) { nodes { name } pageInfo { hasNextPage endCursor } }
+  project { id name }
+  projectMilestone { id name sortOrder }
+  relations(first: 50) {
+    nodes { type relatedIssue { id } }
+    pageInfo { hasNextPage endCursor }
+  }
+  inverseRelations(first: 50) {
+    nodes { type issue { id } relatedIssue { id } }
+    pageInfo { hasNextPage endCursor }
+  }
+`;
+
+// Resolve project NAME -> project id (+ canonical display name). Linear's
+// `projects` filter matches by name; we match case-insensitively client-side to
+// be robust to the filter's exact-match semantics.
+async function resolveProjectId(fetchImpl, apiKey, name) {
+  const query = `
+    query Projects($after: String) {
+      projects(first: 100, after: $after) {
+        nodes { id name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }`;
+  const want = name.trim().toLowerCase();
+  let after = null;
+  const seen = [];
+  const matches = []; // Fix 12: collect ALL case-insensitive matches.
+  for (;;) {
+    const data = await gqlRequest(fetchImpl, apiKey, query, {after});
+    const conn = data.projects;
+    for (const p of conn.nodes) {
+      seen.push(p.name);
+      if (String(p.name).trim().toLowerCase() === want) {
+        matches.push({id: p.id, name: p.name});
+      }
+    }
+    if (!conn.pageInfo.hasNextPage) break;
+    after = conn.pageInfo.endCursor;
+  }
+  if (matches.length === 0) {
+    throw new Error(
+      `Linear project not found by name="${name}" ` +
+        `(searched ${seen.length} projects)`
+    );
+  }
+  // Fix 12: an ambiguous name (multiple case-insensitive matches) is a fatal
+  // error — silently picking the first would bind the orchestrator to an
+  // arbitrary project. The operator must disambiguate.
+  if (matches.length > 1) {
+    throw new Error(
+      `Linear project name="${name}" is ambiguous: ${matches.length} projects ` +
+        `match case-insensitively (ids: ${matches.map((m) => m.id).join(', ')}). ` +
+        `Rename one or select by a unique name.`
+    );
+  }
+  return matches[0];
+}
+
+// Fetch every issue in a project, paginating first/after on the issues
+// connection. Returns an array of raw issue objects. After the issue list is
+// drained, any issue whose labels/relations/inverseRelations connection was
+// itself truncated has the remaining pages fetched (Fix 15: completeness).
+async function fetchProjectIssues(fetchImpl, apiKey, projectId) {
+  const query = `
+    query ProjectIssues($projectId: ID!, $after: String) {
+      project(id: $projectId) {
+        id
+        name
+        issues(first: 100, after: $after) {
+          nodes { ${ISSUE_FIELDS} }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }`;
+  let after = null;
+  const issues = [];
+  for (;;) {
+    const data = await gqlRequest(fetchImpl, apiKey, query, {projectId, after});
+    if (!data.project) {
+      throw new Error(`Linear project id=${projectId} not found`);
+    }
+    const conn = data.project.issues;
+    for (const n of conn.nodes) issues.push(n);
+    if (!conn.pageInfo.hasNextPage) break;
+    after = conn.pageInfo.endCursor;
+  }
+  for (const issue of issues) {
+    await drainIssueEdges(fetchImpl, apiKey, issue);
+  }
+  return issues;
+}
+
+// Per-edge-connection paginators for a single issue (Fix 15). Linear caps each
+// connection at its `first:` value; if `hasNextPage`, we follow endCursor and
+// append. Each query selects ONLY the over-capped connection to stay cheap.
+const ISSUE_LABELS_PAGE = `
+  query IssueLabelsPage($id: String!, $after: String) {
+    issue(id: $id) {
+      labels(first: 100, after: $after) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }`;
+const ISSUE_RELATIONS_PAGE = `
+  query IssueRelationsPage($id: String!, $after: String) {
+    issue(id: $id) {
+      relations(first: 100, after: $after) {
+        nodes { type relatedIssue { id } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }`;
+const ISSUE_INVERSE_PAGE = `
+  query IssueInversePage($id: String!, $after: String) {
+    issue(id: $id) {
+      inverseRelations(first: 100, after: $after) {
+        nodes { type issue { id } relatedIssue { id } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }`;
+
+async function drainIssueEdges(fetchImpl, apiKey, issue) {
+  await drainConnection(
+    fetchImpl,
+    apiKey,
+    issue.labels,
+    ISSUE_LABELS_PAGE,
+    issue.id,
+    (d) => d.issue && d.issue.labels
+  );
+  await drainConnection(
+    fetchImpl,
+    apiKey,
+    issue.relations,
+    ISSUE_RELATIONS_PAGE,
+    issue.id,
+    (d) => d.issue && d.issue.relations
+  );
+  await drainConnection(
+    fetchImpl,
+    apiKey,
+    issue.inverseRelations,
+    ISSUE_INVERSE_PAGE,
+    issue.id,
+    (d) => d.issue && d.issue.inverseRelations
+  );
+}
+
+// Append all remaining pages of `conn` (in place into conn.nodes) following
+// pageInfo.endCursor with the given page query. No-op if conn is absent or not
+// truncated.
+async function drainConnection(fetchImpl, apiKey, conn, pageQuery, id, pick) {
+  if (!conn || !conn.pageInfo || !conn.pageInfo.hasNextPage) return;
+  let after = conn.pageInfo.endCursor;
+  for (;;) {
+    const data = await gqlRequest(fetchImpl, apiKey, pageQuery, {id, after});
+    const page = pick(data);
+    if (!page) break;
+    for (const n of page.nodes) conn.nodes.push(n);
+    if (!page.pageInfo.hasNextPage) break;
+    after = page.pageInfo.endCursor;
+  }
+}
+
+// Fetch the project's updates (the Linear milestone-review artifact per §2.6
+// Milestone-review routing). Each update carries body + createdAt, AND its
+// COMMENTS (Fix 6): per §2.3 "The review outcome MUST be recorded as a comment
+// on the designated review artifact" and §2.6 routing, the review-outcome marker
+// lives in a COMMENT on the project update, not the update body. We pull both so
+// review detection can scan the comments (and fall back to the body). We also
+// pull the project's milestones with sortOrder so predecessor ordering and
+// review scoping work even for milestones with no fetched issue carrying
+// sortOrder.
+async function fetchProjectMeta(fetchImpl, apiKey, projectId) {
+  const query = `
+    query ProjectMeta($projectId: ID!, $after: String, $mAfter: String) {
+      project(id: $projectId) {
+        id
+        projectUpdates(first: 50, after: $after) {
+          nodes {
+            id body createdAt user { name }
+            comments(first: 100) {
+              nodes { id body createdAt }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+        projectMilestones(first: 100, after: $mAfter) {
+          nodes { id name sortOrder }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }`;
+  const updates = [];
+  const milestones = [];
+  let after = null;
+  let mAfter = null;
+  // Updates and milestones are separate connections; page them independently by
+  // re-querying. We fully drain updates first, then milestones, reusing the same
+  // query (the unused connection just returns its first page each time, which we
+  // ignore after the first pass).
+  // Pass 1: drain projectUpdates.
+  for (;;) {
+    const data = await gqlRequest(fetchImpl, apiKey, query, {
+      projectId,
+      after,
+      mAfter,
+    });
+    const proj = data.project;
+    if (!proj) break;
+    if (updates.length === 0 && milestones.length === 0) {
+      for (const m of proj.projectMilestones.nodes) milestones.push(m);
+    }
+    for (const u of proj.projectUpdates.nodes) updates.push(u);
+    if (!proj.projectUpdates.pageInfo.hasNextPage) break;
+    after = proj.projectUpdates.pageInfo.endCursor;
+  }
+  // Fix 6: drain any truncated per-update comment connections so a review
+  // outcome posted as the Nth comment is never lost.
+  const UPDATE_COMMENTS_PAGE = `
+    query UpdateCommentsPage($id: String!, $after: String) {
+      projectUpdate(id: $id) {
+        comments(first: 100, after: $after) {
+          nodes { id body createdAt }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }`;
+  for (const u of updates) {
+    await drainConnection(
+      fetchImpl,
+      apiKey,
+      u.comments,
+      UPDATE_COMMENTS_PAGE,
+      u.id,
+      (d) => d.projectUpdate && d.projectUpdate.comments
+    );
+  }
+  // Pass 2: drain remaining milestone pages if any.
+  // (Re-query milestones-only by walking projectMilestones pageInfo.)
+  // Find whether milestones need more pages: we only captured the first page
+  // above. Continue from its endCursor.
+  {
+    const seedQuery = `
+      query MilestonePages($projectId: ID!, $mAfter: String) {
+        project(id: $projectId) {
+          projectMilestones(first: 100, after: $mAfter) {
+            nodes { id name sortOrder }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }`;
+    // Re-fetch the first page to learn pageInfo (cheap) then continue.
+    let data = await gqlRequest(fetchImpl, apiKey, seedQuery, {
+      projectId,
+      mAfter: null,
+    });
+    let conn = data.project ? data.project.projectMilestones : {nodes: [], pageInfo: {hasNextPage: false}};
+    // milestones[] already has page 1; only append subsequent pages.
+    while (conn.pageInfo.hasNextPage) {
+      mAfter = conn.pageInfo.endCursor;
+      data = await gqlRequest(fetchImpl, apiKey, seedQuery, {projectId, mAfter});
+      conn = data.project.projectMilestones;
+      for (const m of conn.nodes) milestones.push(m);
+    }
+  }
+  return {updates, milestones};
+}
+
+// ===========================================================================
+// Normalize a fetched project into a producer "project view".
+// ===========================================================================
+// node shape:
+//   { id, identifier, url, branchName, priority, updatedAt,
+//     stateType, stateName, assignee, labels:[], milestone:{id,name,sortOrder}|null,
+//     blockedBy:[ancestorId...], blocks:[dependentId...], projectId, external:false }
+function normalizeIssue(issue, projectId) {
+  const blockedBy = [];
+  const blocks = [];
+  // Fix 2: on inverseRelations[type=blocks] THIS issue is the `relatedIssue`,
+  // so the blocking ANCESTOR is `.issue` (NOT `.relatedIssue`, which is self).
+  for (const r of (issue.inverseRelations && issue.inverseRelations.nodes) || []) {
+    if (r.type === 'blocks' && r.issue && r.issue.id !== issue.id) {
+      blockedBy.push(r.issue.id);
+    }
+  }
+  // On relations[type=blocks] THIS issue is `issue`; `.relatedIssue` is the
+  // dependent it blocks.
+  for (const r of (issue.relations && issue.relations.nodes) || []) {
+    if (r.type === 'blocks' && r.relatedIssue && r.relatedIssue.id !== issue.id) {
+      blocks.push(r.relatedIssue.id);
+    }
+  }
+  const ms = issue.projectMilestone
+    ? {
+        id: issue.projectMilestone.id,
+        name: issue.projectMilestone.name || '',
+        sortOrder:
+          typeof issue.projectMilestone.sortOrder === 'number'
+            ? issue.projectMilestone.sortOrder
+            : null,
+      }
+    : null;
+  return {
+    id: issue.id,
+    identifier: issue.identifier || issue.id,
+    url: issue.url || '',
+    branchName: issue.branchName || '',
+    priority: Number(issue.priority || 0),
+    updatedAt: issue.updatedAt || '',
+    stateType: (issue.state && issue.state.type) || 'triage',
+    stateName: (issue.state && issue.state.name) || '',
+    assignee: (issue.assignee && issue.assignee.name) || null,
+    labels: ((issue.labels && issue.labels.nodes) || []).map((l) => l.name),
+    milestone: ms,
+    blockedBy,
+    blocks,
+    projectId,
+    external: false,
+  };
+}
+
+// Build a project view from the raw issue list + project meta.
+function buildProjectView(projectId, displayName, rawIssues, meta) {
+  const nodes = new Map();
+  const milestoneOrder = new Map(); // milestoneId -> sortOrder (from meta, authoritative)
+  for (const m of (meta && meta.milestones) || []) {
+    milestoneOrder.set(
+      m.id,
+      typeof m.sortOrder === 'number' ? m.sortOrder : null
+    );
+  }
+  for (const raw of rawIssues) {
+    const n = normalizeIssue(raw, projectId);
+    if (n.milestone && n.milestone.sortOrder == null) {
+      // Backfill sortOrder from the project-level milestone list if the issue's
+      // embedded copy lacked it.
+      const so = milestoneOrder.get(n.milestone.id);
+      if (typeof so === 'number') n.milestone.sortOrder = so;
+    }
+    nodes.set(n.id, n);
+  }
+  // NOTE (Fix 7): we no longer synthesize permanently-`unresolved` placeholders
+  // for referenced-but-not-in-project ancestors here. Their real state is
+  // fetched after the combined graph is built (resolveExternalAncestors) so a
+  // verified/canceled external ancestor correctly UNBLOCKS its dependent. Only
+  // an ancestor whose state truly cannot be fetched becomes unresolved (and even
+  // then it effectively-blocks but is NOT treated as permanently-blocked).
+  return {
+    projectId,
+    displayName,
+    nodes,
+    updates: (meta && meta.updates) || [],
+    milestoneMeta: (meta && meta.milestones) || [],
+  };
+}
+
+// Fetch the live state of issues referenced as blocked-by ancestors that are not
+// in any selected project, and add them to the combined graph as EXTERNAL nodes
+// carrying their real §2.3 state (Fix 7). An ancestor whose state cannot be
+// fetched (deleted / inaccessible / unknown id) is added as an `unresolved`
+// external node: it effectively-blocks (unknown != satisfied) but is NOT a
+// permanent-block root (unknown != known-failed). Cross-tracker deps remain out
+// of scope: we only resolve Linear issue ids here.
+const ISSUE_BY_ID_FIELDS = `
+  id
+  identifier
+  url
+  branchName
+  priority
+  updatedAt
+  state { name type }
+  project { id }
+  inverseRelations(first: 50) {
+    nodes { type issue { id } }
+    pageInfo { hasNextPage endCursor }
+  }
+`;
+async function fetchIssueById(fetchImpl, apiKey, id) {
+  const query = `
+    query IssueById($id: String!) {
+      issue(id: $id) { ${ISSUE_BY_ID_FIELDS} }
+    }`;
+  try {
+    const data = await gqlRequest(fetchImpl, apiKey, query, {id});
+    return (data && data.issue) || null;
+  } catch (_) {
+    // A GraphQL error for one id (e.g. not found / no access) must not abort the
+    // whole resolution — treat as unfetchable.
+    return null;
+  }
+}
+
+// Maximum number of hops to follow across the external (unselected-project)
+// boundary. A pathological dependency chain (or a graph engineered to fan out)
+// must not turn one refresh into an unbounded crawl of Linear. The visited-set
+// already guarantees termination on any finite graph; this is a belt-and-braces
+// bound. 64 hops is far deeper than any real Linear blocked-by chain.
+const MAX_EXTERNAL_HOPS = 64;
+
+// Fix 6: resolve external ancestors TRANSITIVELY. A blocked-by edge that points
+// outside every selected project used to be fetched for STATE only, with its own
+// `blockedBy` left empty — so a multi-hop external chain (selected -> externalA
+// -> externalB) lost transitive blocking: once externalA was terminal the
+// dependent looked unblocked even though externalB (a non-terminal
+// grand-ancestor) still blocks it through externalA. We now also fetch each
+// external ancestor's `inverseRelations` (its own blocked-by edges), populate
+// its `blockedBy`, and enqueue THOSE ancestors, walking the external boundary to
+// a fixpoint: until every reachable ancestor is already a known node, terminal,
+// or genuinely unfetchable. Termination is guaranteed by the visited set; the
+// hop bound is a runaway guard. Cross-TRACKER deps stay out of scope — we only
+// resolve Linear issue ids — but cross-PROJECT Linear ancestors resolve fully.
+async function resolveExternalAncestors(fetchImpl, apiKey, combined) {
+  const {nodes} = combined;
+  // Seed the frontier with every ancestor id referenced by a node we already
+  // hold but for which we have no node yet.
+  const queue = [];
+  const enqueued = new Set();
+  const enqueue = (id) => {
+    if (id == null) return;
+    if (nodes.has(id)) return; // already a known node — no fetch needed.
+    if (enqueued.has(id)) return;
+    enqueued.add(id);
+    queue.push(id);
+  };
+  for (const n of nodes.values()) {
+    for (const anc of n.blockedBy || []) enqueue(anc);
+  }
+
+  let hops = 0;
+  while (queue.length > 0) {
+    if (hops++ >= MAX_EXTERNAL_HOPS) {
+      // Runaway guard: stop expanding. Any still-unfetched frontier ancestor
+      // remains absent from `nodes`; computePermanentlyBlocked treats an absent
+      // referenced ancestor as UNKNOWN (effectively-blocking, not known-failed),
+      // so we fail safe (over-block) rather than wrongly unblock.
+      process.stderr.write(
+        `project-graph: WARNING: external-ancestor expansion hit ` +
+          `MAX_EXTERNAL_HOPS (${MAX_EXTERNAL_HOPS}); ${queue.length} ancestor(s) ` +
+          `left unresolved (treated conservatively as still-blocking)\n`
+      );
+      break;
+    }
+    const id = queue.shift();
+    if (nodes.has(id)) continue; // resolved as a side effect of an earlier hop.
+
+    const raw = await fetchIssueById(fetchImpl, apiKey, id);
+    if (raw && raw.state) {
+      // Derive this external ancestor's OWN blocked-by edges from its
+      // inverseRelations[type=blocks].issue (same endpoint direction as
+      // normalizeIssue — Fix 2), so transitive blocking survives the boundary.
+      const blockedBy = [];
+      for (const r of (raw.inverseRelations && raw.inverseRelations.nodes) || []) {
+        if (r && r.type === 'blocks' && r.issue && r.issue.id !== raw.id) {
+          blockedBy.push(r.issue.id);
+        }
+      }
+      nodes.set(id, {
+        id: raw.id,
+        identifier: raw.identifier || raw.id,
+        url: raw.url || '',
+        branchName: raw.branchName || '',
+        priority: Number(raw.priority || 0),
+        updatedAt: raw.updatedAt || '',
+        stateType: raw.state.type || 'triage',
+        stateName: raw.state.name || '',
+        assignee: null,
+        labels: [],
+        milestone: null,
+        blockedBy,
+        blocks: [],
+        projectId: (raw.project && raw.project.id) || null,
+        external: true,
+      });
+      // Continue across the external boundary: this ancestor's own ancestors
+      // must resolve too, or its transitive blocking would be lost again.
+      for (const anc of blockedBy) enqueue(anc);
+    } else {
+      // Unfetchable: effectively-blocking but NOT permanently-blocking.
+      nodes.set(id, {
+        id,
+        identifier: id,
+        url: '',
+        branchName: '',
+        priority: 0,
+        updatedAt: '',
+        stateType: 'unresolved',
+        stateName: '',
+        assignee: null,
+        labels: [],
+        milestone: null,
+        blockedBy: [],
+        blocks: [],
+        projectId: null,
+        external: true,
+        unresolved: true,
+      });
+    }
+  }
+}
+
+// ===========================================================================
+// Combined multi-project graph
+// ===========================================================================
+function buildCombined(projectViews) {
+  const nodes = new Map();
+  const projects = []; // {id, name, nodeIds:Set, updates:[], milestoneMeta:[]}
+  for (const pv of projectViews) {
+    const proj = {
+      id: pv.projectId,
+      name: pv.displayName,
+      nodeIds: new Set(),
+      updates: pv.updates,
+      milestoneMeta: pv.milestoneMeta,
+    };
+    projects.push(proj);
+    for (const [id, n] of pv.nodes) {
+      const ownedHere = !n.external;
+      const existing = nodes.get(id);
+      if (!existing || (existing.external && !n.external)) {
+        nodes.set(id, n);
+      }
+      if (ownedHere) proj.nodeIds.add(id);
+    }
+  }
+  return {nodes, projects};
+}
+
+// ===========================================================================
+// §2.3 effective-blocking
+// ===========================================================================
+function computeEffectiveBlocking(nodes, resolveRole) {
+  const roleOf = new Map();
+  for (const [id, n] of nodes) {
+    if (n.unresolved) {
+      roleOf.set(id, {group: 'backlog', role: 'unresolved', terminal: false});
+      continue;
+    }
+    const {group, role} = resolveRole(n.stateType, n.stateName);
+    roleOf.set(id, {group, role, terminal: TERMINAL_ROLES.has(role)});
+  }
+
+  function satisfied(id) {
+    const r = roleOf.get(id);
+    if (!r) return false; // unknown ancestor: conservatively still-blocking.
+    return r.terminal; // verified or canceled
+  }
+
+  // §2.3 transitive effective-blocking (Fix 1). A node is effectively blocked if
+  // ANY ancestor on ANY blocked-by path is not in {verified, canceled}. This is
+  // a memoized, cycle-safe DFS:
+  //   blocked(id) = OR over direct ancestors a of:
+  //     - a is non-terminal (a itself blocks), OR
+  //     - a is terminal BUT some ancestor BEYOND a is non-terminal (transitive).
+  // A terminal ancestor does NOT short-circuit the path: we still recurse past it
+  // so that, in the chain A -> B -> C (C blocked-by B, B blocked-by A), C is
+  // blocked whenever A is non-terminal even if B is verified.
+  // `direct` records the immediate offending ancestors for the blocked-by field:
+  // a direct ancestor is offending if it is itself non-terminal OR transitively
+  // blocked.
+  const memo = new Map(); // id -> {blocked:boolean}
+  const inStack = new Set();
+  function blockedOf(id) {
+    if (memo.has(id)) return memo.get(id);
+    if (inStack.has(id)) {
+      // Cycle: a node on a dependency cycle can never reach a terminal frontier,
+      // so it is effectively blocked. (The cycle itself is surfaced as an
+      // anomaly elsewhere.)
+      return {blocked: true};
+    }
+    inStack.add(id);
+    const n = nodes.get(id);
+    let blocked = false;
+    for (const anc of (n ? n.blockedBy : [])) {
+      if (!satisfied(anc)) {
+        blocked = true; // non-terminal ancestor blocks directly.
+      } else if (blockedOf(anc).blocked) {
+        // Terminal ancestor, but something further up the chain is non-terminal.
+        blocked = true;
+      }
+    }
+    inStack.delete(id);
+    const res = {blocked};
+    memo.set(id, res);
+    return res;
+  }
+
+  function directOffenders(id) {
+    const n = nodes.get(id);
+    const direct = new Set();
+    for (const anc of (n ? n.blockedBy : [])) {
+      if (!satisfied(anc) || blockedOf(anc).blocked) direct.add(anc);
+    }
+    return direct;
+  }
+
+  const effective = new Map();
+  for (const id of nodes.keys()) {
+    effective.set(id, {
+      blocked: blockedOf(id).blocked,
+      direct: directOffenders(id),
+    });
+  }
+  return {roleOf, effective};
+}
+
+// ===========================================================================
+// Permanently-blocked classification (§2.3 / reference.md cause enum)
+// ===========================================================================
+// cause ∈ { ancestor-failed-parked, ancestor-permanently-blocked }.
+// A perm-root is an ancestor that terminated WITHOUT verified and will not
+// progress: a --failed id, or an unresolved (deleted/inaccessible) ancestor.
+// A canceled ancestor is NEVER a perm-root: it unblocks its dependents (§2.3).
+// The cascade: a node is permanently-blocked if any ancestor is a perm-root
+// (cause=ancestor-failed-parked when that root is a --failed id, else
+// ancestor-permanently-blocked for the transitive/unresolved cascade).
+function computePermanentlyBlocked(nodes, roleOf, failedIds) {
+  function isPermRoot(id) {
+    if (failedIds.has(id)) return true;
+    const r = roleOf.get(id);
+    if (r && r.terminal) return false; // verified/canceled => satisfied
+    const n = nodes.get(id);
+    if (!n) return false; // Fix 7: a referenced ancestor we have no node for is
+    // UNKNOWN, not known-failed — it blocks effectively but is not a permanent
+    // root. (resolveExternalAncestors normally adds an `unresolved` node for it.)
+    if (n.unresolved) return false; // Fix 7: unfetchable/unknown != known-failed.
+    return false;
+  }
+
+  const memo = new Map();
+  const inStack = new Set();
+  function walk(id) {
+    if (memo.has(id)) return memo.get(id);
+    if (inStack.has(id)) return {perm: false, failedRoots: new Set(), permRoots: new Set()};
+    inStack.add(id);
+    const n = nodes.get(id);
+    const failedRoots = new Set();
+    const permRoots = new Set();
+    let perm = false;
+    for (const anc of (n ? n.blockedBy : [])) {
+      if (isPermRoot(anc)) {
+        perm = true;
+        if (failedIds.has(anc)) failedRoots.add(anc);
+        else permRoots.add(anc);
+      } else {
+        const r = roleOf.get(anc);
+        if (r && r.terminal) continue; // canceled/verified ancestor unblocks
+        const sub = walk(anc);
+        if (sub.perm) {
+          perm = true;
+          for (const x of sub.failedRoots) failedRoots.add(x);
+          for (const x of sub.permRoots) permRoots.add(x);
+        }
+      }
+    }
+    inStack.delete(id);
+    const res = {perm, failedRoots, permRoots};
+    memo.set(id, res);
+    return res;
+  }
+
+  const out = new Map();
+  for (const id of nodes.keys()) {
+    const r = roleOf.get(id);
+    if (r && r.terminal) {
+      out.set(id, {perm: false, failedRoots: new Set(), permRoots: new Set()});
+      continue;
+    }
+    out.set(id, walk(id));
+  }
+  return out;
+}
+
+// Downstream impact (transitive `blocks` reach) for ranking ties.
+function computeDownstreamImpact(nodes) {
+  const impact = new Map();
+  for (const start of nodes.keys()) {
+    const visited = new Set();
+    const queue = [start];
+    for (let i = 0; i < queue.length; i++) {
+      const n = nodes.get(queue[i]);
+      for (const d of (n ? n.blocks : [])) {
+        if (!visited.has(d)) {
+          visited.add(d);
+          queue.push(d);
+        }
+      }
+    }
+    visited.delete(start);
+    impact.set(start, visited.size);
+  }
+  return impact;
+}
+
+// ===========================================================================
+// Cycle detection (anomalies)
+// ===========================================================================
+// Detect cycles in the blocked-by graph (a ticket depends on an ancestor that
+// transitively depends back). §2.3: cycles are illegal; the producer surfaces
+// them and never works around them. We collect each distinct cycle's members.
+function detectCycles(nodes) {
+  const WHITE = 0;
+  const GRAY = 1;
+  const BLACK = 2;
+  const color = new Map();
+  for (const id of nodes.keys()) color.set(id, WHITE);
+  const cycles = [];
+  const seenCycle = new Set();
+  const stack = [];
+
+  function visit(id) {
+    color.set(id, GRAY);
+    stack.push(id);
+    const n = nodes.get(id);
+    for (const anc of (n ? n.blockedBy : [])) {
+      if (!nodes.has(anc)) continue;
+      const c = color.get(anc);
+      if (c === GRAY) {
+        // back-edge -> cycle from anc..id on the stack.
+        const idx = stack.indexOf(anc);
+        if (idx >= 0) {
+          const ring = stack.slice(idx);
+          const key = [...ring].sort().join(' ');
+          if (!seenCycle.has(key)) {
+            seenCycle.add(key);
+            cycles.push(ring.slice());
+          }
+        }
+      } else if (c === WHITE) {
+        visit(anc);
+      }
+    }
+    stack.pop();
+    color.set(id, BLACK);
+  }
+
+  for (const id of nodes.keys()) {
+    if (color.get(id) === WHITE) visit(id);
+  }
+  return cycles;
+}
+
+// ===========================================================================
+// Milestones + review-recorded (§2.6 milestone-review routing)
+// ===========================================================================
+// ready-for-review: every member verified/canceled AND no non-terminal ticket is
+// a transitive dependency of any member.
+//
+// review-recorded: the milestone's Linear PROJECT UPDATE (the §2.6 review
+// artifact) carries a §2.1 review-outcome marker, scoped to the CURRENT
+// ready-for-review episode. "Current episode" means: the most recent moment the
+// milestone (re)entered ready-for-review.
+//
+// TODO(review-episode-precision): the PRECISE contract is —
+//   episodeStart = the timestamp at which the milestone last (re)entered the
+//   all-members-terminal condition, sourced from issue HISTORY (the latest
+//   transition of any member INTO a terminal state that left every member
+//   terminal). A review-outcome recorded at/after episodeStart is current; one
+//   before it belongs to a prior episode that has since regained incomplete
+//   work and MUST NOT count (reference.md: review-recorded resets to false
+//   whenever the milestone regains incomplete work).
+// We currently APPROXIMATE episodeStart by max(updatedAt) across the milestone's
+// members, because the issue selection set does not fetch per-issue history (no
+// `history`/`IssueHistory` connection — see ISSUE_FIELDS) and deriving a real
+// terminal-entry timestamp would require an additional history query per member.
+// STALE-GATE LIMITATION of the approximation: if a milestone reaches
+// all-terminal and is reviewed, then a member gets follow-up work (updatedAt
+// bumps forward, episode should restart) and that work is later REMOVED or the
+// member is re-completed, max(updatedAt) advances PAST the original review —
+// yet a NEWER review never had to be written. The OLD review can then read as
+// stale (review-recorded=false) which is the SAFE direction (closes/keeps-closed
+// the gate, forcing a re-review). The UNSAFE direction — a stale review reading
+// as current and opening the gate prematurely — is NOT possible from this
+// approximation alone because episodeStart only ever moves FORWARD with member
+// activity; an update authored before the latest member churn is excluded.
+// Tightening to the history-sourced episodeStart above would remove the
+// conservative over-gating; until ISSUE_FIELDS fetches member history this stays
+// the safe over-approximation.
+//
+// The review-outcome marker we look for in a project update body: a §2.1 machine
+// marker (`<!-- agent-reply ... -->`) plus a milestone-review sentinel. The
+// sentinel string is configurable via $DISPATCH_REVIEW_OUTCOME_MARKER (default
+// "agent-milestone-review").
+//
+// Milestone binding is MANDATORY regardless of which marker is present. The
+// project's update list is project-wide (one stream shared by every milestone),
+// so a generic sentinel that does not name a milestone would otherwise mark
+// EVERY ready milestone in the project as review-recorded — prematurely opening
+// the gate on an unreviewed milestone (violates §2.3: "a milestone review MUST
+// run before the next milestone is started"). We therefore require BOTH (a) a
+// review marker (sentinel or agent-reply) AND (b) an explicit reference to THIS
+// milestone. The preferred, unambiguous form is a structured sentinel carrying
+// the milestone id, e.g. `agent-milestone-review:<milestone-id>`; we fall back
+// to an id/name substring match only when no structured marker is present (and
+// fail closed when neither binds — see referencesMilestone).
+const REVIEW_OUTCOME_MARKER = (
+  process.env.DISPATCH_REVIEW_OUTCOME_MARKER || 'agent-milestone-review'
+).toLowerCase();
+
+// True iff this update binds to THIS specific milestone. Prefers a structured
+// `<marker>:<milestone-id>` token in the body (exact id match, immune to two
+// milestones with overlapping names); otherwise falls back to a substring match
+// on the milestone id, then the milestone name.
+function updateReferencesMilestone(body, lower, ms) {
+  // An IMPLICIT milestone (Fix 8) is the project's sole milestone — there is no
+  // native milestone name/id to reference and no sibling to confuse it with, so
+  // a project-wide review marker binds to it unconditionally.
+  if (ms && ms.implicit) return true;
+  // Structured marker: `agent-milestone-review:<id>` (id is the Linear
+  // milestone uuid; tokens end at whitespace, '-->', or end of string).
+  const structured = new RegExp(
+    REVIEW_OUTCOME_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+      '\\s*[:=]\\s*([^\\s<>]+)',
+    'i'
+  );
+  let m;
+  let sawStructured = false;
+  const re = new RegExp(structured, 'gi');
+  while ((m = re.exec(body)) !== null) {
+    sawStructured = true;
+    const target = String(m[1]).replace(/[)\].,;]+$/, '');
+    if (ms.id && target === ms.id) return true;
+  }
+  // A structured marker was present but named a DIFFERENT milestone — do not
+  // let a loose id/name substring re-bind it to this one. Fail closed.
+  if (sawStructured) return false;
+  // Unstructured fallback: explicit id substring, then name substring.
+  if (ms.id && body.includes(ms.id)) return true;
+  if (ms.name && ms.name.length > 0 && lower.includes(ms.name.toLowerCase())) {
+    return true;
+  }
+  return false;
+}
+
+// Does a single text blob carry a review marker (sentinel OR §2.1 agent-reply)?
+function hasReviewMarker(text) {
+  const lower = text.toLowerCase();
+  return /<!--\s*agent-reply/i.test(text) || lower.includes(REVIEW_OUTCOME_MARKER);
+}
+
+// review-recorded detection (Fix 6). Per §2.3 ("recorded as a COMMENT on the
+// designated review artifact") and §2.6 routing, the review-outcome marker lives
+// in a COMMENT on the milestone's Linear project update — NOT the update body
+// (the update body is the status snapshot, not the review verdict). We therefore
+// scan the update's COMMENTS for the marker, and fall back to the body only for
+// back-compat with producers/tooling that wrote the marker inline.
+//
+// Milestone binding (§2.6 per-milestone review-record) is ANDed on so a generic
+// project-wide update/comment can never record a review for a milestone it does
+// not name. Binding may be satisfied by the comment text OR by the parent update
+// body (e.g. a comment "agent-milestone-review goal achieved" on an update whose
+// body names milestone m1).
+//
+// Episode scoping uses the comment's createdAt (the moment the verdict was
+// recorded); a comment authored before the milestone last reached all-terminal
+// is stale and does not count.
+function projectUpdateRecordsReview(update, ms, episodeStart) {
+  if (!update) return false;
+  const body = update.body ? String(update.body) : '';
+  const bodyLower = body.toLowerCase();
+  const comments = (update.comments && update.comments.nodes) || [];
+
+  const atOrAfterEpisode = (createdAt) => {
+    if (!episodeStart) return true;
+    if (!createdAt) return true; // unknown timestamp: do not exclude.
+    return String(createdAt) >= String(episodeStart);
+  };
+
+  // Preferred path: a COMMENT carrying the review marker, bound to THIS milestone
+  // (by the comment text or the parent update body), at/after the episode start.
+  for (const c of comments) {
+    if (!c) continue;
+    const ctext = c.body ? String(c.body) : '';
+    if (!hasReviewMarker(ctext)) continue;
+    const bound =
+      updateReferencesMilestone(ctext, ctext.toLowerCase(), ms) ||
+      updateReferencesMilestone(body, bodyLower, ms);
+    if (!bound) continue;
+    if (atOrAfterEpisode(c.createdAt)) return true;
+  }
+
+  // Back-compat fallback: the marker written inline in the update BODY.
+  if (hasReviewMarker(body) && updateReferencesMilestone(body, bodyLower, ms)) {
+    if (atOrAfterEpisode(update.createdAt)) return true;
+  }
+
+  // TODO(review-artifact-precision): the exact §2.6 contract is "the review
+  // outcome is a comment on the milestone's project update." We approximate
+  // "the milestone's project update" by binding any project update whose body or
+  // comment names this milestone. If/when Linear exposes a per-milestone project
+  // update association, narrow this to that specific update. Until then this is
+  // the safe over-approximation; absent any binding it defaults to false.
+  return false;
+}
+
+// Synthetic id for a project's single implicit milestone when the project has no
+// native milestones (§2.3 trackers-without-milestones, Fix 8).
+const IMPLICIT_MILESTONE_PREFIX = '__implicit__:';
+
+function buildMilestones(combined) {
+  const {nodes, projects} = combined;
+  const milestones = new Map(); // key `${projId} ${msId}` -> ms aggregate
+
+  for (const proj of projects) {
+    const meta = proj.milestoneMeta || [];
+    if (meta.length === 0) {
+      // Fix 8: a project with NO native milestones is treated as ONE implicit
+      // milestone covering every node in the project (including review gating).
+      const msId = `${IMPLICIT_MILESTONE_PREFIX}${proj.id}`;
+      const key = `${proj.id} ${msId}`;
+      const memberIds = new Set(proj.nodeIds);
+      milestones.set(key, {
+        key,
+        id: msId,
+        name: '(implicit)',
+        sortOrder: 0,
+        project: proj.id,
+        projectRef: proj,
+        implicit: true,
+        memberIds,
+      });
+      continue;
+    }
+    // Fix 10: seed one aggregate per FETCHED milestone so even zero-member
+    // milestones are emitted. Members are attached below.
+    for (const m of meta) {
+      const key = `${proj.id} ${m.id}`;
+      if (!milestones.has(key)) {
+        milestones.set(key, {
+          key,
+          id: m.id,
+          name: m.name || '',
+          sortOrder: typeof m.sortOrder === 'number' ? m.sortOrder : null,
+          project: proj.id,
+          projectRef: proj,
+          memberIds: new Set(),
+        });
+      }
+    }
+    for (const id of proj.nodeIds) {
+      const n = nodes.get(id);
+      if (!n || !n.milestone) continue;
+      const key = `${proj.id} ${n.milestone.id}`;
+      if (!milestones.has(key)) {
+        // A milestone referenced by an issue but absent from the fetched meta
+        // (rare race): still create it so its members are accounted for.
+        milestones.set(key, {
+          key,
+          id: n.milestone.id,
+          name: n.milestone.name,
+          sortOrder: n.milestone.sortOrder,
+          project: proj.id,
+          projectRef: proj,
+          memberIds: new Set(),
+        });
+      }
+      milestones.get(key).memberIds.add(id);
+    }
+  }
+
+  function transitiveDeps(memberIds) {
+    const seen = new Set();
+    const stack = [...memberIds];
+    while (stack.length) {
+      const id = stack.pop();
+      const n = nodes.get(id);
+      for (const anc of (n ? n.blockedBy : [])) {
+        if (!seen.has(anc)) {
+          seen.add(anc);
+          stack.push(anc);
+        }
+      }
+    }
+    return seen;
+  }
+
+  return {milestones, transitiveDeps};
+}
+
+function computeMilestones(combined, roleOf) {
+  const {nodes} = combined;
+  const {milestones, transitiveDeps} = buildMilestones(combined);
+  const result = [];
+  for (const ms of milestones.values()) {
+    let allTerminal = ms.memberIds.size > 0;
+    // TODO(review-episode-precision): episodeStart is APPROXIMATED by
+    // max(member.updatedAt). See the contract + stale-gate analysis on
+    // projectUpdateRecordsReview above. The approximation only ever errs toward
+    // over-gating (forcing a re-review), never toward opening the gate early.
+    let episodeStart = '';
+    for (const id of ms.memberIds) {
+      const n = nodes.get(id);
+      if (n && n.updatedAt && n.updatedAt > episodeStart) episodeStart = n.updatedAt;
+      const r = roleOf.get(id);
+      if (!r || !r.terminal) allTerminal = false;
+    }
+    let depBlock = false;
+    if (allTerminal) {
+      const deps = transitiveDeps(ms.memberIds);
+      for (const depId of deps) {
+        if (ms.memberIds.has(depId)) continue;
+        const r = roleOf.get(depId);
+        if (!r || !r.terminal) {
+          depBlock = true;
+          break;
+        }
+      }
+    }
+    const readyForReview = allTerminal && !depBlock;
+
+    let reviewRecorded = false;
+    if (readyForReview) {
+      const updates = (ms.projectRef && ms.projectRef.updates) || [];
+      for (const u of updates) {
+        if (projectUpdateRecordsReview(u, ms, episodeStart)) {
+          reviewRecorded = true;
+          break;
+        }
+      }
+    }
+
+    result.push({
+      id: ms.id,
+      name: ms.name,
+      sortOrder: ms.sortOrder,
+      project: ms.project,
+      memberIds: ms.memberIds,
+      readyForReview,
+      reviewRecorded,
+    });
+  }
+  return result;
+}
+
+// Milestone gate (§2.6, BUG-FIX): a node in a SUCCESSOR milestone is
+// milestone-gated until EVERY predecessor milestone (lower sortOrder, same
+// project) is BOTH ready-for-review AND review-recorded. A predecessor that is
+// still incomplete (not ready-for-review) ALSO gates — not only a ready-but-
+// unrecorded one. Predecessors are ordered by projectMilestone.sortOrder.
+// Returns the FIRST (lowest sortOrder) gating predecessor's milestone id, else
+// null.
+function milestoneGate(node, proj, milestonesByProject) {
+  if (!node.milestone) return null;
+  const list = milestonesByProject.get(proj.id) || [];
+  const selfOrder = node.milestone.sortOrder;
+  if (selfOrder == null) {
+    // Without a sortOrder we cannot define predecessors; treat as ungated to
+    // avoid spuriously parking everything. (A project that never sets milestone
+    // sortOrder has no ordered gating semantics.)
+    return null;
+  }
+  // Predecessors: same project, strictly-lower sortOrder, different milestone.
+  const preds = list
+    .filter(
+      (m) =>
+        m.id !== node.milestone.id &&
+        m.sortOrder != null &&
+        m.sortOrder < selfOrder
+    )
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  for (const p of preds) {
+    if (!(p.readyForReview && p.reviewRecorded)) {
+      return p.id; // first incomplete-or-unrecorded predecessor gates.
+    }
+  }
+  return null;
+}
+
+// ===========================================================================
+// XML emission
+// ===========================================================================
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function emit(combined, derived, opts) {
+  const {projects, nodes} = combined;
+  const {roleOf, effective, milestones, ranked, counts, anomalies} = derived;
+  const out = [];
+  const cursor = derived.cursor;
+  const since = opts.mode === 'delta' ? opts.since : '-';
+
+  // Fix 9: a milestone-gated ticket MUST carry effective-blocked="true" on its
+  // node for consistency with its placement in <blocked reason="milestone-gate">.
+  // Gate-blocking is a form of effective-blocking even when no unverified
+  // ancestor edge exists.
+  const milestoneGatedIds = new Set();
+  for (const b of (derived.anomalies && derived.anomalies.blockedItems) || []) {
+    if (b.reason === 'milestone-gate') milestoneGatedIds.add(b.ticket);
+  }
+
+  out.push(
+    `<project-graph mode="${esc(opts.mode)}" cursor="${esc(cursor)}" ` +
+      `since="${esc(since)}">`
+  );
+
+  // --- <project> + <ticket> nodes (+ NESTED tombstones) ---
+  for (const proj of projects) {
+    out.push(
+      `  <project id="${esc(proj.id)}" tracker="linear" name="${esc(proj.name)}">`
+    );
+    for (const id of proj.nodeIds) {
+      const n = nodes.get(id);
+      // Delta: emit a node only if it changed since `since` (>= boundary) OR is
+      // excluded (excluded nodes MUST still be emitted so the cache never goes
+      // stale).
+      if (
+        opts.mode === 'delta' &&
+        !opts.changedIds.has(id) &&
+        !opts.exclude.has(id)
+      ) {
+        continue;
+      }
+      const r = roleOf.get(id);
+      const eff = effective.get(id);
+      const hi = isHumanInteractive(n);
+      const tk = targetKindOf(n, hi);
+      const ms = n.milestone ? ` milestone="${esc(n.milestone.id)}"` : '';
+      const bs = n.branchName ? ` branch-seed="${esc(n.branchName)}"` : '';
+      const effBlocked = eff.blocked || milestoneGatedIds.has(id); // Fix 9.
+      const open =
+        `    <ticket id="${esc(id)}" url="${esc(n.url)}" ` +
+        `role="${esc(r.role)}" group="${esc(r.group)}"${ms} ` +
+        `effective-blocked="${effBlocked ? 'true' : 'false'}" ` +
+        `human-interactive="${hi ? 'true' : 'false'}" target-kind="${esc(tk)}"${bs}`;
+      const children = [];
+      if (n.labels && n.labels.length) {
+        children.push('      <labels>');
+        for (const l of n.labels) children.push(`        <label>${esc(l)}</label>`);
+        children.push('      </labels>');
+      }
+      for (const anc of (n.blockedBy || [])) {
+        children.push(`      <depends-on ticket="${esc(anc)}"/>`);
+      }
+      if (children.length === 0) {
+        out.push(`${open}/>`);
+      } else {
+        out.push(`${open}>`);
+        out.push(...children);
+        out.push('    </ticket>');
+      }
+    }
+    // NESTED tombstones: removed nodes whose FORMER project was this one
+    // (BUG-FIX: tombstones nest inside their former <project>, per reference.md).
+    if (opts.mode === 'delta') {
+      for (const id of opts.removedByProject.get(proj.id) || []) {
+        out.push(`    <ticket id="${esc(id)}" removed="true"/>`);
+      }
+    }
+    out.push('  </project>');
+  }
+
+  // A removed node whose former project is itself no longer selected is emitted
+  // as a removed <project> wrapper (reference.md: a removed project is
+  // `<project id=... removed="true"/>`; its tickets vanish with it). We surface
+  // any orphan-project tombstones so the orchestrator drops them.
+  if (opts.mode === 'delta') {
+    for (const [projId, ids] of opts.removedByProject) {
+      const known = projects.some((p) => p.id === projId);
+      if (known) continue;
+      out.push(`  <project id="${esc(projId)}" removed="true">`);
+      for (const id of ids) {
+        out.push(`    <ticket id="${esc(id)}" removed="true"/>`);
+      }
+      out.push('  </project>');
+    }
+  }
+
+  // --- derived sections (always full, even on delta) ---
+  if (ranked.length === 0) {
+    out.push('  <available/>');
+  } else {
+    out.push('  <available>');
+    let rank = 1;
+    for (const r of ranked) {
+      out.push(
+        `    <item ticket="${esc(r.id)}" rank="${rank++}" target-kind="${esc(r.targetKind)}"/>`
+      );
+    }
+    out.push('  </available>');
+  }
+
+  if (anomalies.blockedItems.length === 0) {
+    out.push('  <blocked/>');
+  } else {
+    out.push('  <blocked>');
+    for (const b of anomalies.blockedItems) {
+      if (b.reason === 'milestone-gate') {
+        out.push(
+          `    <item ticket="${esc(b.ticket)}" reason="milestone-gate" milestone="${esc(b.milestone)}"/>`
+        );
+      } else {
+        out.push(
+          `    <item ticket="${esc(b.ticket)}" reason="${esc(b.reason)}" blocked-by="${esc(b.blockedBy)}"/>`
+        );
+      }
+    }
+    out.push('  </blocked>');
+  }
+
+  if (anomalies.humanBlocked.length === 0) {
+    out.push('  <human-blocked/>');
+  } else {
+    out.push('  <human-blocked>');
+    for (const h of anomalies.humanBlocked) {
+      out.push(
+        `    <item ticket="${esc(h.ticket)}" source="${esc(h.source)}"/>`
+      );
+    }
+    out.push('  </human-blocked>');
+  }
+
+  if (anomalies.permanentlyBlocked.length === 0) {
+    out.push('  <permanently-blocked/>');
+  } else {
+    out.push('  <permanently-blocked>');
+    for (const p of anomalies.permanentlyBlocked) {
+      out.push(
+        `    <item ticket="${esc(p.ticket)}" blocked-by="${esc(p.blockedBy)}" cause="${esc(p.cause)}"/>`
+      );
+    }
+    out.push('  </permanently-blocked>');
+  }
+
+  if (milestones.length === 0) {
+    out.push('  <milestones/>');
+  } else {
+    out.push('  <milestones>');
+    for (const m of milestones) {
+      out.push(
+        `    <milestone id="${esc(m.id)}" project="${esc(m.project)}" ` +
+          `ready-for-review="${m.readyForReview ? 'true' : 'false'}" ` +
+          `review-recorded="${m.reviewRecorded ? 'true' : 'false'}"/>`
+      );
+    }
+    out.push('  </milestones>');
+  }
+
+  // <counts> — BUG-FIX: project AND milestone rows carry the SAME field set
+  // (total, verified, canceled, permanently-blocked, remaining, terminal), with
+  // remaining = total - verified - canceled - permanently-blocked and
+  // terminal iff remaining == 0 (reference.md Pinned field semantics).
+  out.push('  <counts>');
+  for (const c of counts.projects) {
+    out.push(
+      `    <project id="${esc(c.id)}" total="${c.total}" verified="${c.verified}" ` +
+        `canceled="${c.canceled}" permanently-blocked="${c.permanentlyBlocked}" ` +
+        `remaining="${c.remaining}" terminal="${c.terminal ? 'true' : 'false'}"/>`
+    );
+  }
+  for (const c of counts.milestones) {
+    out.push(
+      `    <milestone id="${esc(c.id)}" project="${esc(c.project)}" total="${c.total}" ` +
+        `verified="${c.verified}" canceled="${c.canceled}" ` +
+        `permanently-blocked="${c.permanentlyBlocked}" remaining="${c.remaining}" ` +
+        `terminal="${c.terminal ? 'true' : 'false'}"/>`
+    );
+  }
+  out.push('  </counts>');
+
+  if (anomalies.cycles.length === 0 && anomalies.reverse.length === 0) {
+    out.push('  <anomalies/>');
+  } else {
+    out.push('  <anomalies>');
+    for (const ring of anomalies.cycles) {
+      out.push('    <cycle>');
+      for (const m of ring) out.push(`      <member ticket="${esc(m)}"/>`);
+      out.push('    </cycle>');
+    }
+    for (const rd of anomalies.reverse) {
+      out.push(
+        `    <reverse-dependency from="${esc(rd.from)}" to="${esc(rd.to)}" ` +
+          `from-project="${esc(rd.fromProject)}" to-project="${esc(rd.toProject)}"/>`
+      );
+    }
+    out.push('  </anomalies>');
+  }
+
+  out.push('</project-graph>');
+  return out.join('\n') + '\n';
+}
+
+// ===========================================================================
+// Section computation
+// ===========================================================================
+function computeSections(combined, opts) {
+  const {nodes, projects} = combined;
+  const resolveRole = opts.resolveRole;
+  const failedIds = opts.failed; // SEPARATE from --exclude (BUG-FIX).
+
+  const {roleOf, effective} = computeEffectiveBlocking(nodes, resolveRole);
+  const permMap = computePermanentlyBlocked(nodes, roleOf, failedIds);
+  const impact = computeDownstreamImpact(nodes);
+  const milestones = computeMilestones(combined, roleOf);
+
+  // Index milestones by project for the gate.
+  const milestonesByProject = new Map();
+  for (const m of milestones) {
+    if (!milestonesByProject.has(m.project)) milestonesByProject.set(m.project, []);
+    milestonesByProject.get(m.project).push(m);
+  }
+
+  const blockedItems = [];
+  const humanBlocked = [];
+  const permanentlyBlockedItems = [];
+  const availableCandidates = [];
+
+  for (const proj of projects) {
+    for (const id of proj.nodeIds) {
+      const n = nodes.get(id);
+      const r = roleOf.get(id);
+      if (!r) continue;
+      if (r.terminal) continue; // verified/canceled never scheduled.
+
+      // §2.6 human-blocked (Fix 5). A node is human-blocked when EITHER:
+      //   - the graph marks it human-interactive (label-derived explicit signal)
+      //     => source="explicit-signal", OR
+      //   - a coordinator parked it in `awaiting-external` via the §2.5
+      //     worker-discovered handoff (its §2.3 role is `awaiting-external`)
+      //     => source="worker-discovered".
+      // Either way it is parked pending a human and MUST NOT also be in
+      // <available>. The explicit-signal path takes precedence on its source
+      // label if both happen to apply.
+      const hi = isHumanInteractive(n);
+      if (hi) {
+        humanBlocked.push({ticket: id, source: 'explicit-signal'});
+        continue; // human-only: orchestrator step 6, never available.
+      }
+      if (r.role === 'awaiting-external') {
+        humanBlocked.push({ticket: id, source: 'worker-discovered'});
+        continue; // parked by a coordinator; honored at step 6, never available.
+      }
+
+      const pm = permMap.get(id);
+      if (pm && pm.perm) {
+        // cause: failed root wins (ancestor-failed-parked); else the transitive/
+        // unresolved cascade (ancestor-permanently-blocked).
+        let cause;
+        let root;
+        if (pm.failedRoots.size) {
+          cause = 'ancestor-failed-parked';
+          root = [...pm.failedRoots].sort()[0];
+        } else {
+          cause = 'ancestor-permanently-blocked';
+          root = [...pm.permRoots].sort()[0] || '';
+        }
+        permanentlyBlockedItems.push({ticket: id, blockedBy: root, cause});
+        continue;
+      }
+
+      const gate = milestoneGate(n, proj, milestonesByProject);
+      if (gate) {
+        blockedItems.push({ticket: id, reason: 'milestone-gate', milestone: gate});
+        continue;
+      }
+
+      const eff = effective.get(id);
+      if (eff.blocked) {
+        const root = [...eff.direct].sort()[0] || '';
+        blockedItems.push({ticket: id, reason: 'ancestor-unverified', blockedBy: root});
+        continue;
+      }
+
+      // Group/role eligibility gate (§2.3). The <available> frontier is "the
+      // ranked frontier of unblocked tickets ELIGIBLE TO BE PICKED UP". Only
+      // the unstarted group (role=available) qualifies:
+      //   - backlog-group roles (backlog/paused/awaiting-external) are §2.3
+      //     "not currently progressing; not eligible to be picked up" — parked
+      //     work belongs to human/park handling, and resuming from a park MUST
+      //     be a deliberate transition to available, not a scheduler pickup.
+      //   - started-group roles (in-progress/in-review/finished/delivered) are
+      //     already in flight; re-emitting them would re-dispatch live work
+      //     after state loss or external state changes (--exclude only masks
+      //     work this orchestrator itself dispatched and is tracking).
+      if (r.group !== 'unstarted') continue;
+
+      // Truly available. --exclude suppresses from <available> ONLY.
+      if (!opts.exclude.has(id)) {
+        availableCandidates.push({
+          id,
+          priority: n.priority,
+          impact: impact.get(id) || 0,
+          node: n,
+        });
+      }
+    }
+  }
+
+  // Rank: priority asc (Linear priority 0 = "No priority" => last); ties by
+  // downstream impact desc; then id asc.
+  const prioKey = (p) => (p === 0 ? Number.POSITIVE_INFINITY : p);
+  availableCandidates.sort((a, b) => {
+    const ap = prioKey(a.priority);
+    const bp = prioKey(b.priority);
+    if (ap !== bp) return ap - bp;
+    if (a.impact !== b.impact) return b.impact - a.impact;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  const ranked = availableCandidates.map((c) => ({
+    id: c.id,
+    targetKind: targetKindOf(c.node, false),
+  }));
+
+  // Counts — per project AND per milestone, identical field set (BUG-FIX).
+  const projCounts = [];
+  for (const proj of projects) {
+    let total = 0,
+      verified = 0,
+      canceled = 0,
+      permanently = 0;
+    for (const id of proj.nodeIds) {
+      total++;
+      const r = roleOf.get(id);
+      if (r && r.role === 'verified') verified++;
+      else if (r && r.role === 'canceled') canceled++;
+      const pm = permMap.get(id);
+      if (pm && pm.perm && !(r && r.terminal)) permanently++;
+    }
+    const remaining = total - verified - canceled - permanently;
+    projCounts.push({
+      id: proj.id,
+      total,
+      verified,
+      canceled,
+      permanentlyBlocked: permanently,
+      remaining,
+      terminal: remaining === 0,
+    });
+  }
+  const msCounts = [];
+  for (const m of milestones) {
+    let total = 0,
+      verified = 0,
+      canceled = 0,
+      permanently = 0;
+    for (const id of m.memberIds) {
+      total++;
+      const r = roleOf.get(id);
+      if (r && r.role === 'verified') verified++;
+      else if (r && r.role === 'canceled') canceled++;
+      const pm = permMap.get(id);
+      if (pm && pm.perm && !(r && r.terminal)) permanently++;
+    }
+    const remaining = total - verified - canceled - permanently;
+    msCounts.push({
+      id: m.id,
+      project: m.project,
+      total,
+      verified,
+      canceled,
+      permanentlyBlocked: permanently,
+      remaining,
+      terminal: remaining === 0,
+    });
+  }
+
+  // Anomalies: cycles + cross-project reverse dependencies.
+  const cycles = detectCycles(nodes);
+  const projectOf = new Map();
+  for (const proj of projects) for (const id of proj.nodeIds) projectOf.set(id, proj.id);
+  const reverse = [];
+  const seenReverse = new Set();
+  for (const proj of projects) {
+    for (const id of proj.nodeIds) {
+      const n = nodes.get(id);
+      for (const anc of (n.blockedBy || [])) {
+        const ap = projectOf.get(anc);
+        if (ap && ap !== proj.id) {
+          const k = `${id} ${anc}`;
+          if (!seenReverse.has(k)) {
+            seenReverse.add(k);
+            reverse.push({from: id, to: anc, fromProject: proj.id, toProject: ap});
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    roleOf,
+    effective,
+    perm: permMap,
+    milestones,
+    ranked,
+    counts: {projects: projCounts, milestones: msCounts},
+    anomalies: {
+      cycles,
+      reverse,
+      blockedItems,
+      humanBlocked,
+      permanentlyBlocked: permanentlyBlockedItems,
+    },
+  };
+}
+
+// ===========================================================================
+// Cursor + delta plumbing
+// ===========================================================================
+function maxUpdatedAt(nodes) {
+  let max = '';
+  for (const n of nodes.values()) {
+    if (!n.external && n.updatedAt && n.updatedAt > max) max = n.updatedAt;
+  }
+  return max || new Date().toISOString();
+}
+
+// Per-selection durable id->project cache for delta tombstone detection.
+// Keyed by the exact selected-project NAME set so two different selections never
+// share a tombstone baseline. Stores id -> formerProjectId so a tombstone can be
+// nested under its former <project> (BUG-FIX TOMBSTONE PLACEMENT).
+function selectionKey(projectNames) {
+  const h = crypto.createHash('sha256');
+  h.update(projectNames.slice().sort().join(' '));
+  return h.digest('hex').slice(0, 16);
+}
+function idsCachePath(stateRoot, projectNames) {
+  return path.join(
+    stateRoot,
+    'orchestrate',
+    'producer',
+    `${selectionKey(projectNames)}.ids.json`
+  );
+}
+// The ONLY id-map schema this producer reads or writes. A version-tagged
+// envelope `{v: ID_MAP_VERSION, ids: {id: projectId}}` (Fix 9a). Anything that
+// is not EXACTLY this shape — a legacy bare array, a legacy bare id->project
+// object, an envelope with a different/absent version, a non-object `ids`, or an
+// empty/garbage file — is a cursor gap, NOT a usable baseline.
+const ID_MAP_VERSION = 1;
+
+// Returns {status, map}. status ∈ {'ok','missing','corrupt'} (Fix 14 / Fix 9a).
+// A delta run MUST NOT silently treat a missing, corrupt, or LEGACY baseline as
+// a valid id-set: doing so makes every prior id look "still present" (dropping
+// all removals) or, worse, emits bogus tombstones from a garbage diff. The
+// caller forces a FULL sync (a cursor-gap signal) on anything but a perfectly
+// well-formed current-schema map, so removals are never lost. We intentionally
+// REJECT the old array and bare-object formats (previously accepted as status
+// 'ok'): a legacy file is a cursor gap and must trigger a full resync, after
+// which writeIdMap re-persists in the current envelope.
+function readPriorIdMap(p) {
+  let raw;
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return {status: 'missing', map: new Map()};
+    return {status: 'corrupt', map: new Map()};
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_) {
+    return {status: 'corrupt', map: new Map()};
+  }
+  // Strict schema gate: must be EXACTLY `{ v: <current>, ids: { <id>: <string|null> } }`.
+  // Arrays, null, primitives, legacy bare maps, wrong/absent versions, and any
+  // extra top-level keys are all rejected as corrupt (=> full sync).
+  const topKeys =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? Object.keys(parsed)
+      : null;
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
+    parsed.v !== ID_MAP_VERSION ||
+    !parsed.ids ||
+    typeof parsed.ids !== 'object' ||
+    Array.isArray(parsed.ids) ||
+    !topKeys ||
+    topKeys.length !== 2 ||
+    !topKeys.includes('v') ||
+    !topKeys.includes('ids')
+  ) {
+    return {status: 'corrupt', map: new Map()};
+  }
+  const m = new Map();
+  for (const [id, proj] of Object.entries(parsed.ids)) {
+    // Each value MUST be a string project id, or null (unknown former project).
+    // Anything else (object, number, boolean) is malformed => corrupt => full sync;
+    // do NOT coerce it.
+    if (proj !== null && typeof proj !== 'string') {
+      return {status: 'corrupt', map: new Map()};
+    }
+    m.set(id, proj);
+  }
+  return {status: 'ok', map: m};
+}
+function writeIdMap(p, idToProject) {
+  try {
+    fs.mkdirSync(path.dirname(p), {recursive: true});
+    const ids = {};
+    for (const [id, proj] of idToProject) ids[id] = proj == null ? null : proj;
+    const obj = {v: ID_MAP_VERSION, ids};
+    const tmp = `${p}.tmp.${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(obj));
+    fs.renameSync(tmp, p); // atomic write-temp-then-rename.
+  } catch (e) {
+    process.stderr.write(
+      `project-graph: warning: could not persist id cache: ${e.message}\n`
+    );
+  }
+}
+
+// ===========================================================================
+// Fetch all selected projects (real network) or via an injected fetch.
+// ===========================================================================
+// Returns {views, failures:[{name, error}]}. Per §2.6 tick isolation (Fix 11) a
+// fetch failure for ONE project MUST NOT abort the whole refresh: we log the
+// failure to stderr and continue with the healthy projects. The caller decides
+// whether zero healthy projects is fatal.
+async function fetchAllProjects(fetchImpl, apiKey, projectNames) {
+  const views = [];
+  const failures = [];
+  for (const name of projectNames) {
+    try {
+      const {id, name: displayName} = await resolveProjectId(
+        fetchImpl,
+        apiKey,
+        name
+      );
+      const rawIssues = await fetchProjectIssues(fetchImpl, apiKey, id);
+      const meta = await fetchProjectMeta(fetchImpl, apiKey, id);
+      views.push(buildProjectView(id, displayName, rawIssues, meta));
+    } catch (e) {
+      failures.push({name, error: e && e.message ? e.message : String(e)});
+      process.stderr.write(
+        `project-graph: WARNING: project "${name}" failed to refresh ` +
+          `(${e && e.message ? e.message : e}); continuing with healthy ` +
+          `projects (§2.6 tick isolation)\n`
+      );
+    }
+  }
+  return {views, failures};
+}
+
+// ===========================================================================
+// Self-test harness (offline; no network)
+// ===========================================================================
+// `--self-test` runs the full derivation against a built-in fixture by injecting
+// a fake fetch, then asserts the key bug-fix behaviors and prints PASS/FAIL.
+// This keeps the graph logic testable without a Linear token or network.
+function makeFakeFetch(fixture) {
+  return async function fakeFetch(_url, init) {
+    const {query, variables} = JSON.parse(init.body);
+    const data = fixture(query, variables);
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async json() {
+        return {data};
+      },
+      async text() {
+        return '';
+      },
+    };
+  };
+}
+
+// Build a fake fetch over an in-memory issue/milestone/update/external fixture.
+// `cfg` = {projects:[{id,name}], issues:{id:issue}, milestones:[{id,name,sortOrder}],
+//          updates:[...], externals:{id:issue}}. inverseRelations carry the NEW
+// `{type, issue:{id}}` shape (Fix 2 endpoint direction).
+function makeFixtureFetch(cfg) {
+  return (query, variables) => {
+    if (/query Projects/.test(query)) {
+      return {
+        projects: {
+          nodes: cfg.projects,
+          pageInfo: {hasNextPage: false, endCursor: null},
+        },
+      };
+    }
+    if (/ProjectIssues/.test(query)) {
+      const pid = variables.projectId;
+      const own = Object.values(cfg.issues).filter(
+        (i) => i.project && i.project.id === pid
+      );
+      return {
+        project: {
+          id: pid,
+          name: pid,
+          issues: {nodes: own, pageInfo: {hasNextPage: false, endCursor: null}},
+        },
+      };
+    }
+    if (/ProjectMeta/.test(query) || /MilestonePages/.test(query)) {
+      const pid = variables.projectId;
+      const ms = (cfg.milestones || []).filter((m) => m.project === pid);
+      return {
+        project: {
+          id: pid,
+          projectUpdates: {
+            nodes: (cfg.updates || []).filter((u) => u.project === pid),
+            pageInfo: {hasNextPage: false, endCursor: null},
+          },
+          projectMilestones: {
+            nodes: ms.map((m) => ({id: m.id, name: m.name, sortOrder: m.sortOrder})),
+            pageInfo: {hasNextPage: false, endCursor: null},
+          },
+        },
+      };
+    }
+    if (/IssueById/.test(query)) {
+      const ext = (cfg.externals || {})[variables.id];
+      return {issue: ext || null};
+    }
+    return {};
+  };
+}
+
+function mkIssue(o) {
+  return Object.assign(
+    {
+      identifier: o.id,
+      url: `https://linear.app/x/issue/${o.id}`,
+      branchName: o.id.toLowerCase(),
+      priority: 1,
+      updatedAt: '2026-06-08T10:00:00Z',
+      assignee: null,
+      labels: {nodes: []},
+      projectMilestone: null,
+      relations: {nodes: []},
+      inverseRelations: {nodes: []},
+    },
+    o
+  );
+}
+
+async function runSelfTest() {
+  const iso = (s) => `2026-06-08T${s}Z`;
+  const checks = [];
+  const assert = (name, cond) => checks.push({name, ok: !!cond});
+  // Extract just the <available>...</available> block so "in/not-in available"
+  // assertions don't accidentally match <item> in <blocked>/<human-blocked>.
+  const availableBlock = (xml) => {
+    const m = xml.match(/<available>([\s\S]*?)<\/available>/);
+    return m ? m[1] : '';
+  };
+  const inAvailable = (xml, id) =>
+    new RegExp(`<item ticket="${id}"`).test(availableBlock(xml));
+  const baseOpts = () => ({
+    mode: 'full',
+    since: null,
+    exclude: new Set(),
+    failed: new Set(),
+    resolveRole: makeRoleResolver(null),
+    changedIds: new Set(),
+    removedByProject: new Map(),
+  });
+  // Run the full pipeline over a fixture; returns {combined, derived, xml}.
+  async function run(cfg, opts) {
+    const fakeFetch = makeFakeFetch(makeFixtureFetch(cfg));
+    const {views} = await fetchAllProjects(fakeFetch, 'k', cfg.projects.map((p) => p.name));
+    const combined = buildCombined(views);
+    await resolveExternalAncestors(fakeFetch, 'k', combined);
+    const derived = computeSections(combined, opts);
+    derived.cursor = maxUpdatedAt(combined.nodes);
+    const xml = emit(combined, derived, opts);
+    return {combined, derived, xml};
+  }
+
+  // =========================================================================
+  // Scenario 1 — the main graph: milestone gate, failed cascade, target-kind,
+  // available eligibility, counts, AND the Fix-2 relation endpoint direction
+  // (D blocked-by C is encoded via inverseRelations[type=blocks].issue=C).
+  // =========================================================================
+  const P1 = {id: 'P1', name: 'Proj One'};
+  const s1 = {
+    projects: [P1],
+    milestones: [
+      {id: 'm1', name: 'M1', sortOrder: 1, project: 'P1'},
+      {id: 'm2', name: 'M2', sortOrder: 2, project: 'P1'},
+    ],
+    updates: [],
+    issues: {
+      A: mkIssue({id: 'A', state: {name: 'In Progress', type: 'started'},
+        project: P1, projectMilestone: {id: 'm1', name: 'M1', sortOrder: 1}}),
+      B: mkIssue({id: 'B', state: {name: 'TODO', type: 'unstarted'},
+        project: P1, projectMilestone: {id: 'm2', name: 'M2', sortOrder: 2}}),
+      C: mkIssue({id: 'C', priority: 2, state: {name: 'In Progress', type: 'started'},
+        project: P1}),
+      // D blocked-by C: inverseRelations carries `issue: {id: C}` (Fix 2).
+      D: mkIssue({id: 'D', priority: 2, state: {name: 'TODO', type: 'unstarted'},
+        project: P1, labels: {nodes: [{name: 'verification'}]},
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'C'}}]}}),
+      E: mkIssue({id: 'E', state: {name: 'TODO', type: 'unstarted'}, project: P1}),
+      P: mkIssue({id: 'P', state: {name: 'Paused', type: 'backlog'}, project: P1}),
+    },
+  };
+  const o1 = baseOpts();
+  o1.failed = new Set(['C']);
+  const r1 = await run(s1, o1);
+
+  assert('S1 B is milestone-gated by m1 (incomplete predecessor)',
+    r1.derived.anomalies.blockedItems.some(
+      (b) => b.ticket === 'B' && b.reason === 'milestone-gate' && b.milestone === 'm1'));
+  // Fix 9: a milestone-gated ticket carries effective-blocked="true".
+  assert('S1 B node carries effective-blocked="true" (milestone-gate)',
+    /id="B"[^>]*effective-blocked="true"/.test(r1.xml));
+  // Fix 2 endpoint direction: D depends-on C (NOT on itself).
+  assert('S1 D depends-on C (endpoint direction)',
+    /id="D"[\s\S]*?<depends-on ticket="C"\/>/.test(r1.xml));
+  assert('S1 D has NO self depends-on',
+    !/id="D"[\s\S]*?<depends-on ticket="D"\/>/.test(r1.xml));
+  assert('S1 D permanently-blocked cause=ancestor-failed-parked by C',
+    r1.derived.anomalies.permanentlyBlocked.some(
+      (p) => p.ticket === 'D' && p.cause === 'ancestor-failed-parked' && p.blockedBy === 'C'));
+  assert('S1 D target-kind=verification',
+    /id="D"[^>]*target-kind="verification"/.test(r1.xml));
+  assert("S1 E (unstarted, unblocked) appears in <available>", inAvailable(r1.xml, "E"));
+  assert("S1 A (started) is NOT in <available>", !inAvailable(r1.xml, "A"));
+  assert("S1 P (paused) is NOT in <available>", !inAvailable(r1.xml, "P"));
+  assert('S1 project counts total=6 perm=1 remaining=5',
+    r1.derived.counts.projects.some(
+      (c) => c.id === 'P1' && c.total === 6 && c.permanentlyBlocked === 1 && c.remaining === 5));
+  assert('S1 milestone m1 counts carry terminal field',
+    /<milestone id="m1"[^>]*permanently-blocked="\d+"[^>]*terminal="(true|false)"/.test(r1.xml));
+
+  // =========================================================================
+  // Scenario 2 — TRANSITIVE effective-blocking (Fix 1). Chain A2 -> B2 -> C2
+  // (C2 blocked-by B2, B2 blocked-by A2). A2 is in-progress (non-terminal);
+  // B2 is VERIFIED. C2 MUST still be effectively blocked transitively through
+  // the verified intermediate, because A2 (an ancestor on the path) is
+  // non-terminal. Direct-only logic would have called C2 unblocked.
+  // =========================================================================
+  const P2 = {id: 'P2', name: 'Chain Proj'};
+  const s2 = {
+    projects: [P2],
+    milestones: [],
+    updates: [],
+    issues: {
+      A2: mkIssue({id: 'A2', state: {name: 'In Progress', type: 'started'}, project: P2}),
+      B2: mkIssue({id: 'B2', state: {name: 'Done', type: 'completed'}, project: P2,
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'A2'}}]}}),
+      C2: mkIssue({id: 'C2', state: {name: 'TODO', type: 'unstarted'}, project: P2,
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'B2'}}]}}),
+    },
+  };
+  const r2 = await run(s2, baseOpts());
+  assert('S2 C2 is TRANSITIVELY effective-blocked (A2 non-terminal via verified B2)',
+    r2.derived.effective.get('C2').blocked === true);
+  assert('S2 C2 node effective-blocked="true"',
+    /id="C2"[^>]*effective-blocked="true"/.test(r2.xml));
+  assert("S2 C2 NOT in <available> (transitively blocked)", !inAvailable(r2.xml, "C2"));
+
+  // =========================================================================
+  // Scenario 3 — canceled ancestor UNBLOCKS; external/unselected ancestor
+  // resolution (Fix 7). F3 blocked-by CANCELED G3 => unblocked + available.
+  // H3 blocked-by EXTERNAL verified X (not in any selected project) => resolved
+  // and unblocked. J3 blocked-by EXTERNAL UNFETCHABLE Z => blocked but NOT
+  // permanently-blocked (unknown != known-failed).
+  // =========================================================================
+  const P3 = {id: 'P3', name: 'Ext Proj'};
+  const s3 = {
+    projects: [P3],
+    milestones: [],
+    updates: [],
+    externals: {
+      X: mkIssue({id: 'X', state: {name: 'Done', type: 'completed'}, project: {id: 'OTHER'}}),
+      // Z intentionally absent => fetchIssueById returns null (unfetchable).
+      // Fix 6 2-hop external chain: K3 (selected) -> EXT_T (external TERMINAL)
+      // -> EXT_NT (external NON-TERMINAL). EXT_T is blocked-BY EXT_NT, encoded
+      // via EXT_T's inverseRelations[type=blocks].issue = EXT_NT.
+      EXT_T: mkIssue({id: 'EXT_T', state: {name: 'Done', type: 'completed'}, project: {id: 'OTHER'},
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'EXT_NT'}}]}}),
+      EXT_NT: mkIssue({id: 'EXT_NT', state: {name: 'In Progress', type: 'started'}, project: {id: 'OTHER'}}),
+    },
+    issues: {
+      G3: mkIssue({id: 'G3', state: {name: 'Canceled', type: 'canceled'}, project: P3}),
+      F3: mkIssue({id: 'F3', state: {name: 'TODO', type: 'unstarted'}, project: P3,
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'G3'}}]}}),
+      H3: mkIssue({id: 'H3', state: {name: 'TODO', type: 'unstarted'}, project: P3,
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'X'}}]}}),
+      J3: mkIssue({id: 'J3', state: {name: 'TODO', type: 'unstarted'}, project: P3,
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'Z'}}]}}),
+      K3: mkIssue({id: 'K3', state: {name: 'TODO', type: 'unstarted'}, project: P3,
+        inverseRelations: {nodes: [{type: 'blocks', issue: {id: 'EXT_T'}}]}}),
+    },
+  };
+  const r3 = await run(s3, baseOpts());
+  assert('S3 F3 (canceled ancestor) is UNBLOCKED', r3.derived.effective.get('F3').blocked === false);
+  assert("S3 F3 in <available>", inAvailable(r3.xml, "F3"));
+  assert('S3 H3 (external VERIFIED ancestor) is UNBLOCKED', r3.derived.effective.get('H3').blocked === false);
+  assert("S3 H3 in <available>", inAvailable(r3.xml, "H3"));
+  assert('S3 J3 (external UNFETCHABLE ancestor) is effective-blocked',
+    r3.derived.effective.get('J3').blocked === true);
+  assert('S3 J3 is NOT permanently-blocked (unknown != known-failed)',
+    !r3.derived.anomalies.permanentlyBlocked.some((p) => p.ticket === 'J3'));
+  // Fix 6: the 2-hop external chain. EXT_T (direct external ancestor) is
+  // TERMINAL, but its own external ancestor EXT_NT is NON-TERMINAL, so K3 must
+  // stay effective-blocked through the terminal middle hop.
+  assert('S3 EXT_NT (transitive external grand-ancestor) was resolved as a node',
+    r3.combined.nodes.has('EXT_NT'));
+  assert('S3 EXT_T carries its derived blocked-by edge to EXT_NT',
+    (r3.combined.nodes.get('EXT_T').blockedBy || []).includes('EXT_NT'));
+  assert('S3 K3 is effective-BLOCKED via terminal external ancestor blocked by non-terminal grand-ancestor (Fix 6)',
+    r3.derived.effective.get('K3').blocked === true);
+  assert("S3 K3 NOT in <available>", !inAvailable(r3.xml, "K3"));
+
+  // =========================================================================
+  // Scenario 4 — awaiting-external => <human-blocked source="worker-discovered">
+  // (Fix 5) and NOT in <available>. Plus an explicit-signal (label) node.
+  // =========================================================================
+  const P4 = {id: 'P4', name: 'Park Proj'};
+  const s4 = {
+    projects: [P4],
+    milestones: [],
+    updates: [],
+    issues: {
+      W4: mkIssue({id: 'W4', state: {name: 'Blocked', type: 'backlog'}, project: P4}), // -> awaiting-external
+      L4: mkIssue({id: 'L4', state: {name: 'TODO', type: 'unstarted'}, project: P4,
+        labels: {nodes: [{name: 'human-interactive'}]}}),
+      Y4: mkIssue({id: 'Y4', state: {name: 'TODO', type: 'unstarted'}, project: P4}),
+    },
+  };
+  const r4 = await run(s4, baseOpts());
+  assert('S4 W4 (awaiting-external) in <human-blocked source="worker-discovered">',
+    r4.derived.anomalies.humanBlocked.some((h) => h.ticket === 'W4' && h.source === 'worker-discovered'));
+  assert('S4 W4 human-blocked emitted with worker-discovered',
+    /<item ticket="W4" source="worker-discovered"\/>/.test(r4.xml));
+  assert("S4 W4 NOT in <available>", !inAvailable(r4.xml, "W4"));
+  assert('S4 L4 (label) in <human-blocked source="explicit-signal">',
+    r4.derived.anomalies.humanBlocked.some((h) => h.ticket === 'L4' && h.source === 'explicit-signal'));
+  assert("S4 L4 NOT in <available>", !inAvailable(r4.xml, "L4"));
+  assert("S4 Y4 (plain unstarted) in <available>", inAvailable(r4.xml, "Y4"));
+
+  // =========================================================================
+  // Scenario 5 — no-milestone project => ONE implicit milestone (Fix 8); a
+  // memberless fetched milestone is still emitted (Fix 10).
+  // =========================================================================
+  const P5 = {id: 'P5', name: 'NoMs Proj'};
+  const s5 = {projects: [P5], milestones: [], updates: [],
+    issues: {N5: mkIssue({id: 'N5', state: {name: 'TODO', type: 'unstarted'}, project: P5})}};
+  const r5 = await run(s5, baseOpts());
+  assert('S5 no-milestone project emits ONE implicit milestone',
+    r5.derived.milestones.length === 1 && r5.derived.milestones[0].id.startsWith('__implicit__:'));
+  assert('S5 implicit milestone appears in <milestones>',
+    /<milestone id="__implicit__:P5"/.test(r5.xml));
+
+  const P6 = {id: 'P6', name: 'Empty Ms Proj'};
+  const s6 = {projects: [P6],
+    milestones: [{id: 'mEmpty', name: 'Empty', sortOrder: 1, project: 'P6'},
+                 {id: 'mFull', name: 'Full', sortOrder: 2, project: 'P6'}],
+    updates: [],
+    issues: {Q6: mkIssue({id: 'Q6', state: {name: 'TODO', type: 'unstarted'}, project: P6,
+      projectMilestone: {id: 'mFull', name: 'Full', sortOrder: 2}})}};
+  const r6 = await run(s6, baseOpts());
+  assert('S6 memberless milestone mEmpty is still emitted (Fix 10)',
+    /<milestone id="mEmpty"/.test(r6.xml));
+
+  // =========================================================================
+  // Scenario 7 — review-recorded via COMMENT on the project update (Fix 6) and
+  // milestone-binding/episode rules.
+  // =========================================================================
+  const m1 = {id: 'm1', name: 'M1'};
+  const m2 = {id: 'm2', name: 'M2'};
+  // (a) marker in a COMMENT bound to m1 records the review for m1 only.
+  const updCommentM1 = {
+    createdAt: iso('10:30:00'), body: 'Status snapshot for milestone m1',
+    comments: {nodes: [
+      {id: 'c1', createdAt: iso('11:00:00'),
+       body: '<!-- agent-reply:orch --> agent-milestone-review:m1 goal achieved'},
+    ]},
+  };
+  assert('S7 comment marker records review for m1', projectUpdateRecordsReview(updCommentM1, m1, ''));
+  assert('S7 comment marker for m1 does NOT leak to m2', !projectUpdateRecordsReview(updCommentM1, m2, ''));
+  // (b) generic comment naming no milestone records for none.
+  const generic = {createdAt: iso('10:30:00'), body: 'snapshot',
+    comments: {nodes: [{id: 'g', createdAt: iso('11:00:00'),
+      body: '<!-- agent-reply:orch --> agent-milestone-review done'}]}};
+  assert('S7 generic comment records review for NEITHER',
+    !projectUpdateRecordsReview(generic, m1, '') && !projectUpdateRecordsReview(generic, m2, ''));
+  // (c) episode scoping: a comment BEFORE the episode start is stale.
+  assert('S7 stale comment (before episode) does NOT record',
+    !projectUpdateRecordsReview(updCommentM1, m1, iso('12:00:00')));
+  // (d) back-compat: marker inline in the update body still records.
+  const bodyMarker = {createdAt: iso('11:00:00'),
+    body: '<!-- agent-reply:orch --> agent-milestone-review:m2 ok', comments: {nodes: []}};
+  assert('S7 inline body marker (back-compat) records for m2', projectUpdateRecordsReview(bodyMarker, m2, ''));
+
+  // =========================================================================
+  // Scenario 8 — DELTA with a real removal (nested tombstone) and a cursor-gap
+  // (corrupt baseline) forcing a full sync. Exercised by simulating the delta
+  // framing directly (offline) the way main() does.
+  // =========================================================================
+  // 8a: nested tombstone. Prior id-map had {DEL: P1, KEEP: P1}; current graph
+  // only has KEEP => DEL is a removal nested under P1.
+  const P8 = {id: 'P1', name: 'Proj One'};
+  const s8 = {projects: [P8], milestones: [], updates: [],
+    issues: {KEEP: mkIssue({id: 'KEEP', updatedAt: iso('13:00:00'),
+      state: {name: 'TODO', type: 'unstarted'}, project: P8})}};
+  const o8 = baseOpts();
+  o8.mode = 'delta';
+  o8.since = iso('12:00:00');
+  o8.changedIds = new Set(['KEEP']);
+  o8.removedByProject = new Map([['P1', ['DEL']]]);
+  const r8 = await run(s8, o8);
+  assert('S8a nested tombstone: DEL removed under <project id="P1">',
+    /<project id="P1"[\s\S]*?<ticket id="DEL" removed="true"\/>[\s\S]*?<\/project>/.test(r8.xml));
+  assert('S8a delta mode + since echoed in root',
+    /<project-graph mode="delta" cursor="[^"]+" since="2026-06-08T12:00:00Z">/.test(r8.xml));
+
+  // 8b: cursor-gap. readPriorIdMap on a corrupt file reports status 'corrupt';
+  // on a missing file reports 'missing'. main() forces a full sync in both.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-selftest-'));
+  const corruptPath = path.join(tmpDir, 'corrupt.json');
+  fs.writeFileSync(corruptPath, '{not json');
+  const missingPath = path.join(tmpDir, 'missing.json');
+  assert('S8b corrupt prior baseline reported as corrupt (cursor-gap)',
+    readPriorIdMap(corruptPath).status === 'corrupt');
+  assert('S8b missing prior baseline reported as missing (cursor-gap)',
+    readPriorIdMap(missingPath).status === 'missing');
+  // a valid baseline round-trips.
+  const okPath = path.join(tmpDir, 'ok.json');
+  writeIdMap(okPath, new Map([['a', 'P1'], ['b', 'P1']]));
+  const back = readPriorIdMap(okPath);
+  assert('S8b valid baseline reports ok and round-trips',
+    back.status === 'ok' && back.map.get('a') === 'P1' && back.map.get('b') === 'P1');
+  // Fix 9a: legacy formats are REJECTED (cursor gap), not accepted as 'ok'.
+  const legacyArrPath = path.join(tmpDir, 'legacy-arr.json');
+  fs.writeFileSync(legacyArrPath, JSON.stringify(['a', 'b']));
+  assert('S8b legacy ARRAY baseline rejected as corrupt (Fix 9a)',
+    readPriorIdMap(legacyArrPath).status === 'corrupt');
+  const legacyObjPath = path.join(tmpDir, 'legacy-obj.json');
+  fs.writeFileSync(legacyObjPath, JSON.stringify({a: 'P1', b: 'P1'}));
+  assert('S8b legacy bare id->project OBJECT baseline rejected as corrupt (Fix 9a)',
+    readPriorIdMap(legacyObjPath).status === 'corrupt');
+  const wrongVerPath = path.join(tmpDir, 'wrong-ver.json');
+  fs.writeFileSync(wrongVerPath, JSON.stringify({v: 999, ids: {a: 'P1'}}));
+  assert('S8b wrong-version envelope rejected as corrupt (Fix 9a)',
+    readPriorIdMap(wrongVerPath).status === 'corrupt');
+  const emptyPath = path.join(tmpDir, 'empty.json');
+  fs.writeFileSync(emptyPath, '');
+  assert('S8b empty file rejected as corrupt (Fix 9a)',
+    readPriorIdMap(emptyPath).status === 'corrupt');
+
+  // Fix 10: drive the REAL framing/emit core (frameAndEmit) on a delta run whose
+  // prior baseline is CORRUPT, and assert the emitted document is a FULL sync.
+  // A status-only check (above) never proves main() actually downgrades the mode.
+  const fmFetch = makeFakeFetch(makeFixtureFetch(s8));
+  const {views: fmViews} = await fetchAllProjects(fmFetch, 'k', s8.projects.map((p) => p.name));
+  const fmCombined = buildCombined(fmViews);
+  await resolveExternalAncestors(fmFetch, 'k', fmCombined);
+  const gapOpts = Object.assign(baseOpts(), {
+    mode: 'delta', since: iso('12:00:00'),
+    stateRoot: tmpDir, projects: ['__gap_corrupt__'],
+  });
+  // Force the cursor-gap path with an injected corrupt prior read, capture the
+  // document and whether the id-map was persisted, all offline.
+  let gapOut = '';
+  let gapPersisted = false;
+  const gapRes = await frameAndEmit(fmCombined, gapOpts, [], {
+    readPrior: () => ({status: 'corrupt', map: new Map()}),
+    writeOut: async (xml) => { gapOut = xml; },
+    persist: () => { gapPersisted = true; },
+    stderr: () => {},
+  });
+  assert('S8b cursor-gap forces EFFECTIVE mode=full (Fix 10)', gapRes.mode === 'full');
+  assert('S8b cursor-gap emits a FULL-sync document (Fix 10)',
+    /<project-graph mode="full"/.test(gapOut) && !/since="2026-06-08T12:00:00Z"/.test(gapOut));
+  assert('S8b cursor-gap run persisted the id-map after a SUCCESSFUL emit (Fix 10)',
+    gapPersisted === true && gapRes.persisted === true);
+
+  // Fix 9b: when emission FAILS, the id-map MUST NOT be persisted (no advancing
+  // producer state past the consumer). Drive frameAndEmit with a writeOut that
+  // rejects (simulated EPIPE) and assert persist was never called.
+  let failPersisted = false;
+  const failOpts = Object.assign(baseOpts(), {
+    mode: 'full', since: null, stateRoot: tmpDir, projects: ['__emit_fail__'],
+  });
+  const failRes = await frameAndEmit(fmCombined, failOpts, [], {
+    readPrior: () => ({status: 'missing', map: new Map()}),
+    writeOut: async () => { const e = new Error('broken pipe'); e.code = 'EPIPE'; throw e; },
+    persist: () => { failPersisted = true; },
+    stderr: () => {},
+  });
+  assert('S8b emit failure => id-map NOT persisted (Fix 9b)',
+    failPersisted === false && failRes.persisted === false && failRes.ok === false);
+  try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) { /* ignore */ }
+
+  // =========================================================================
+  // Scenario 9 — Fix 4: an unmapped native state NAME throws (no silent guess).
+  // =========================================================================
+  let threw = false;
+  try {
+    makeRoleResolver(null)('started', 'Weird Custom State');
+  } catch (_) { threw = true; }
+  assert('S9 unmapped started-group state NAME throws (Fix 4)', threw);
+  // single-role groups still resolve from type alone.
+  assert('S9 unstarted/TODO resolves to available',
+    makeRoleResolver(null)('unstarted', 'Whatever').role === 'available');
+
+  // =========================================================================
+  // Scenario 10 — Fix 12: duplicate project name is ambiguous => throws.
+  // =========================================================================
+  const dupFetch = makeFakeFetch((query) => {
+    if (/query Projects/.test(query)) {
+      return {projects: {nodes: [{id: 'D1', name: 'Dup'}, {id: 'D2', name: 'dup'}],
+        pageInfo: {hasNextPage: false, endCursor: null}}};
+    }
+    return {};
+  });
+  let dupThrew = false;
+  try { await resolveProjectId(dupFetch, 'k', 'Dup'); } catch (_) { dupThrew = true; }
+  assert('S10 ambiguous (case-insensitive duplicate) project name throws (Fix 12)', dupThrew);
+
+  let allOk = true;
+  for (const c of checks) {
+    if (!c.ok) allOk = false;
+    process.stdout.write(`${c.ok ? 'PASS' : 'FAIL'} ${c.name}\n`);
+  }
+  process.stdout.write(`\n${checks.filter((c) => c.ok).length}/${checks.length} checks passed\n`);
+  process.exitCode = allOk ? 0 : 1;
+}
+
+// ===========================================================================
+// main
+// ===========================================================================
+async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--self-test')) {
+    await runSelfTest();
+    return;
+  }
+
+  let opts;
+  try {
+    opts = parseArgs(argv);
+  } catch (e) {
+    process.stderr.write(`project-graph: ${e.message}\n${USAGE}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  if (opts.help) {
+    process.stdout.write(`${USAGE}\n`);
+    return;
+  }
+
+  const apiKey = process.env.LINEAR_API_KEY;
+  if (!apiKey) {
+    process.stderr.write(
+      'project-graph: $LINEAR_API_KEY is required (a read-only Linear personal API key)\n'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (typeof fetch !== 'function') {
+    process.stderr.write(
+      'project-graph: global fetch unavailable; requires Node >= 18\n'
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  opts.resolveRole = makeRoleResolver(opts.teamMap);
+
+  // Fetch every selected project. Per §2.6 tick isolation (Fix 11) a single
+  // project's fetch failure does NOT abort the refresh — fetchAllProjects logs
+  // it and continues. We only bail if EVERY selected project failed (nothing to
+  // emit), so the orchestrator falls back to its prior cache.
+  let views, failures;
+  try {
+    ({views, failures} = await fetchAllProjects(fetch, apiKey, opts.projects));
+  } catch (e) {
+    process.stderr.write(`project-graph: ERROR fetching from Linear: ${e.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (views.length === 0) {
+    process.stderr.write(
+      `project-graph: ERROR all ${opts.projects.length} selected project(s) ` +
+        `failed to refresh; emitting nothing\n`
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const combined = buildCombined(views);
+
+  // Fix 7: resolve the real state of referenced-but-unselected ancestor issues
+  // so a verified/canceled external ancestor unblocks its dependent. Failures
+  // here are isolated per-id inside the resolver.
+  try {
+    await resolveExternalAncestors(fetch, apiKey, combined);
+  } catch (e) {
+    process.stderr.write(
+      `project-graph: WARNING: external-ancestor resolution failed: ${e.message}; ` +
+        `unresolved ancestors will be treated conservatively\n`
+    );
+  }
+
+  const result = await frameAndEmit(combined, opts, failures);
+  if (!result.ok) process.exitCode = result.exitCode || 1;
+}
+
+// Delta-framing + emit + persist core, extracted from main() so the self-test
+// can drive the REAL cursor-gap / emit-ordering path offline (Fix 10). Pure of
+// network and argv: it takes the already-built `combined` graph, the resolved
+// `opts`, and the per-tick `failures` list, and uses injectable hooks so a test
+// can observe the document and whether persistence happened:
+//   deps.readPrior(idsPath)   -> {status, map}      (default: readPriorIdMap)
+//   deps.writeOut(xml)        -> Promise (rejects on write failure)
+//                                (default: writeStdoutAndFlush)
+//   deps.persist(idsPath,map) -> void               (default: writeIdMap)
+//   deps.stderr(s)            -> void               (default: process.stderr)
+// Returns {ok, exitCode, mode, xml, persisted}. `mode` is the EFFECTIVE mode
+// after any cursor-gap downgrade; `persisted` is true iff the id-map was written
+// (i.e. emission succeeded).
+async function frameAndEmit(combined, opts, failures, deps) {
+  deps = deps || {};
+  const readPrior = deps.readPrior || readPriorIdMap;
+  const writeOut = deps.writeOut || writeStdoutAndFlush;
+  const persist = deps.persist || writeIdMap;
+  const stderr = deps.stderr || ((s) => process.stderr.write(s));
+
+  // Cursor = max updatedAt across in-project nodes.
+  const cursor = maxUpdatedAt(combined.nodes);
+
+  // Fix 14: read the prior baseline FIRST and decide the effective mode. A delta
+  // with a missing/corrupt baseline (or a project that failed to refresh this
+  // tick, which would falsely tombstone its still-live tickets) is a cursor gap:
+  // we force a FULL sync rather than emit a delta that silently drops removals.
+  const idsPath = idsCachePath(opts.stateRoot, opts.projects);
+  let priorIds = {status: 'missing', map: new Map()};
+  if (opts.mode === 'delta') {
+    priorIds = readPrior(idsPath);
+    if (priorIds.status !== 'ok') {
+      stderr(
+        `project-graph: cursor-gap: prior delta baseline is ${priorIds.status} ` +
+          `at ${idsPath}; forcing a FULL sync (since="-")\n`
+      );
+      opts.mode = 'full';
+      opts.since = null;
+    } else if ((failures || []).length > 0) {
+      stderr(
+        `project-graph: cursor-gap: ${failures.length} project(s) failed this ` +
+          `tick; forcing a FULL sync to avoid mis-tombstoning their live ` +
+          `tickets\n`
+      );
+      opts.mode = 'full';
+      opts.since = null;
+    }
+  }
+
+  // Delta change-set: updatedAt >= since (LOSSLESS same-second boundary,
+  // CURSOR-BOUNDARY fix). Re-emitting a same-second node is harmless; dropping
+  // it would desync the cache.
+  opts.changedIds = new Set();
+  if (opts.mode === 'delta') {
+    for (const [id, n] of combined.nodes) {
+      if (!n.external && n.updatedAt && String(n.updatedAt) >= String(opts.since)) {
+        opts.changedIds.add(id);
+      }
+    }
+  }
+
+  // Tombstones: compare current id->project against the persisted prior map.
+  // removedByProject: formerProjectId -> [ids] so tombstones nest under their
+  // former <project> (TOMBSTONE PLACEMENT fix).
+  const currentIdToProject = new Map();
+  for (const proj of combined.projects) {
+    for (const id of proj.nodeIds) currentIdToProject.set(id, proj.id);
+  }
+  opts.removedByProject = new Map();
+  if (opts.mode === 'delta') {
+    for (const [id, formerProj] of priorIds.map) {
+      if (!currentIdToProject.has(id)) {
+        const key = formerProj || '';
+        if (!opts.removedByProject.has(key)) opts.removedByProject.set(key, []);
+        opts.removedByProject.get(key).push(id);
+      }
+    }
+  }
+
+  let derived;
+  try {
+    derived = computeSections(combined, opts);
+  } catch (e) {
+    stderr(`project-graph: ERROR computing derived sections: ${e.message}\n`);
+    return {ok: false, exitCode: 1, mode: opts.mode, persisted: false};
+  }
+  derived.cursor = cursor;
+
+  // Fix 13 / Fix 9b: emit the XML FIRST, then persist the new id-map — and only
+  // persist if the document was FULLY and SUCCESSFULLY written to stdout.
+  // `process.stdout.write` is asynchronous for a pipe/socket: the boolean it
+  // returns reports back-pressure, NOT durability, and the write can still fail
+  // (e.g. the consumer closed the pipe => EPIPE) AFTER write() returns. If we
+  // persisted unconditionally, a failed/short emission would advance producer
+  // state past the consumer: the next delta would compute removals against the
+  // NEW baseline and silently lose the tombstones for ids dropped this tick.
+  // writeOut awaits the flush and REJECTS on error, so a write failure SKIPS
+  // persistence and the baseline stays where the consumer last saw it.
+  const xml = emit(combined, derived, opts);
+  try {
+    await writeOut(xml);
+  } catch (e) {
+    stderr(
+      `project-graph: ERROR: stdout write failed (${e && e.code ? e.code : ''} ` +
+        `${e && e.message ? e.message : e}); NOT persisting id-map so the next ` +
+        `delta re-derives against the unchanged baseline\n`
+    );
+    return {ok: false, exitCode: 1, mode: opts.mode, xml, persisted: false};
+  }
+  persist(idsPath, currentIdToProject);
+  return {ok: true, exitCode: 0, mode: opts.mode, xml, persisted: true};
+}
+
+// Write `s` to stdout and resolve only once it is durably handed off (the write
+// callback fired with no error). Rejects on a stream error (EPIPE etc.) so the
+// caller can decline to advance persisted producer state. We resolve from the
+// per-write callback rather than waiting for 'finish'/'close' (which would
+// require ending the stream) — the callback signals this chunk was accepted by
+// the OS, which is the durability guarantee we need before committing state.
+function writeStdoutAndFlush(s) {
+  return new Promise((resolve, reject) => {
+    const stream = process.stdout;
+    let settled = false;
+    const onError = (err) => {
+      if (settled) return;
+      settled = true;
+      stream.removeListener('error', onError);
+      reject(err);
+    };
+    stream.on('error', onError);
+    stream.write(s, (err) => {
+      if (settled) return;
+      settled = true;
+      stream.removeListener('error', onError);
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+main().catch((e) => {
+  process.stderr.write(`project-graph: FATAL ${e && e.stack ? e.stack : e}\n`);
+  process.exitCode = 1;
+});

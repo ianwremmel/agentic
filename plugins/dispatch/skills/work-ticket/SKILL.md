@@ -311,6 +311,11 @@ Read from the plugin's `userConfig` (env: `CLAUDE_PLUGIN_OPTION_*`), shared with
 | `team_mode`         | Forwarded to `deliver`; selects its private/public review shape. Default `false`.                                |
 | `copilot_available` | Forwarded to `deliver`. Default `true`.                                                                          |
 
+The plugin's `userConfig` schema cannot constrain a string to an allowed set, so
+the coordinator MUST validate `tracker` itself at startup: if its value is not a
+tracker this skill implements (today only `linear`), surface an `ERROR` and stop
+rather than proceeding — a clear, early failure instead of a deep runtime one.
+
 ## References
 
 [`reference.md`](./reference.md) bundles the lookup tables this skill leans on —

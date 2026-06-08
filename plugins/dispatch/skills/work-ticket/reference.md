@@ -71,6 +71,23 @@ the PR) go through the **forge** (GitHub) under §2.1's wire format, the same pa
 (per §2.3) dependency cycles MUST be refused at write time and surfaced at read
 time. The coordinator MUST NOT create a cross-tracker dependency.
 
+### Primary venue when a ticket has several PRs
+
+§2.3's "PR if one exists, else ticket" is ambiguous for a multi-PR ticket, so the
+coordinator resolves it **deterministically**, first match wins:
+
+1. **The PR this event is about** — the PR whose §2.4 progress triggered the
+   transition, or the PR in whose delivery a blocker was discovered. State-change
+   comments and human alerts attach to that PR.
+2. **Else the most recently updated open PR** of the ticket — when the event is not
+   tied to one specific PR but open PRs exist.
+3. **Else the ticket** — when no open PR exists, or for a ticket-level transition
+   not attributable to any single PR (the claim `available → in-progress`, the
+   aggregate `delivered` once all PRs land, and `verified`).
+
+Independent of this rule, the **DoD / verification artifact always lives on the
+ticket** (§Definition of done), never on a PR.
+
 ## §2.1 communication recap
 
 Mode and wire format are shared with `deliver` (see

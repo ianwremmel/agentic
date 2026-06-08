@@ -2,8 +2,10 @@
 
 The project-graph wire format, slot ledger, and dispatch bookkeeping
 `orchestrate` relies on. With [`SKILL.md`](./SKILL.md), this is the complete
-authority for the skill. It implements the Orchestration Protocol (§2.6) on top
-of the §2.5 coordinator, the §2.4 delivery worker, and the §2.3 ticket workflow.
+**operating** authority for the skill — enough to run it without re-reading the
+spec — but where these files and the spec differ, the normative spec governs. It
+implements the Orchestration Protocol (§2.6) on top of the §2.5 coordinator, the
+§2.4 delivery worker, and the §2.3 ticket workflow.
 
 The orchestrator reads project state **only** from the project-graph document
 (§Project-graph document) and the on-disk bookkeeping below. It never reads a

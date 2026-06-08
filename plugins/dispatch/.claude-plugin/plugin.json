@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -42,6 +42,12 @@
       "title": "Operator GitHub login",
       "description": "GitHub login of the operator directing this agent. Required — the deliver skill and pr-status script always assume it is set. Targets the operator with PR review requests (Mode A) and classifies <review> elements in pr-status XML; the agent never falls back to the ticket assigner. In Mode B (shared credentials) set this to the shared/authenticated account.",
       "required": true
+    },
+    "tracker": {
+      "type": "string",
+      "title": "Work-item tracker",
+      "description": "The tracker the `work-ticket` coordinator reads and writes work items on. The skill body speaks §2.3 roles; the tracker-specific mapping lives in the skill's reference.md. Only `linear` is implemented today; the seam is the same one a §2.6 producer reuses.",
+      "default": "linear"
     }
   }
 }

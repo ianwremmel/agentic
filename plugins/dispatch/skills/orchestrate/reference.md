@@ -46,11 +46,11 @@ re-derive blocking, ranking, or cycle detection itself.
 
 `<project-graph>` root attributes:
 
-| Attribute | Type                | Requirement                       | Meaning                                                                       |
-| --------- | ------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
-| `mode`    | `full\|delta`       | REQUIRED                          | Whether this document is a complete sync or a `--since` delta                 |
-| `cursor`  | string              | REQUIRED                          | Opaque new cursor to persist and pass back on the next delta call             |
-| `since`   | string              | REQUIRED on `delta`; `-` on `full` | The prior cursor this delta was computed against; `-` for a full sync         |
+| Attribute | Type          | Requirement                        | Meaning                                                               |
+| --------- | ------------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `mode`    | `full\|delta` | REQUIRED                           | Whether this document is a complete sync or a `--since` delta         |
+| `cursor`  | string        | REQUIRED                           | Opaque new cursor to persist and pass back on the next delta call     |
+| `since`   | string        | REQUIRED on `delta`; `-` on `full` | The prior cursor this delta was computed against; `-` for a full sync |
 
 All selected projects MUST share one tracker (§2.6); cross-tracker orchestration
 is out of scope. `tracker` is informational — the orchestrator never branches on
@@ -63,18 +63,18 @@ node facts the orchestrator may act on. The orchestrator MUST NOT reason over
 ticket *content*: `labels` is consumed **only** as the source of the configured
 `human-interactive` signal, never to infer anything about the work.
 
-| Attribute / child    | Type                              | Requirement | Meaning                                                                                                  |
-| -------------------- | --------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------- |
-| `id`                 | string                            | REQUIRED    | Tracker-stable ticket identifier                                                                         |
-| `url`                | string                            | REQUIRED    | Full ticket URL (used verbatim in §2.3 operational log entries)                                          |
-| `role`               | §2.3 role token                   | REQUIRED    | Current §2.3 workflow role (`backlog`, `available`, `in-progress`, `in-review`, `finished`, `delivered`, `verified`, `canceled`, `awaiting-external`, `paused`) |
-| `group`              | string                            | REQUIRED    | §2.3 dependency group the ticket belongs to                                                              |
-| `milestone`          | string                            | REQUIRED if the ticket is in a milestone; else absent | Milestone membership (matches a `<milestone id>` below)                |
-| `effective-blocked`  | `true\|false`                     | REQUIRED    | §2.3 effective-blocked status (producer-computed; a `canceled` ancestor does NOT block — see below)      |
-| `human-interactive`  | `true\|false`                     | REQUIRED    | `true` iff a configured tracker signal (mapped from `labels`) marks the node human-interactive (§2.6)    |
-| `target-kind`        | `pr\|verification\|human-only`    | REQUIRED    | What working the ticket produces: PR(s), a no-PR verification, or human-only work that is never dispatched |
-| `<labels>`           | `<label>` children                | OPTIONAL    | Raw tracker labels; consumed only to derive `human-interactive`                                          |
-| `branch-seed`        | string                            | OPTIONAL    | Non-authoritative dispatch hint — a branch-name seed passed through to the coordinator                   |
+| Attribute / child   | Type                           | Requirement                                           | Meaning                                                                                                                                                         |
+| ------------------- | ------------------------------ | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                | string                         | REQUIRED                                              | Tracker-stable ticket identifier                                                                                                                                |
+| `url`               | string                         | REQUIRED                                              | Full ticket URL (used verbatim in §2.3 operational log entries)                                                                                                 |
+| `role`              | §2.3 role token                | REQUIRED                                              | Current §2.3 workflow role (`backlog`, `available`, `in-progress`, `in-review`, `finished`, `delivered`, `verified`, `canceled`, `awaiting-external`, `paused`) |
+| `group`             | string                         | REQUIRED                                              | §2.3 dependency group the ticket belongs to                                                                                                                     |
+| `milestone`         | string                         | REQUIRED if the ticket is in a milestone; else absent | Milestone membership (matches a `<milestone id>` below)                                                                                                         |
+| `effective-blocked` | `true\|false`                  | REQUIRED                                              | §2.3 effective-blocked status (producer-computed; a `canceled` ancestor does NOT block — see below)                                                             |
+| `human-interactive` | `true\|false`                  | REQUIRED                                              | `true` iff a configured tracker signal (mapped from `labels`) marks the node human-interactive (§2.6)                                                           |
+| `target-kind`       | `pr\|verification\|human-only` | REQUIRED                                              | What working the ticket produces: PR(s), a no-PR verification, or human-only work that is never dispatched                                                      |
+| `<labels>`          | `<label>` children             | OPTIONAL                                              | Raw tracker labels; consumed only to derive `human-interactive`                                                                                                 |
+| `branch-seed`       | string                         | OPTIONAL                                              | Non-authoritative dispatch hint — a branch-name seed passed through to the coordinator                                                                          |
 
 A `canceled` ancestor **unblocks** its dependents (§2.3 effective-blocking):
 the producer MUST set such a dependent's `effective-blocked="false"` and place it
@@ -136,15 +136,15 @@ actually schedules from.
 
 Section semantics (§2.6 derived-sections table):
 
-| Section                 | Element            | Key fields                                                            | Used for                                                              |
-| ----------------------- | ------------------ | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `<available>`           | `<item>`           | `ticket`, `rank` (ascending = highest priority), `target-kind`       | Tick step 8 work fill — the ranked unblocked frontier                |
-| `<blocked>`             | `<item>`           | `ticket`, `reason`, `blocked-by` / `milestone`                       | Surfacing only; expected to unblock as ancestors/gates resolve       |
-| `<human-blocked>`       | `<item>`           | `ticket`, `source` (`explicit-signal` \| `worker-discovered`)        | Tick step 6 — park + single alert; never dispatched                  |
-| `<permanently-blocked>` | `<item>`           | `ticket`, `blocked-by`, `cause`                                      | Completion check (counts toward terminal); surfaced, never worked    |
-| `<milestones>`          | `<milestone>`      | `id`, `project`, `ready-for-review`, `review-recorded`              | Tick step 7 milestone-review gate                                    |
-| `<counts>`              | `<project>` / `<milestone>` | per-scope tallies + `terminal` rollup                        | Tick step 10 completion / termination                                |
-| `<anomalies>`           | `<cycle>` / `<reverse-dependency>` | members / endpoints                                  | MUST surface; MUST NOT silently work around (a cycle is illegal §2.3) |
+| Section                 | Element                            | Key fields                                                     | Used for                                                              |
+| ----------------------- | ---------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `<available>`           | `<item>`                           | `ticket`, `rank` (ascending = highest priority), `target-kind` | Tick step 8 work fill — the ranked unblocked frontier                 |
+| `<blocked>`             | `<item>`                           | `ticket`, `reason`, `blocked-by` / `milestone`                 | Surfacing only; expected to unblock as ancestors/gates resolve        |
+| `<human-blocked>`       | `<item>`                           | `ticket`, `source` (`explicit-signal` \| `worker-discovered`)  | Tick step 6 — park + single alert; never dispatched                   |
+| `<permanently-blocked>` | `<item>`                           | `ticket`, `blocked-by`, `cause`                                | Completion check (counts toward terminal); surfaced, never worked     |
+| `<milestones>`          | `<milestone>`                      | `id`, `project`, `ready-for-review`, `review-recorded`         | Tick step 7 milestone-review gate                                     |
+| `<counts>`              | `<project>` / `<milestone>`        | per-scope tallies + `terminal` rollup                          | Tick step 10 completion / termination                                 |
+| `<anomalies>`           | `<cycle>` / `<reverse-dependency>` | members / endpoints                                            | MUST surface; MUST NOT silently work around (a cycle is illegal §2.3) |
 
 **Pinned field semantics** (a producer MUST emit these exactly; the orchestrator
 reads them and MUST NOT re-derive):
@@ -323,14 +323,14 @@ When dispatching, the orchestrator passes only the data the unit needs to act; i
 Dispatched for every `pr` and `verification` ticket, and for each injected bare PR.
 Inputs:
 
-| Input                    | When                                  | Meaning                                                            |
-| ------------------------ | ------------------------------------- | ----------------------------------------------------------------- |
-| `ticket_id`, `ticket_url` | ticket-backed                        | The §2.3 ticket the coordinator owns end-to-end                   |
-| `repo`, `pr_number`, `pr_url`, `branch` | injected bare PR (no ticket) | The PR's forge identity, in place of a ticket id/url              |
-| `target-kind`            | always                                | `pr` \| `verification` — the coordinator branches on this         |
-| `branch-seed`            | optional                              | Non-authoritative branch-name hint passed through from the node   |
-| identity / mode context  | always                                | §2.1 Mode A / Mode B context (identity attribution + human routing) |
-| §2.3 hook responsibilities | always                              | The role transitions and DoD/verification artifacts the coordinator owns |
+| Input                                   | When                         | Meaning                                                                  |
+| --------------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
+| `ticket_id`, `ticket_url`               | ticket-backed                | The §2.3 ticket the coordinator owns end-to-end                          |
+| `repo`, `pr_number`, `pr_url`, `branch` | injected bare PR (no ticket) | The PR's forge identity, in place of a ticket id/url                     |
+| `target-kind`                           | always                       | `pr` \| `verification` — the coordinator branches on this                |
+| `branch-seed`                           | optional                     | Non-authoritative branch-name hint passed through from the node          |
+| identity / mode context                 | always                       | §2.1 Mode A / Mode B context (identity attribution + human routing)      |
+| §2.3 hook responsibilities              | always                       | The role transitions and DoD/verification artifacts the coordinator owns |
 
 The coordinator owns **all** of its ticket's §2.3 transitions and
 verification/DoD artifacts; the orchestrator performs no transitions itself. On a
@@ -352,11 +352,11 @@ routing). The orchestrator MUST NOT perform the review itself.
 Every dispatched unit maintains a heartbeated **lock**; staleness is judged by
 lock age (tick step 3 clears stale locks and presumes the unit dead).
 
-| Unit                       | Lock key       | Form                          |
-| -------------------------- | -------------- | ----------------------------- |
-| ticket coordinator (ticket) | ticket-keyed   | `<ticket-id>`                 |
-| ticket coordinator (bare PR) | PR-keyed     | `<repo>#<pr_number>`          |
-| milestone-review agent     | milestone-keyed | `<project>/<milestone-id>`    |
+| Unit                         | Lock key        | Form                       |
+| ---------------------------- | --------------- | -------------------------- |
+| ticket coordinator (ticket)  | ticket-keyed    | `<ticket-id>`              |
+| ticket coordinator (bare PR) | PR-keyed        | `<repo>#<pr_number>`       |
+| milestone-review agent       | milestone-keyed | `<project>/<milestone-id>` |
 
 A coordinator's §2.4 delivery workers hold their own **compute-slot** entries
 (§Slot ledger), **not** separate orchestrator locks.
@@ -367,16 +367,16 @@ Each dispatched unit writes one **outcome artifact** as its final action; the
 orchestrator reads it to reconcile (tick step 4 for coordinators, step 5 for
 review agents). The §2.5 coordinator outcomes, handled exhaustively:
 
-| Outcome         | Orchestrator reconciliation (tick step 4)                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `verified`      | cleanup + drop (terminal; coordinator owns the §2.3 `verified` transition + DoD artifact)                                 |
-| `canceled`      | cleanup + drop (terminal; a `canceled` ancestor unblocks its dependents on the next fetch)                                |
-| `delivered`     | cleanup + drop; a **separate** verification work item takes the ticket to `verified` (for a bare PR, `delivered` is done) |
-| `human-blocked` | cleanup + drop; the parked ticket is then honored at tick step 6 (park + single alert)                                    |
-| `decomposed`    | cleanup; record the parent as a **deferred-finalization** entry — finalize once every subtask is `verified`/`canceled`   |
-| `failed` (verification, `retryable=true`)  | **re-dispatch** on a later tick                                                                 |
-| `failed` (verification, `retryable=false`) | **park** (the verification gate stays blocked); surface to the operator; no re-dispatch        |
-| `failed` (other)                           | cleanup + drop; surface to the operator; no auto-re-dispatch                                    |
+| Outcome                                    | Orchestrator reconciliation (tick step 4)                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `verified`                                 | cleanup + drop (terminal; coordinator owns the §2.3 `verified` transition + DoD artifact)                                 |
+| `canceled`                                 | cleanup + drop (terminal; a `canceled` ancestor unblocks its dependents on the next fetch)                                |
+| `delivered`                                | cleanup + drop; a **separate** verification work item takes the ticket to `verified` (for a bare PR, `delivered` is done) |
+| `human-blocked`                            | cleanup + drop; the parked ticket is then honored at tick step 6 (park + single alert)                                    |
+| `decomposed`                               | cleanup; record the parent as a **deferred-finalization** entry — finalize once every subtask is `verified`/`canceled`    |
+| `failed` (verification, `retryable=true`)  | **re-dispatch** on a later tick                                                                                           |
+| `failed` (verification, `retryable=false`) | **park** (the verification gate stays blocked); surface to the operator; no re-dispatch                                   |
+| `failed` (other)                           | cleanup + drop; surface to the operator; no auto-re-dispatch                                                              |
 
 When **no outcome artifact** is present, reconcile by liveness: if the work item
 is terminal (ticket at a terminal §2.3 role, or a bare PR merged/closed) →
@@ -400,11 +400,11 @@ Milestone review frequently needs human judgment. The venue is fixed by §2.3: t
 milestone's **review artifact** is where a milestone review's outcome is recorded
 and where any human input for it is solicited. By tracker:
 
-| Tracker | Review artifact (routing venue)        |
-| ------- | -------------------------------------- |
-| Linear  | the milestone's **project update**     |
-| GitHub  | the **Milestone closure comment**      |
-| Asana   | the **milestone-task comment**         |
+| Tracker | Review artifact (routing venue)    |
+| ------- | ---------------------------------- |
+| Linear  | the milestone's **project update** |
+| GitHub  | the **Milestone closure comment**  |
+| Asana   | the **milestone-task comment**     |
 
 The milestone-review agent MUST solicit any human input it needs as a **comment on
 that same review artifact**, tagging a human — **never** through the session — and

@@ -1001,11 +1001,13 @@ function computeEffectiveBlocking(nodes, resolveRole) {
 // ===========================================================================
 // cause ∈ { ancestor-failed-parked, ancestor-permanently-blocked }.
 // A perm-root is an ancestor that terminated WITHOUT verified and will not
-// progress: a --failed id, or an unresolved (deleted/inaccessible) ancestor.
-// A canceled ancestor is NEVER a perm-root: it unblocks its dependents (§2.3).
+// progress — i.e. a --failed id. A canceled or verified ancestor is NEVER a
+// perm-root (it unblocks its dependents, §2.3). An UNRESOLVED / unknown ancestor
+// (deleted, inaccessible, or unfetchable) is ALSO not a perm-root (Fix 7): unknown
+// is not known-failed, so it blocks effectively but never *permanently*.
 // The cascade: a node is permanently-blocked if any ancestor is a perm-root
 // (cause=ancestor-failed-parked when that root is a --failed id, else
-// ancestor-permanently-blocked for the transitive/unresolved cascade).
+// ancestor-permanently-blocked for the transitive cascade through perm-blocked nodes).
 function computePermanentlyBlocked(nodes, roleOf, failedIds) {
   function isPermRoot(id) {
     if (failedIds.has(id)) return true;
@@ -1551,14 +1553,12 @@ function emit(combined, derived, opts) {
   // `<project id=... removed="true"/>`; its tickets vanish with it). We surface
   // any orphan-project tombstones so the orchestrator drops them.
   if (opts.mode === 'delta') {
-    for (const [projId, ids] of opts.removedByProject) {
+    for (const [projId] of opts.removedByProject) {
       const known = projects.some((p) => p.id === projId);
       if (known) continue;
-      out.push(`  <project id="${esc(projId)}" removed="true">`);
-      for (const id of ids) {
-        out.push(`    <ticket id="${esc(id)}" removed="true"/>`);
-      }
-      out.push('  </project>');
+      // Self-closing per reference.md: a removed project drops its whole subtree,
+      // so its tickets vanish with it — no nested ticket tombstones needed.
+      out.push(`  <project id="${esc(projId)}" removed="true"/>`);
     }
   }
 
@@ -1906,7 +1906,14 @@ function maxUpdatedAt(nodes) {
 // nested under its former <project> (BUG-FIX TOMBSTONE PLACEMENT).
 function selectionKey(projectNames) {
   const h = crypto.createHash('sha256');
-  h.update(projectNames.slice().sort().join(' '));
+  // Normalize case + whitespace so the cache is STABLE for the same logical
+  // selection (project resolution is case-insensitive); otherwise two invocations
+  // differing only in case/whitespace fork the baseline and force needless full
+  // syncs / strand tombstones. Newline-join so name boundaries can't collide.
+  const norm = projectNames
+    .map((n) => String(n).trim().replace(/\s+/g, ' ').toLowerCase())
+    .sort();
+  h.update(norm.join('\n'));
   return h.digest('hex').slice(0, 16);
 }
 function idsCachePath(stateRoot, projectNames) {

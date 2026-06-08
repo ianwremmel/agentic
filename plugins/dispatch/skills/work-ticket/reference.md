@@ -1,202 +1,134 @@
-# work-ticket — protocol reference
+# work-ticket — reference
 
-The lookup tables and recaps [`SKILL.md`](./SKILL.md) leans on. Bundled so the
-skill is self-contained once installed. Where this file and the spec differ, the
-spec is authoritative: §2.1 Communication, §2.3 Ticket Workflow, §2.4 Delivery,
-§2.5 Ticket Coordination, §2.6 Orchestration.
+Lookup tables for [`SKILL.md`](./SKILL.md), bundled so the skill is self-contained.
+The spec is authoritative where they differ: §2.1 Communication, §2.3 Ticket
+Workflow, §2.4 Delivery, §2.5 Ticket Coordination, §2.6 Orchestration.
 
 ## Roles
 
-- **Coordinator** — this skill. Owns exactly one tracked work item end-to-end.
-- **Operator** — the one human directing this run; the only human with stop
-  authority. Identity is `operator_login`.
-- **Delivery worker** — a [`deliver`](../deliver/SKILL.md) (§2.4) instance the
-  coordinator drives, one per PR. Holds the compute slot while it builds; the
-  coordinator does not read its PR status except through §2.4/§2.2.
-- **Orchestrator** — the §2.6 agent that dispatches coordinators. Absent in
-  standalone runs. Owns the graph, ranking, the slot ledger, and dispatch.
+- **Coordinator** — this skill; owns one work item end-to-end.
+- **Operator** — the human directing this run; identity is `operator_login`.
+- **Delivery worker** — a [`deliver`](../deliver/SKILL.md) (§2.4) instance, one per
+  PR; holds the compute slot while building. Read its PR status only via §2.4/§2.2.
+- **Orchestrator** — the §2.6 agent that dispatches coordinators; owns the graph,
+  ranking, the slot ledger, and dispatch. Absent standalone.
 
-## Linear ↔ §2.3 role mapping
+## Linear ↔ §2.3 roles
 
-The skill body speaks **§2.3 roles**; this is the only place Linear substates
-appear. Resolution order is **team override → this default mapping → error** (never
-guess an unmapped state — surface an error). This is the same mapping a future
-§2.6 Linear producer reuses.
+The body speaks §2.3 roles; this is the only place tracker substates appear.
+Resolution order: **team override → default below → error** (never guess). The same
+mapping a §2.6 Linear producer reuses. Adding a tracker = adding its mapping here.
 
-| Linear substate (group) | §2.3 group  | §2.3 role     |
-| ----------------------- | ----------- | ------------- |
-| Backlog                 | `backlog`   | `backlog`     |
-| TODO                    | `unstarted` | `available`   |
-| In Progress             | `started`   | `in-progress` |
-| In Review               | `started`   | `in-review`   |
-| Finished                | `started`   | `finished`    |
-| Delivered               | `started`   | `delivered`   |
-| Done                    | `completed` | `verified`    |
-| Canceled                | `canceled`  | `canceled`    |
+| Linear substate | §2.3 group  | §2.3 role     |
+| --------------- | ----------- | ------------- |
+| Backlog         | `backlog`   | `backlog`     |
+| TODO            | `unstarted` | `available`   |
+| In Progress     | `started`   | `in-progress` |
+| In Review       | `started`   | `in-review`   |
+| Finished        | `started`   | `finished`    |
+| Delivered       | `started`   | `delivered`   |
+| Done            | `completed` | `verified`    |
+| Canceled        | `canceled`  | `canceled`    |
 
-Linear's top-level groups (`Backlog`, `Unstarted`, `Started`, `Completed`,
-`Canceled`) cannot be customized and map directly to the protocol groups.
-`paused` and `awaiting-external` are **not** in the default Linear set: a team that
-needs them MUST add custom substates in Linear's **Backlog** group and map them in
-a team override. A park MUST target a substate that maps to `awaiting-external` (or
-`paused`); if the team has mapped **neither**, the coordinator MUST surface an
-`ERROR` rather than park onto an arbitrary Backlog substate — moving to the bare
-`backlog` role is **not** a §2.3 park transition and is non-conforming.
+Linear's top-level groups map 1:1 to the protocol groups. `paused` and
+`awaiting-external` aren't in the default set — a team needing them adds Backlog
+substates and maps them in a team override. A park MUST land on a substate mapping
+to `awaiting-external`/`paused`; if neither is mapped, `ERROR` (bare `backlog` is
+not a park).
 
-## Tracker operations
+## Tracker operations (Linear)
 
-Each §2.3 operation the coordinator performs, and its Linear MCP realization.
-Reads/writes follow §2.1 mode rules; the access mechanism (here, MCP) is orthogonal
-to the §2.1 mode.
+Reads/writes follow §2.1 mode rules; MCP access is orthogonal to the §2.1 mode.
 
-| §2.3 operation                     | Linear MCP realization                                                                                                                                                                               |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fetch own brief                    | `get_issue(id, includeRelations=true)` → description, acceptance criteria, links, one-edge relations. `list_comments(issueId)` if criteria live in comments.                                         |
-| Resolve current role               | `get_issue(id)` → `state` (name + type); `list_issue_statuses(team)` to enumerate the team's states; map via §Role mapping.                                                                          |
-| Resolve own identity               | `get_user("me")`.                                                                                                                                                                                    |
-| Read assignee (claim guard)        | `get_issue(id)` → `assignee`. If a `started`-group role is assigned to another identity, do not proceed.                                                                                             |
-| Assign to self                     | `save_issue(id, assignee="me")`.                                                                                                                                                                     |
-| Transition role                    | `save_issue(id, state=<target Linear substate>)`, choosing the substate that maps to the target §2.3 role.                                                                                           |
-| DoD / progress / ticket↔PR comment | `save_comment(issueId, body=<§2.1-wrapped body>)` — a top-level thread on the issue. The DoD artifact and the ticket↔PR mapping always live on the **ticket**.                                       |
-| State-change comment               | Post to the **primary venue** (§2.3): the **PR** if one exists (on the forge, via `deliver`'s wire format — *not* Linear MCP), else the ticket via `save_comment(issueId, …)`.                       |
-| File a subtask                     | `save_issue(title, team, parentId=<parent id>)` — Linear native sub-issue.                                                                                                                           |
-| `blocks` edge (subtask→parent)     | `save_issue(id=<subtask>, blocks=[<parent id>])` — append-only.                                                                                                                                      |
-| `blocks` edge (blocker→current)    | `save_issue(id=<blocker>, blocks=[<current id>])`.                                                                                                                                                   |
-| Read one-edge neighbors            | `get_issue(id, includeRelations=true)` → `blockedBy` (predecessors) and `blocks` (successors). One edge only.                                                                                        |
-| Scan for an unresolved human alert | On the **ticket** venue, `list_comments(issueId)` and look for an unresolved comment bearing the alert sentinel; on the **PR** venue, scan the forge per `deliver`. Enforces "≤1 outstanding alert". |
+| operation                                   | Linear MCP                                                                                                        |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| fetch brief                                 | `get_issue(id, includeRelations=true)`; `list_comments(issueId)` if criteria live in comments                     |
+| resolve role                                | `get_issue(id).state`; `list_issue_statuses(team)`; map above                                                     |
+| own identity                                | `get_user("me")`                                                                                                  |
+| claim guard                                 | `get_issue(id).assignee` — a `started` role held by another identity ⇒ stop                                       |
+| assign self                                 | `save_issue(id, assignee="me")`                                                                                   |
+| transition                                  | `save_issue(id, state=<substate mapping to target role>)`                                                         |
+| ticket comment (DoD / progress / ticket↔PR) | `save_comment(issueId, body)` — DoD and the mapping always live on the ticket                                     |
+| state-change comment                        | the **primary venue**: the PR if one exists (forge, via `deliver`'s wire format), else `save_comment(issueId, …)` |
+| subtask                                     | `save_issue(title, team, parentId=<parent>)`                                                                      |
+| `blocks` edge                               | `save_issue(id=<blocker/subtask>, blocks=[<blocked>])` (append-only)                                              |
+| one-edge neighbors                          | `get_issue(id, includeRelations=true)` → `blockedBy` / `blocks`                                                   |
+| scan open human alert                       | ticket: `list_comments` for the alert sentinel; PR: scan the forge per `deliver`                                  |
 
-PR-venue writes (the state-change comment when a PR exists, a human alert routed to
-the PR) go through the **forge** (GitHub) under §2.1's wire format, the same path
-`deliver` uses — they are not Linear MCP calls. Linear rejects self-blocking and
-(per §2.3) dependency cycles MUST be refused at write time and surfaced at read
-time. The coordinator MUST NOT create a cross-tracker dependency.
+PR-venue writes go through the **forge** (GitHub) under §2.1, the path `deliver`
+uses — not Linear MCP. Linear rejects self-blocks; cycles MUST be refused at write
+and surfaced at read (§2.3); no cross-tracker dependencies.
 
-### Primary venue when a ticket has several PRs
+**Primary venue with several PRs** (first match): (1) the PR the event is about
+(its delivery triggered the transition, or a blocker arose in it); (2) else the
+most recently updated open PR; (3) else the ticket — and ticket-level transitions
+(`available → in-progress`, the aggregate `delivered`, `verified`) go to the
+ticket. The DoD artifact always lives on the ticket.
 
-§2.3's "PR if one exists, else ticket" is ambiguous for a multi-PR ticket, so the
-coordinator resolves it **deterministically**, first match wins:
+## §2.1 recap
 
-1. **The PR this event is about** — the PR whose §2.4 progress triggered the
-   transition, or the PR in whose delivery a blocker was discovered. State-change
-   comments and human alerts attach to that PR.
-2. **Else the most recently updated open PR** of the ticket — when the event is not
-   tied to one specific PR but open PRs exist.
-3. **Else the ticket** — when no open PR exists, or for a ticket-level transition
-   not attributable to any single PR (the claim `available → in-progress`, the
-   aggregate `delivered` once all PRs land, and `verified`).
-
-Independent of this rule, the **DoD / verification artifact always lives on the
-ticket** (§Definition of done), never on a PR.
-
-## §2.1 communication recap
-
-Mode and wire format are shared with `deliver` (see
-[`../deliver/reference.md`](../deliver/reference.md) for the full treatment).
-Essentials:
-
-- **Mode** is set by the credential held at write time. **Mode A**
-  (agent-credentialed) iff the platform types the account a bot/integration, or the
-  identifier matches `*copilot*` / `*codex*` / `*claude*` / `*ai-agent*`
-  case-insensitively. **Mode B** (human-credentialed) otherwise; on any ambiguity
-  default to Mode B.
-- Every agent-authored post carries the machine marker `<!-- agent-reply:<agent-id> -->`
-  as its **first line**, alone. In **Mode B** the body is additionally wrapped in a
-  sparkle block (`✨` alone, one blank line in from the body each side) after the
-  marker. Any durable sentinel (plan, engagement, human-alert) sits **inside** the
-  body — after the marker in Mode A, after the opening sparkle in Mode B — never as
-  the leading line.
-- **Terminal signals** suppress re-evaluation: reactions `+1` (addressed) / `-1`
-  (rejected, with a reply) / `rocket` (shipped); or, on platforms without
-  reactions, the text tokens `Done.` / `Declined.` / `Shipped.` as the **last
-  non-empty line**. The agent MUST NOT resolve a thread (a human's call).
-- **Human-input routing** (the §2.3 rule): first applicable of **PR → ticket →
-  new ticket**; tag at least one human; then the work waits, logged `WAIT`.
+Full treatment in [`../deliver/reference.md`](../deliver/reference.md). Essentials:
+**Mode A** (agent) iff the account is a bot/integration or its id matches
+`*copilot*`/`*codex*`/`*claude*`/`*ai-agent*`, else **Mode B** (default on
+ambiguity). Every agent post leads with `<!-- agent-reply:<agent-id> -->` alone;
+Mode B wraps the body in `✨`; sentinels sit inside the body. Terminal signals:
+`+1`/`-1`(with reply)/`rocket`, or last-line `Done.`/`Declined.`/`Shipped.`; never
+resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human, then
+`WAIT`.
 
 ## Outcomes (§2.5)
 
-What each reported outcome means and how work resumes.
-
-| Outcome         | Meaning                                                                                                          | Terminal?                 | Resumes how                                                                                |
-| --------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------ |
-| `verified`      | Ticket-backed only: aims validated and the §2.3 DoD artifact posted; ticket at `verified`.                       | yes                       | —                                                                                          |
-| `canceled`      | Work abandoned: a ticket canceled per §2.3 with a rationale, or a ticketless bare PR closed without merging.     | yes                       | —                                                                                          |
-| `delivered`     | The change landed. Ticket-backed: all required PRs merged, verification owned elsewhere. Bare PR: the PR merged. | ticket: no / bare PR: yes | (ticket) a separate verification coordinator takes it to `verified`; a bare PR is done.    |
-| `human-blocked` | Parked in `awaiting-external` pending a human; exactly one alert posted.                                         | no                        | re-dispatched from a fresh claim once the human resolves it.                               |
-| `decomposed`    | Split into subtasks; parent stays `in-progress`, effectively blocked by the subtasks.                            | no                        | parent re-enters work and is finalized once all subtasks reach `verified`/`canceled`.      |
-| `failed`        | Could not complete; reason recorded. Verification work carries a `retryable` flag.                               | no                        | retryable verification → auto-re-dispatch on a later tick; otherwise the operator decides. |
+| outcome         | meaning                                                                | terminal?              | resumes                                                                      |
+| --------------- | ---------------------------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
+| `verified`      | ticket-backed: aims validated, DoD posted, ticket at `verified`        | yes                    | —                                                                            |
+| `canceled`      | abandoned (ticket canceled with rationale, or bare PR closed unmerged) | yes                    | —                                                                            |
+| `delivered`     | landed: all required PRs merged (ticket) / the PR merged (bare PR)     | ticket: no / bare: yes | a verification coordinator takes the ticket to `verified`; a bare PR is done |
+| `human-blocked` | parked in `awaiting-external`; one alert posted                        | no                     | re-dispatched from a fresh claim once resolved                               |
+| `decomposed`    | split into subtasks; parent `in-progress`, blocked by them             | no                     | parent finalized once all subtasks `verified`/`canceled`                     |
+| `failed`        | could not complete; reason recorded; verification carries `retryable`  | no                     | retryable verification auto-re-dispatches; else operator decides             |
 
 ## Dispatch artifacts
 
-**Standalone runs write none of this** — they report the outcome to the session
-and stop. A **dispatched** coordinator honors the §2.6 dispatch contract. §2.6
-owns the concrete location and transport; the shapes below are the stub a
-standalone build conforms to so the orchestrator wires in the real paths with no
-refactor. Default base: `${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-ticket/<key>/`,
-where `<key>` is the `ticket_id` (ticket-backed) or `<repo>#<pr_number>` (bare PR).
+Standalone writes none of this (report to the session and stop). A **dispatched**
+coordinator honors the §2.6 contract; §2.6 owns the real paths, the shapes below
+are the stub. Base: `${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-ticket/<key>/`,
+`<key>` = `ticket_id` (ticket) or `<repo>#<pr_number>` (bare PR).
 
-- **Liveness lock** — `lock.json`, **ticket-keyed** (ticket-backed) or
-  **PR-keyed** (bare PR). Heartbeated on a fixed interval; staleness is judged by
-  lock age, so a crashed coordinator is reclaimed by the orchestrator's stale-lock
-  sweep. A mirrored "working" label/signal on the forge/tracker is kept in sync
-  with the lock where one is available.
+- **`lock.json`** — ticket- or PR-keyed; heartbeated on a fixed interval;
+  staleness judged by age; mirror a "working" label where available.
+  `{ "key":"DEV-123", "agent_id":"…", "kind":"ticket|pr", "heartbeat":"<RFC3339>" }`
+- **`outcome.json`** — written as the final action.
+  `{ "key":"DEV-123", "outcome":"…", "ticket_url":"…|null", "pr_urls":[…], "retryable":null, "subtasks":[], "detail":"…" }`
+  (`retryable` is a boolean only for a `failed` verification; `subtasks` lists filed
+  ids on `decomposed`.)
 
-  ```json
-  { "key": "DEV-123", "agent_id": "<agent-id>", "kind": "ticket|pr",
-    "pid": 0, "heartbeat": "<RFC3339>" }
-  ```
-
-- **Outcome artifact** — `outcome.json`, written as the coordinator's **final
-  action**, read by the orchestrator to reconcile.
-
-  ```json
-  { "key": "DEV-123", "outcome": "verified|canceled|delivered|human-blocked|decomposed|failed",
-    "ticket_url": "<url|null>", "pr_urls": ["<url>", "..."],
-    "retryable": null, "subtasks": [], "detail": "<one-line reason>" }
-  ```
-
-  `retryable` is a boolean **only** for a `failed` verification (otherwise `null`).
-  `subtasks` lists the filed subtask identifiers on a `decomposed` outcome. The
-  coordinator owns its ticket's §2.3 transitions and DoD artifact; on a terminal
-  outcome the orchestrator does **cleanup only** (lock, "working" label, worktree,
-  the artifact) and never force-releases a live delivery worker's compute slot.
-
-The **compute-slot ledger** itself (`MAX_PARALLEL` entries shared by all agents)
-is the orchestrator's infrastructure, not written here — see §Slot seam in
-`SKILL.md` and §2.6 §Slot accounting.
+The compute-slot **ledger** (`MAX_PARALLEL`) is the orchestrator's, not written
+here — §Slot seam in `SKILL.md`, §2.6 §Slot accounting.
 
 ## Logging (§2.3)
 
-One line per entry:
-
 ```
-<timestamp> <kind> ticket=<ticket-url> pr=<pr-url> ticket-role=<role> pr-state=<pr-state> | <message>
+<timestamp> <kind> ticket=<url> pr=<url> ticket-role=<role> pr-state=<state> | <message>
 ```
 
-| Field           | Format                                                                                          |
-| --------------- | ----------------------------------------------------------------------------------------------- |
-| `<timestamp>`   | RFC 3339 with timezone offset, second precision.                                                |
-| `<kind>`        | `TRANSITION` \| `WAIT` \| `RESUME` \| `BLOCK` \| `INFO` \| `ERROR`.                             |
-| `ticket=`/`pr=` | Full URLs, never bare IDs; `-` when absent.                                                     |
-| `<role>`        | The §2.3 role, e.g. `in-progress`; `-` if no ticket.                                            |
-| `<pr-state>`    | `draft` \| `open` (non-terminal) or `shipped` \| `abandoned` (resolved terminal); `-` if no PR. |
-| `<message>`     | Free text, one line. REQUIRED for `TRANSITION`, `WAIT`, `RESUME`, `BLOCK`, `ERROR`.             |
+`<timestamp>` RFC 3339 + offset, second precision. `<kind>` =
+`TRANSITION`|`WAIT`|`RESUME`|`BLOCK`|`INFO`|`ERROR` (message required for all but
+`INFO`). `ticket=`/`pr=` full URLs, `-` if absent. `<pr-state>` =
+`draft`|`open`|`shipped`|`abandoned`, `-` if no PR.
 
-| Kind         | When to emit                                                                                        |
-| ------------ | --------------------------------------------------------------------------------------------------- |
-| `TRANSITION` | Whenever the coordinator transitions a ticket's role.                                               |
-| `WAIT`       | Work transitions to awaiting a response or external condition; message names venue + outcome.       |
-| `RESUME`     | The awaited response arrives / condition is met and active work resumes.                            |
-| `BLOCK`      | Filing a new out-of-scope blocking ticket.                                                          |
-| `INFO`       | Substantive non-state-change events: subtask creation, reassignment, ticket↔PR mapping, heartbeats. |
-| `ERROR`      | Tracker errors, verification failures, and conditions surfaced but not immediately fatal.           |
+| kind         | when                                                                      |
+| ------------ | ------------------------------------------------------------------------- |
+| `TRANSITION` | a ticket role change                                                      |
+| `WAIT`       | entering a wait (name venue + awaited outcome)                            |
+| `RESUME`     | the awaited condition is met                                              |
+| `BLOCK`      | filing an out-of-scope blocking ticket                                    |
+| `INFO`       | substantive non-state events (subtasks, mapping, reassignment, heartbeat) |
+| `ERROR`      | tracker errors, verification failures                                     |
 
-When the coordinator transitions a ticket's role it MUST **also** post a §2.3
-state-change comment to the primary venue (PR if one exists, else ticket), body
-exactly:
+Every role change also posts a state-change comment to the primary venue, body
+exactly (then §2.1 wrapping):
 
 ```
 State: <prev-role> → <new-role>
 Rationale: <one line; required for corrective and cancel transitions>
 ```
-
-The comment follows §2.1 (machine marker; Mode B sparkle wrapper).

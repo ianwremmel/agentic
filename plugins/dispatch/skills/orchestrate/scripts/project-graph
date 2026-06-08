@@ -1236,7 +1236,9 @@ function updateReferencesMilestone(body, lower, ms) {
   );
   let m;
   let sawStructured = false;
-  const re = new RegExp(structured, 'gi');
+  // Re-wrap with the global flag using `.source` (cloning a RegExp object while
+  // changing flags is brittle across engines; the pattern string is unambiguous).
+  const re = new RegExp(structured.source, 'gi');
   while ((m = re.exec(body)) !== null) {
     sawStructured = true;
     const target = String(m[1]).replace(/[)\].,;]+$/, '');
@@ -1340,6 +1342,14 @@ function buildMilestones(combined) {
         implicit: true,
         memberIds,
       });
+      // Make implicit-milestone membership observable on the node list too:
+      // reference.md requires `milestone` on a ticket that is in a milestone, and
+      // the implicit milestone covers every node in the project.
+      const implicitMs = {id: msId, name: '(implicit)', sortOrder: 0};
+      for (const id of memberIds) {
+        const n = nodes.get(id);
+        if (n) n.milestone = implicitMs;
+      }
       continue;
     }
     // Fix 10: seed one aggregate per FETCHED milestone so even zero-member

@@ -98,8 +98,8 @@ Injection MUST NOT interrupt or reclaim resources from a unit already in flight.
   than the staleness threshold: **clear it** (and any mirrored "working" label);
   the unit is presumed dead and eligible for re-dispatch.
 - For each ledger entry whose owner's heartbeat is stale: **reclaim it** (null the
-  entry under `ledger.lock`), so a crashed coordinator or worker cannot leak
-  capacity. Never force-release a *live* worker's entry — entries are released
+  entry in `ledger.json`, held under the `ledger.lock` advisory lock), so a crashed
+  coordinator or worker cannot leak capacity. Never force-release a *live* worker's entry — entries are released
   only by their owner or by this sweep (§Slot ledger).
 
 ### 4. Reconcile each active coordinator

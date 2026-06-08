@@ -16,8 +16,10 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ```
 .
 ├── .claude-plugin/marketplace.json   # marketplace catalog
+├── cli/                              # `dispatch` Rust CLI (source + build tooling)
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
+│       └── bin/                      # committed per-platform CLI binaries + launcher
 └── docs/                             # spec + design docs
 ```
 
@@ -29,6 +31,20 @@ Plugins currently published:
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.
+
+## The `dispatch` CLI
+
+`cli/` holds the Rust source for the `dispatch` binary — today just the
+`pr-status` subcommand (the §2.2 PR Status Protocol producer), with room to
+grow into the daemon, MCP server, and task commands the spec describes.
+
+Because plugins are copied into a cache at install with **no build step**, the
+compiled binaries are committed under `plugins/dispatch/bin/<target>/dispatch`
+and selected at runtime by the `bin/dispatch` launcher (which falls back to
+`skills/deliver/scripts/pr-status.legacy.bash` on any platform whose binary
+isn't committed yet). CI builds + tests every target but never commits;
+rebuilding and committing binaries is a developer step — see
+[`cli/README.md`](./cli/README.md).
 
 ## Repo conventions
 

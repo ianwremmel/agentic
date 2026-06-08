@@ -1,0 +1,108 @@
+name: CLI
+
+on:
+  push:
+  pull_request:
+
+defaults:
+  run:
+    working-directory: cli
+
+jobs:
+  # Build + test the CLI on every release target. This verifies the code
+  # compiles everywhere; it never commits binaries (committing the per-platform
+  # artifacts is a developer step — see cli/README.md).
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, native: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, native: false }
+          - { target: x86_64-apple-darwin, os: macos-latest, native: false }
+          - { target: aarch64-apple-darwin, os: macos-latest, native: true }
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup target add ${{ matrix.target }}
+
+      - name: Install aarch64 cross linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        working-directory: .
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Format check
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
+
+      - name: Test
+        if: matrix.native
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+  # Verify the committed binaries are present and fresh — every committed
+  # target carries a SOURCE_HASH that must match the current source. A stale or
+  # missing hash fails the build, prompting a rebuild + commit. This job does
+  # not write anything back.
+  verify-committed:
+    name: verify committed binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check freshness
+        working-directory: .
+        run: |
+          set -euo pipefail
+          current="$(cli/scripts/source-hash.sh)"
+          echo "current source hash: $current"
+          bin_dir="plugins/dispatch/bin"
+          fail=0
+          shopt -s nullglob
+          targets=("$bin_dir"/*/)
+          if [[ ${#targets[@]} -eq 0 ]]; then
+            echo "::error::no committed binaries under $bin_dir"
+            exit 1
+          fi
+          for dir in "${targets[@]}"; do
+            t="$(basename "$dir")"
+            if [[ ! -x "$dir/dispatch" ]]; then
+              echo "::error::$t: missing or non-executable dispatch binary"
+              fail=1
+              continue
+            fi
+            if [[ ! -f "$dir/SOURCE_HASH" ]]; then
+              echo "::error::$t: missing SOURCE_HASH"
+              fail=1
+              continue
+            fi
+            committed="$(cat "$dir/SOURCE_HASH")"
+            if [[ "$committed" != "$current" ]]; then
+              echo "::error::$t: stale binary (SOURCE_HASH $committed != $current); rebuild with cli/scripts/build-binaries.sh and commit"
+              fail=1
+            else
+              echo "$t: fresh"
+            fi
+          done
+          exit "$fail"
+
+      - name: Smoke-test the host binary
+        working-directory: .
+        run: |
+          set -euo pipefail
+          bin="plugins/dispatch/bin/x86_64-unknown-linux-gnu/dispatch"
+          if [[ -x "$bin" ]]; then
+            "$bin" --version
+          fi

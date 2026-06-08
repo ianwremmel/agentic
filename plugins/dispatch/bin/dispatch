@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Platform-selecting launcher for the `dispatch` CLI.
+#
+# The compiled binaries are committed per target under this directory
+# (bin/<rust-target-triple>/dispatch). This shim maps the host OS/arch to a
+# target and execs the matching binary. When no binary is committed for the
+# host yet, it falls back to the legacy bash pr-status implementation so the
+# plugin keeps working on every platform while binaries roll out.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+os="$(uname -s)"
+arch="$(uname -m)"
+case "$os" in
+  Linux)  sys="unknown-linux-gnu" ;;
+  Darwin) sys="apple-darwin" ;;
+  *)      sys="" ;;
+esac
+case "$arch" in
+  x86_64 | amd64)  cpu="x86_64" ;;
+  arm64 | aarch64) cpu="aarch64" ;;
+  *)               cpu="" ;;
+esac
+
+triple=""
+if [[ -n "$cpu" && -n "$sys" ]]; then
+  triple="$cpu-$sys"
+fi
+
+bin="$here/$triple/dispatch"
+if [[ -n "$triple" && -x "$bin" ]]; then
+  exec "$bin" "$@"
+fi
+
+# Fallback: no committed binary for this platform — use the legacy bash
+# pr-status for the one subcommand it implements.
+legacy="$here/../skills/deliver/scripts/pr-status.legacy.bash"
+if [[ "${1:-}" == "pr-status" && -x "$legacy" ]]; then
+  shift
+  echo "dispatch: no committed binary for '${triple:-$os/$arch}'; using legacy bash pr-status" >&2
+  exec "$legacy" "$@"
+fi
+
+echo "dispatch: no binary for platform '${triple:-$os/$arch}' and no fallback for subcommand '${1:-}'." >&2
+echo "dispatch: build one with cli/scripts/build-binaries.sh and commit plugins/dispatch/bin/$triple/dispatch" >&2
+exit 1

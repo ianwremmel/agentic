@@ -1,0 +1,630 @@
+#!/usr/bin/env bash
+# pr-status — emit PR state XML per §2.2.2 PR Status Protocol.
+#
+# Usage:
+#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> \
+#     DISPATCH_OPERATOR_LOGIN=<login> pr-status <pr>
+#
+# Requires: gh, jq, claude. Run from inside the repo's git worktree.
+
+set -euo pipefail
+
+PR="${1:-}"
+[[ -n "$PR" ]] || { echo "usage: pr-status <pr>" >&2; exit 2; }
+: "${DISPATCH_AGENT_ID:?DISPATCH_AGENT_ID required}"
+: "${DISPATCH_SKILL:?DISPATCH_SKILL required}"
+: "${DISPATCH_OPERATOR_LOGIN:?DISPATCH_OPERATOR_LOGIN required (operator GitHub login; see §2.2.2 Operator identity)}"
+OPERATOR_LC="$(printf '%s' "$DISPATCH_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
+
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+SLUG="${REPO/\//__}"
+BASE="${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}"
+DIR="$BASE/$DISPATCH_SKILL/$SLUG/$PR"
+mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations"
+
+INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|codeql)$"
+STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
+
+# Per reference.md → Terminal signals: the text tokens must be the *last
+# non-empty line* of the body. Canonical tokens are `Done.`, `Declined.`,
+# `Shipped.`; `✓`/`✅` are accepted as inline reaction-equivalents; the
+# remaining legacy tokens (`acknowledged`, etc.) preserve pre-existing
+# behavior. Match is case-insensitive and tolerant of an optional trailing
+# period.
+TERMINAL_RE='^[[:space:]]*(✓|✅|done\.?|declined\.?|shipped\.?|acknowledged\.?|wontfix\.?|dismissed\.?|resolved\.?)[[:space:]]*$'
+
+# gh-authenticated identity used as a fallback in classify_actionable so
+# agent-id drift in markers across runs does not re-actionable the calling
+# agent's own resolved replies. Empty if `gh api user` fails; one breadcrumb
+# then logs the fallback path as inactive.
+CALLER_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
+[[ -z "$CALLER_LOGIN" ]] && echo "pr-status: warning: gh api user failed; author-identity actionability fallback disabled" >&2
+
+xml_attr() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
+xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# --- summary helper -----------------------------------------------------------
+# Args: <body-file> <out-file>
+summarize() {
+  local body="$1" out="$2"
+  claude -p --max-turns 1 \
+    "Summarize the following PR item in 1-3 sentences describing its outcome. Plain prose only.
+
+$(cat "$body")" > "$out" 2>/dev/null || echo "(summary unavailable)" > "$out"
+}
+
+# Args: <id> <subdir> <body>
+# Writes <id>.md when the body changes. The summary is intentionally NOT deleted
+# on change: a summary, once generated for a settled (non-actionable) item, is a
+# recap the agent reads alongside the new content when the item later flips back
+# to actionable (a reviewer reply) — instead of re-reading the whole thread. It
+# is generated lazily (see the per-section emitters: only when an item is
+# non-actionable and no summary exists yet) and then persists.
+cache_item() {
+  local id="$1" sub="$2" body="$3"
+  local md="$DIR/$sub/$id.md"
+  local hash_file="$DIR/$sub/$id.hash"
+  local new_hash; new_hash="$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)"
+  local old_hash=""; [[ -f "$hash_file" ]] && old_hash="$(cat "$hash_file")"
+  if [[ ! -f "$md" || "$new_hash" != "$old_hash" ]]; then
+    printf '%s' "$body" > "$md"
+    printf '%s' "$new_hash" > "$hash_file"
+  fi
+}
+
+# --- fetch --------------------------------------------------------------------
+PR_JSON="$(gh pr view "$PR" --json \
+  number,headRefName,headRefOid,baseRefName,state,mergedAt,mergeable,reviewDecision,isDraft,statusCheckRollup)"
+
+HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
+
+# reviewThreads and top-level comments aren't both exposed with the fields we
+# need by `gh pr view --json` (in particular it omits comment reactions, which
+# Gate 6 needs), so fetch them via GraphQL.
+# Use the numeric PR number from PR_JSON since `$PR` may have been passed as
+# a URL or branch name (both accepted by `gh pr view`).
+PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
+OWNER="${REPO%/*}"
+REPO_NAME="${REPO#*/}"
+
+THREADS_JSON="$(gh api graphql \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviewThreads(first:100) {
+            nodes {
+              id
+              isResolved
+              isOutdated
+              path
+              comments(last:50) {
+                nodes { id databaseId body author { login } createdAt }
+              }
+            }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
+
+# §2.2.2 requires EVERY top-level comment to appear, and Gate 6 reads reactions
+# off the (recent) engagement comment, so the comments connection must be fully
+# paginated — a `first:100` single page silently drops the engagement comment
+# (and its approval reaction) on long-running PRs. `--paginate` walks every page
+# via $endCursor; `--jq …nodes[]` emits one node per line across all pages, which
+# `jq -s` collects back into a single array.
+COMMENTS_JSON="$(gh api graphql --paginate \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          comments(first:100, after:$endCursor) {
+            nodes {
+              id
+              databaseId
+              body
+              author { login }
+              reactions(first:100) {
+                nodes { content user { login } }
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.comments.nodes[]' | jq -s '.')"
+
+# Reviews and review requests come from GraphQL, not `gh pr view --json`, because
+# the latter's exporter only marshals User/Team requested reviewers and silently
+# drops Bot-typed ones (e.g. Copilot) — which would break the pending override
+# for a re-requested bot review. GraphQL's RequestedReviewer union lets us pull
+# the login for User/Bot/Mannequin (and name/slug for Team), and the review
+# author's __typename gives an authoritative bot flag.
+#
+# The reviews connection must be fully paginated: every review event is a node,
+# so a long-running PR exceeds a single 100-node page, and a `first:100` cap
+# silently drops the newest reviews — breaking the "most recent submitted review
+# per reviewer" rule (a recent changes_requested, or a bot review that has since
+# landed against an outstanding request, would be missed). `--paginate` walks
+# every page via $endCursor; `--jq …nodes[]` emits one node per line, which
+# `jq -s` collects into a single array. reviewRequests is bounded by the
+# reviewer count (only currently-outstanding requests stand), so its single
+# 100-node page is sufficient and is fetched separately — `--paginate` follows
+# exactly one connection's cursor, so the two can't share a query.
+REVIEW_NODES="$(gh api graphql --paginate \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviews(first:100, after:$endCursor) {
+            nodes { author { login __typename } state }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviews.nodes[]' | jq -s '.')"
+
+REVIEW_REQUEST_NODES="$(gh api graphql \
+  -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviewRequests(first:100) {
+            nodes {
+              requestedReviewer {
+                __typename
+                ... on User { login }
+                ... on Bot { login }
+                ... on Mannequin { login }
+                ... on Team { name slug }
+              }
+            }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviewRequests.nodes // []')"
+
+# Re-wrap the two connections back into the {reviews:{nodes:…},
+# reviewRequests:{nodes:…}} pullRequest-node shape reviews_xml's jq reads.
+REVIEWS_JSON="$(jq -n \
+  --argjson reviews "$REVIEW_NODES" \
+  --argjson reqs "$REVIEW_REQUEST_NODES" \
+  '{reviews: {nodes: $reviews}, reviewRequests: {nodes: $reqs}}')"
+
+# GraphQL ReactionContent → platform-normalized name per §2.2.2 reactions schema.
+reaction_emoji() {
+  case "$1" in
+    THUMBS_UP)   printf '+1' ;;
+    THUMBS_DOWN) printf -- '-1' ;;
+    LAUGH)       printf 'laugh' ;;
+    HOORAY)      printf 'hooray' ;;
+    CONFUSED)    printf 'confused' ;;
+    HEART)       printf 'heart' ;;
+    ROCKET)      printf 'rocket' ;;
+    EYES)        printf 'eyes' ;;
+    *)           printf '%s' "$(tr '[:upper:]' '[:lower:]' <<<"$1")" ;;
+  esac
+}
+
+# --- checks -------------------------------------------------------------------
+checks_xml() {
+  jq -r --arg info "$INFORMATIONAL_RE" --argjson stuck_after "$STUCK_AFTER_SEC" '
+    def now: (now | floor);
+    .statusCheckRollup // [] | map({
+      name: (.name // .context // "check"),
+      conclusion: (.conclusion // .state // ""),
+      status: (.status // ""),
+      url: (.detailsUrl // .targetUrl // ""),
+      started: (.startedAt // ""),
+      informational: ($info != "" and (((.name // .context // "")) | test($info; "i")))
+    }) | map(. + {
+      pending: (.status == "IN_PROGRESS" or .status == "QUEUED" or .status == "PENDING" or .conclusion == "" and .status != ""),
+      failing: ((.conclusion // "") | test("FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE"; "i")),
+      stuck: (.status == "IN_PROGRESS" and .started != "" and ((now - (.started | fromdateiso8601? // now)) > $stuck_after))
+    }) as $cs
+    | (any($cs[]; .pending and (.stuck | not))) as $any_pending
+    | (any($cs[]; .failing and (.informational | not) and (.pending | not))) as $any_failing
+    | (if $any_pending then "pending" elif $any_failing then "failing" else "passing" end) as $rollup
+    | "  <checks state=\"\($rollup)\">",
+      ($cs[] | "    <check name=\"\(.name)\" conclusion=\"\(.conclusion)\" url=\"\(.url)\" informational=\"\(.informational)\" stuck=\"\(.stuck)\"/>"),
+      "  </checks>"
+  ' <<<"$PR_JSON"
+}
+
+# --- merge conflicts ----------------------------------------------------------
+conflicts_xml() {
+  local m; m="$(jq -r '.mergeable // ""' <<<"$PR_JSON")"
+  local present=false; [[ "$m" == "CONFLICTING" ]] && present=true
+  echo "  <merge-conflicts present=\"$present\"/>"
+}
+
+# --- reviews ------------------------------------------------------------------
+# One persistent record per reviewer (PR #132 model): a reviewer who was
+# requested OR has reviewed appears exactly once, carrying a status that walks
+# pending -> commented/changes_requested/approved (plus dismissed). An
+# outstanding request OVERRIDES any prior verdict back to "pending" — a fresh
+# request "replaces" the old review until the reviewer re-reviews — so a
+# re-requested Copilot, or an operator re-requested after approving, reads as
+# pending and the agent keeps polling instead of treating the stale verdict as
+# current. `state="pending"` is the in-flight signal: an empty thread set while a
+# pending review stands is NOT convergence. Mode is bot iff GitHub types the
+# account a Bot or the login matches the agent-identity regex; role is operator
+# iff the login is the configured operator, else team (humans only). Input is the
+# GraphQL pullRequest node ($REVIEWS_JSON): `.reviews.nodes` and
+# `.reviewRequests.nodes` (the latter wrapping a RequestedReviewer union).
+reviews_xml() {
+  echo "  <reviews>"
+  jq -r '
+    # Requested reviewers (currently-outstanding requests): login + bot-ness.
+    # The GraphQL union nests under .requestedReviewer; User/Bot/Mannequin carry
+    # .login, Team carries .slug/.name.
+    ( [ (.reviewRequests.nodes // [])[]
+        | .requestedReviewer
+        | { login: ((.login // .slug // .name) // ""), is_bot: ((.__typename // "") == "Bot") }
+        | select(.login != "") ] ) as $reqs
+    | ( [ $reqs[].login | ascii_downcase ] ) as $reqset
+    # Latest SUBMITTED review per author, keyed by lowercased login. PENDING here
+    # means an unsubmitted draft (visible only to its author, e.g. the agent
+    # itself); it is invisible to the protocol, so drop it — "pending" in the
+    # output comes from an outstanding REQUEST, never an unsubmitted review.
+    | ( reduce (.reviews.nodes // [])[] as $r ({};
+          ( ($r.author.login // "") ) as $lg
+          | if $lg == "" or ($r.state == "PENDING") then .
+            else .[($lg | ascii_downcase)] =
+                   { login: $lg, is_bot: (($r.author.__typename // "") == "Bot"), state: ($r.state // "COMMENTED") }
+            end
+        ) ) as $rev
+    # Add a pending stub for any requested reviewer that has not reviewed.
+    | ( $rev + ( reduce $reqs[] as $q ({};
+          ( $q.login | ascii_downcase ) as $k
+          | if ($rev[$k]) then . else .[$k] = { login: $q.login, is_bot: $q.is_bot, state: "PENDING" } end
+        ) ) )
+    # Pending override: an outstanding request forces the status back to pending.
+    | to_entries
+    | map( .key as $k | .value + { state: ( if ($reqset | index($k)) then "PENDING" else .value.state end ) } )
+    | .[]
+    | [ .login, (.is_bot | tostring), .state ] | @tsv
+  ' <<<"$REVIEWS_JSON" |
+  while IFS=$'\t' read -r author is_bot state; do
+    [[ -n "$author" ]] || continue
+    local mode="human"
+    if [[ "$is_bot" == "true" ]] || [[ "${author,,}" =~ (copilot|codex|claude|ai-agent) ]]; then
+      mode="bot"
+    fi
+    local s; s="$(tr '[:upper:]' '[:lower:]' <<<"$state")"
+    case "$s" in pending|commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
+    if [[ "$mode" == "human" ]]; then
+      local role="team"
+      [[ "${author,,}" == "$OPERATOR_LC" ]] && role="operator"
+      printf '    <review author="%s" mode="%s" role="%s" state="%s"/>\n' \
+        "$(xml_attr "$author")" "$mode" "$role" "$s"
+    else
+      printf '    <review author="%s" mode="%s" state="%s"/>\n' \
+        "$(xml_attr "$author")" "$mode" "$s"
+    fi
+  done
+  echo "  </reviews>"
+}
+
+# Returns 0 iff $1's last non-empty line is a canonical terminal signal.
+# Anchoring to the last non-empty line matches reference.md ("must be the
+# last non-empty line"); inline mentions of "done" in prose stay actionable.
+has_terminal_signal() {
+  local last
+  last="$(printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n1)"
+  [[ -n "$last" ]] || return 1
+  grep -qiE "$TERMINAL_RE" <<<"$last"
+}
+
+# --- actionability ------------------------------------------------------------
+# Args: <newest-body> <newest-author-login> <thread-resolved:true|false>
+# Echoes a tab-separated "<actionable>\t<reason>" pair: actionable is "true" or
+# "false"; reason is empty when actionable, else a stable token explaining *why*
+# the item is suppressed (`resolved`, `agent-artifact`, `agent-terminal-reply`).
+# The reason is surfaced as a `reason=` attribute so the agent never has to
+# re-derive suppression from the human-facing <summary> prose (which describes
+# the thread's *content* and will read as if an addressed reviewer point still
+# stands).
+# Full rules: reference.md → Actionability. Summary: non-actionable iff
+# thread-resolved, or the body is the calling agent's plan comment or
+# engagement comment (line-anchored agent-plan/agent-engagement sentinel +
+# author identity, so a human quoting the marker stays actionable), or the body
+# is the calling agent's terminal-tagged reply (any agent-reply marker + author
+# identity + terminal signal on the last non-empty line). When $CALLER_LOGIN is
+# unavailable (`gh api user` failed), the reply check falls back to the pre-fix
+# behavior — exact $DISPATCH_AGENT_ID marker alone — so the script degrades, not
+# fails.
+classify_actionable() {
+  local body="$1" author="$2" resolved="$3"
+  [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
+
+  # Plan or engagement comment by the calling agent. Both are agent artifacts,
+  # not reviewer items: the engagement comment in particular anchors operator
+  # approval (Gate 6) and would otherwise stay actionable forever — blocking
+  # Gate 4 and thus the draft-clear/merge transitions — since the agent never
+  # "addresses" its own request.
+  if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+      && grep -qE '^<!-- agent-(plan|engagement):[^ ]+ -->$' <<<"$body"; then
+    printf 'false\tagent-artifact\n'; return
+  fi
+
+  # Terminal-tagged reply by the calling agent.
+  if has_terminal_signal "$body"; then
+    if [[ -n "$CALLER_LOGIN" ]]; then
+      if [[ "$author" == "$CALLER_LOGIN" ]] \
+          && grep -qF '<!-- agent-reply:' <<<"$body"; then
+        printf 'false\tagent-terminal-reply\n'; return
+      fi
+    else
+      # Degraded path: no caller identity; gate on the exact agent-id marker
+      # alone. False-positive on a human quoting the exact marker + terminal
+      # signal is preserved from the pre-fix behavior.
+      if grep -qF "<!-- agent-reply:$DISPATCH_AGENT_ID -->" <<<"$body"; then
+        printf 'false\tagent-terminal-reply\n'; return
+      fi
+    fi
+  fi
+  printf 'true\t\n'
+}
+
+# Parse a classify_actionable result into the globals $CA_ACTIONABLE and
+# $CA_REASON_ATTR (the latter ready to splice into a start tag, empty unless
+# non-actionable with a reason). Keeps the tab-splitting in one place.
+parse_actionable() {
+  CA_ACTIONABLE="${1%%$'\t'*}"
+  local reason="${1#*$'\t'}"
+  if [[ "$CA_ACTIONABLE" == "false" && -n "$reason" ]]; then
+    CA_REASON_ATTR=" reason=\"$(xml_attr "$reason")\""
+  else
+    CA_REASON_ATTR=""
+  fi
+}
+
+# Emit <reactions>…</reactions> for a reactions-node JSON array, or nothing if
+# the array is empty. Used by comments_xml.
+reactions_xml_for() {
+  local rj="$1"
+  if [[ -z "$rj" || "$rj" == "[]" || "$rj" == "null" ]]; then
+    return 0
+  fi
+  echo "<reactions>"
+  jq -r '.[] | [(.user.login // ""), (.content // "")] | @tsv' <<<"$rj" |
+  while IFS=$'\t' read -r user content; do
+    [[ -n "$user" && -n "$content" ]] || continue
+    local emoji; emoji="$(reaction_emoji "$content")"
+    printf '        <reaction author="%s" emoji="%s"/>\n' \
+      "$(xml_attr "$user")" "$(xml_attr "$emoji")"
+  done
+  echo "      </reactions>"
+  return 0
+}
+
+# --- comments (top-level PR comments) -----------------------------------------
+comments_xml() {
+  echo "  <comments>"
+  jq -c '.[]' <<<"$COMMENTS_JSON" | while read -r c; do
+    local raw_id id author body reactions
+    raw_id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
+    author="$(jq -r '.author.login // ""' <<<"$c")"
+    body="$(jq -r '.body // ""' <<<"$c")"
+    reactions="$(jq -c '.reactions.nodes // []' <<<"$c")"
+    [[ -n "$raw_id" ]] || continue
+    id="${raw_id//[^A-Za-z0-9_=-]/_}"
+    cache_item "$id" "comments" "$body"
+    parse_actionable "$(classify_actionable "$body" "$author" "false")"
+    local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
+    local cache_path="$DIR/comments/$id.md"
+    local sum_path="$DIR/comments/$id.summary.md"
+    # Generate the recap lazily, only for a settled (non-actionable) item with no
+    # summary yet; once written it persists and is emitted in either state so the
+    # agent can read it when the item later flips back to actionable.
+    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+    local inner=""
+    [[ -f "$sum_path" ]] && inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
+    inner+="$(reactions_xml_for "$reactions")"
+    if [[ -z "$inner" ]]; then
+      printf '    <comment id="%s" actionable="%s"%s cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")"
+    else
+      printf '    <comment id="%s" actionable="%s"%s cache="%s">%s</comment>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")" "$inner"
+    fi
+  done
+  echo "  </comments>"
+}
+
+# --- review threads -----------------------------------------------------------
+threads_xml() {
+  echo "  <threads>"
+  jq -c '.[]' <<<"$THREADS_JSON" | while read -r t; do
+    local id resolved newest_body newest_author body
+    id="$(jq -r '.id // ""' <<<"$t")"
+    resolved="$(jq -r '.isResolved // false' <<<"$t")"
+    body="$(jq -r '[.comments.nodes[]? | "[" + (.author.login // "?") + "] " + (.body // "")] | join("\n\n---\n\n")' <<<"$t")"
+    newest_body="$(jq -r '.comments.nodes // [] | last.body // ""' <<<"$t")"
+    newest_author="$(jq -r '.comments.nodes // [] | last.author.login // ""' <<<"$t")"
+    [[ -n "$id" ]] || continue
+    id="${id//[^A-Za-z0-9_=-]/_}"
+    cache_item "$id" "threads" "$body"
+    parse_actionable "$(classify_actionable "$newest_body" "$newest_author" "$resolved")"
+    local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
+    local cache_path="$DIR/threads/$id.md"
+    local sum_path="$DIR/threads/$id.summary.md"
+    # Generate the recap lazily for a settled (non-actionable) thread with none
+    # yet; it persists and is emitted in either state. When the thread flips back
+    # to actionable (a reviewer reply), the agent reads this recap plus the new
+    # content from the cache file instead of re-reading the whole thread.
+    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+    if [[ -f "$sum_path" ]]; then
+      printf '    <thread id="%s" actionable="%s"%s cache="%s"><summary>%s</summary></thread>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+    else
+      printf '    <thread id="%s" actionable="%s"%s cache="%s"/>\n' \
+        "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")"
+    fi
+  done
+  echo "  </threads>"
+}
+
+# --- annotations (code scanning / check annotations) --------------------------
+annotations_xml() {
+  echo "  <annotations>"
+  local owner="${REPO%/*}" repo="${REPO#*/}"
+  local sha; sha="$(jq -r .headRefOid <<<"$PR_JSON")"
+  local runs
+  runs="$(gh api "repos/$owner/$repo/commits/$sha/check-runs" --jq '.check_runs // []' 2>/dev/null || echo '[]')"
+  jq -c '.[]' <<<"$runs" | while read -r run; do
+    local run_id; run_id="$(jq -r '.id' <<<"$run")"
+    gh api "repos/$owner/$repo/check-runs/$run_id/annotations" 2>/dev/null \
+      | jq -c '.[]?' | while read -r a; do
+      local path line msg id body
+      path="$(jq -r '.path // ""' <<<"$a")"
+      line="$(jq -r '.start_line // 0' <<<"$a")"
+      msg="$(jq -r '.message // ""' <<<"$a")"
+      body="[$path:$line] $msg"
+      id="$(printf '%s' "$body" | sha256sum | cut -c1-16)"
+      cache_item "$id" "annotations" "$body"
+      local ack="$DIR/annotations/$id.ack"
+      local cache_path="$DIR/annotations/$id.md"
+      local sum_path="$DIR/annotations/$id.summary.md"
+      if [[ -f "$ack" ]]; then
+        [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
+        printf '    <annotation id="%s" actionable="false" reason="acked" cache="%s"><summary>%s</summary></annotation>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+      else
+        printf '    <annotation id="%s" actionable="true" cache="%s"/>\n' \
+          "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+      fi
+    done
+  done
+  echo "  </annotations>"
+}
+
+# --- terminal resolution ------------------------------------------------------
+# Returns 0 if the PR's net change is present in the base tip (shipped), 1 if
+# not (abandoned), 2 if the check could not run (no repo / git or fetch failure).
+# Squash/rebase-safe: builds the PR's combined net patch and reverse-applies it
+# against a temp index seeded from the base tip, so an n→1 squash or a rebase
+# rewrite still matches by content (per-commit patch-ids, which `git cherry`
+# uses, break under squash). Side-effect-free — never touches the caller's
+# worktree, index, or HEAD. An empty net patch (no-op PR) reverse-applies
+# trivially → present → shipped, which is intended.
+content_present() {
+  local base_ref="$1"
+  command -v git >/dev/null 2>&1 || return 2
+  git rev-parse --git-dir >/dev/null 2>&1 || return 2
+
+  # Fetch the head commit by SHA via refs/pull/<n>/head — the head branch may
+  # have been deleted on close, but GitHub keeps the SHA reachable here.
+  git fetch --quiet origin "refs/pull/$PR_NUMBER/head" 2>/dev/null || return 2
+  local head_sha; head_sha="$(git rev-parse --verify --quiet FETCH_HEAD)" || return 2
+  [[ -n "$head_sha" ]] || return 2
+
+  # Fetch the base tip (FETCH_HEAD gets overwritten, so head_sha is captured first).
+  git fetch --quiet origin "$base_ref" 2>/dev/null || return 2
+  local base_sha; base_sha="$(git rev-parse --verify --quiet FETCH_HEAD)" || return 2
+  [[ -n "$base_sha" ]] || return 2
+
+  local mb; mb="$(git merge-base "$base_sha" "$head_sha" 2>/dev/null)" || return 2
+  [[ -n "$mb" ]] || return 2
+
+  # No-op PR: an empty net patch is trivially present in base → shipped. Must be
+  # short-circuited because `git apply --check` rejects empty input ("No valid
+  # patches in input"), which would otherwise misclassify a no-op PR as abandoned.
+  if git diff --quiet "$mb" "$head_sha" 2>/dev/null; then
+    return 0
+  fi
+
+  # Reverse-apply the net patch against a temp index seeded from the base tip.
+  # `rm -f` the mktemp file so the index path is free: some git versions read an
+  # existing empty GIT_INDEX_FILE as a corrupt index, failing read-tree. Clean up
+  # inline rather than via a RETURN trap — a RETURN trap would re-fire on the
+  # *caller's* return and, under `set -u`, abort the rest of the XML emission.
+  local tmp_index; tmp_index="$(mktemp)" || return 2
+  rm -f "$tmp_index"
+  if ! GIT_INDEX_FILE="$tmp_index" git read-tree "$base_sha" 2>/dev/null; then
+    rm -f "$tmp_index"
+    return 2
+  fi
+  # --binary emits an applyable full binary patch; without it git diff writes a
+  # "Binary files differ" placeholder that git apply rejects, misclassifying any
+  # PR touching binary files as abandoned.
+  local rc=1
+  if git diff --binary "$mb" "$head_sha" \
+       | GIT_INDEX_FILE="$tmp_index" git apply --reverse --cached --check - 2>/dev/null; then
+    rc=0
+  fi
+  rm -f "$tmp_index"
+  return "$rc"
+}
+
+# Resolve the PR's terminal end-to-end and emit <terminal>. Binary at closure
+# (shipped|abandoned); non-terminal while the PR is live (open|draft). Cheapest
+# signals first; git is shelled only on the CLOSED-but-not-merged + ahead_by>0
+# branch, never on the hot poll loop. Carries the raw signals it used.
+terminal_xml() {
+  local state merged_at base_ref head_oid is_draft
+  state="$(jq -r '.state // ""' <<<"$PR_JSON")"
+  merged_at="$(jq -r '.mergedAt // ""' <<<"$PR_JSON")"
+  base_ref="$(jq -r '.baseRefName // ""' <<<"$PR_JSON")"
+  head_oid="$(jq -r '.headRefOid // ""' <<<"$PR_JSON")"
+  is_draft="$(jq -r '.isDraft // false' <<<"$PR_JSON")"
+
+  local gh_merged=false
+  [[ "$state" == "MERGED" || ( -n "$merged_at" && "$merged_at" != "null" ) ]] && gh_merged=true
+
+  # Non-terminal: PR still open.
+  if [[ "$state" == "OPEN" ]]; then
+    local s=open; [[ "$is_draft" == "true" ]] && s=draft
+    printf '  <terminal state="%s" gh-merged="%s" ahead-by="-"/>\n' "$s" "$gh_merged"
+    return
+  fi
+
+  # Step 1: GitHub says merged → shipped. API only.
+  if [[ "$gh_merged" == "true" ]]; then
+    printf '  <terminal state="shipped" gh-merged="true" ahead-by="-"/>\n'
+    return
+  fi
+
+  # CLOSED without `merged`. Step 2: one three-dot compare call, read ahead_by.
+  # ahead_by == 0 → every head commit is already in base (plain merge /
+  # fast-forward / merge-queue close where GitHub never set merged) → shipped,
+  # no git. Works even if the head branch was deleted — compare accepts the SHA.
+  local ahead_by
+  ahead_by="$(gh api "repos/$OWNER/$REPO_NAME/compare/$base_ref...$head_oid" \
+    --jq '.ahead_by' 2>/dev/null || echo "")"
+
+  if [[ "$ahead_by" == "0" ]]; then
+    printf '  <terminal state="shipped" gh-merged="false" ahead-by="0"/>\n'
+    return
+  fi
+
+  # ahead_by > 0 (or compare failed): could be squash/rebase-landed or genuinely
+  # abandoned; the API can't tell. Step 3: content check via git (the only path
+  # that shells git). On no-repo / fetch failure we do NOT guess — emit abandoned
+  # with an error breadcrumb so delivery is never falsely claimed.
+  local ab_attr="${ahead_by:--}"
+  local rc=0
+  if content_present "$base_ref"; then rc=0; else rc=$?; fi
+  case "$rc" in
+    0) printf '  <terminal state="shipped" gh-merged="false" ahead-by="%s"/>\n' "$ab_attr" ;;
+    1) printf '  <terminal state="abandoned" gh-merged="false" ahead-by="%s"/>\n' "$ab_attr" ;;
+    *) printf '  <terminal state="abandoned" gh-merged="false" ahead-by="%s" error="content-check-unavailable"/>\n' "$ab_attr" ;;
+  esac
+}
+
+# --- emit ---------------------------------------------------------------------
+printf '<pr-status repo="%s" pr="%s" head="%s">\n' \
+  "$(xml_attr "$REPO")" "$(xml_attr "$PR")" "$(xml_attr "$HEAD")"
+terminal_xml
+checks_xml
+conflicts_xml
+reviews_xml
+comments_xml
+threads_xml
+annotations_xml
+echo '</pr-status>'

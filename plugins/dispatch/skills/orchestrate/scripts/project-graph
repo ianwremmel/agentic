@@ -763,11 +763,20 @@ const ISSUE_BY_ID_FIELDS = `
   updatedAt
   state { name type }
   project { id }
-  inverseRelations(first: 50) {
+  inverseRelations(first: 100) {
     nodes { type issue { id } }
     pageInfo { hasNextPage endCursor }
   }
 `;
+const ISSUE_BY_ID_INVREL_PAGE = `
+  query IssueInvRelPage($id: String!, $after: String) {
+    issue(id: $id) {
+      inverseRelations(first: 100, after: $after) {
+        nodes { type issue { id } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }`;
 async function fetchIssueById(fetchImpl, apiKey, id) {
   const query = `
     query IssueById($id: String!) {
@@ -775,7 +784,25 @@ async function fetchIssueById(fetchImpl, apiKey, id) {
     }`;
   try {
     const data = await gqlRequest(fetchImpl, apiKey, query, {id});
-    return (data && data.issue) || null;
+    const issue = (data && data.issue) || null;
+    if (!issue) return null;
+    // Paginate inverseRelations: an external ancestor with >100 `blocks` edges
+    // must not silently lose blocked-by edges, which would break transitive
+    // blocking across the external boundary (same drain as the in-project fetch).
+    const conn = issue.inverseRelations || {nodes: [], pageInfo: {hasNextPage: false}};
+    let pageInfo = conn.pageInfo || {hasNextPage: false};
+    while (pageInfo && pageInfo.hasNextPage) {
+      const pg = await gqlRequest(fetchImpl, apiKey, ISSUE_BY_ID_INVREL_PAGE, {
+        id,
+        after: pageInfo.endCursor,
+      });
+      const more = pg && pg.issue && pg.issue.inverseRelations;
+      if (!more) break;
+      conn.nodes = conn.nodes.concat(more.nodes || []);
+      pageInfo = more.pageInfo || {hasNextPage: false};
+    }
+    issue.inverseRelations = {nodes: conn.nodes, pageInfo: {hasNextPage: false}};
+    return issue;
   } catch (_) {
     // A GraphQL error for one id (e.g. not found / no access) must not abort the
     // whole resolution — treat as unfetchable.

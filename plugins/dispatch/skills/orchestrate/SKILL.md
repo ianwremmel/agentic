@@ -38,8 +38,8 @@ around it — a cycle is illegal (§2.3).
 | Actor                  | Owns                                                                                         |
 | ---------------------- | -------------------------------------------------------------------------------------------- |
 | orchestrator           | merged graph, slot ledger, coordinator dispatch/re-dispatch, lock reconciliation, completion |
-| ticket coordinator     | one work item end-to-end (§2.5) — its PR(s), a no-PR verification, or a single injected PR    |
-| milestone-review agent | one milestone's review when it is `ready-for-review` (§2.3, §2.6)                             |
+| ticket coordinator     | one work item end-to-end (§2.5) — its PR(s), a no-PR verification, or a single injected PR   |
+| milestone-review agent | one milestone's review when it is `ready-for-review` (§2.3, §2.6)                            |
 
 There is **no** separate verification agent or bare worker: verification-only
 tickets and injected bare PRs are both worked by a **coordinator** that branches
@@ -57,11 +57,14 @@ order** each tick:
 
 ### 1. Refresh graph
 
-Request a **delta** from the producer using the persisted cursor, excluding the
-in-flight ∪ done ∪ failed identifiers (the active set):
+Request a **delta** from the producer using the persisted cursor. Pass the
+in-flight ∪ done identifiers as `exclude` (suppressed from `<available>` only) and
+the failed identifiers **separately** as `failed` — failed ancestors
+permanently-block their dependents, which is distinct from a plain exclusion, so
+they MUST NOT be lumped into `exclude`:
 
 ```
-delta = producer.delta(cursor, exclude=<in-flight ∪ done ∪ failed>)
+delta = producer.delta(cursor, exclude=<in-flight ∪ done>, failed=<failed>)
 ```
 
 Fall back to a **full sync** only on first run, after recovery, on a cursor gap,
@@ -105,16 +108,16 @@ For each coordinator in the active set, reconcile by its **outcome artifact** if
 one was written, else by **liveness**. The §2.5 outcomes are handled
 exhaustively ([`reference.md`](./reference.md#outcome-artifact-vocabulary)):
 
-| Outcome                                    | Action                                                                                    |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `verified`                                 | cleanup + drop (terminal; coordinator owns the §2.3 transition + DoD artifact)            |
-| `canceled`                                 | cleanup + drop (terminal; a `canceled` ancestor unblocks dependents on the next fetch)     |
-| `delivered`                                | cleanup + drop; a **separate** verification work item later takes the ticket to `verified` |
-| `human-blocked`                            | cleanup + drop; the parked ticket is then honored at step 6                                |
-| `decomposed`                               | cleanup; record the parent as a **deferred-finalization** entry (§Deferred finalization)   |
-| `failed` (verification, `retryable=true`)  | **re-dispatch** on a later tick                                                            |
+| Outcome                                    | Action                                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `verified`                                 | cleanup + drop (terminal; coordinator owns the §2.3 transition + DoD artifact)              |
+| `canceled`                                 | cleanup + drop (terminal; a `canceled` ancestor unblocks dependents on the next fetch)      |
+| `delivered`                                | cleanup + drop; a **separate** verification work item later takes the ticket to `verified`  |
+| `human-blocked`                            | cleanup + drop; the parked ticket is then honored at step 6                                 |
+| `decomposed`                               | cleanup; record the parent as a **deferred-finalization** entry (§Deferred finalization)    |
+| `failed` (verification, `retryable=true`)  | **re-dispatch** on a later tick                                                             |
 | `failed` (verification, `retryable=false`) | **park** (the verification gate stays blocked); surface to the operator; **no** re-dispatch |
-| `failed` (other)                           | cleanup + drop; surface to the operator; **no** auto-re-dispatch                          |
+| `failed` (other)                           | cleanup + drop; surface to the operator; **no** auto-re-dispatch                            |
 
 **No outcome artifact** → reconcile by liveness:
 
@@ -268,16 +271,16 @@ while its subtasks run.
 
 All state lives on disk or in the tracker/forge — never only in memory:
 
-| State                  | Location                                                                   |
-| ---------------------- | -------------------------------------------------------------------------- |
-| Durable graph + cursor | on-disk normalized cache                                                   |
-| Active work set        | on-disk file (coordinators + deferred-finalization + human-blocked)        |
-| Slot ledger            | on-disk, `MAX_PARALLEL` compute entries (shared by all agents)             |
-| Liveness locks         | on-disk, ticket- or PR-keyed (coordinator) / milestone-keyed (review)      |
-| Outcome artifacts      | on-disk, written by each dispatched unit                                   |
-| Milestone summaries    | on-disk, written at milestone boundaries                                   |
-| Ticket roles & history | the tracker (authoritative)                                                |
-| PR terminal state      | the forge (authoritative)                                                  |
+| State                  | Location                                                              |
+| ---------------------- | --------------------------------------------------------------------- |
+| Durable graph + cursor | on-disk normalized cache                                              |
+| Active work set        | on-disk file (coordinators + deferred-finalization + human-blocked)   |
+| Slot ledger            | on-disk, `MAX_PARALLEL` compute entries (shared by all agents)        |
+| Liveness locks         | on-disk, ticket- or PR-keyed (coordinator) / milestone-keyed (review) |
+| Outcome artifacts      | on-disk, written by each dispatched unit                              |
+| Milestone summaries    | on-disk, written at milestone boundaries                              |
+| Ticket roles & history | the tracker (authoritative)                                           |
+| PR terminal state      | the forge (authoritative)                                             |
 
 After a loss of on-disk state, recover from a **full producer sync** plus the
 forge's open-PR list: missing locks mean no live units, and the next tick
@@ -318,16 +321,17 @@ state from disk and the tracker and continues.
 From the plugin's `userConfig` (env `CLAUDE_PLUGIN_OPTION_*`), forwarded to every
 dispatched unit:
 
-| key                 | effect                                                                                       |
-| ------------------- | -------------------------------------------------------------------------------------------- |
-| `operator_login`    | operator's GitHub login; forwarded to coordinators, used for §2.1 routing. Required.          |
-| `tracker`           | **default** tracker (default `linear`); all selected projects share one tracker (§2.3).      |
-| `worktree_base`     | forwarded through coordinators to `deliver` (per-PR worktrees). Default `~/.worktrees`.       |
-| `team_mode`         | forwarded through coordinators to `deliver` (review shape). Default `false`.                  |
-| `copilot_available` | forwarded through coordinators to `deliver`. Default `true`.                                  |
+| key                 | effect                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `operator_login`    | operator's GitHub login; forwarded to coordinators, used for §2.1 routing. Required.    |
+| `tracker`           | **default** tracker (default `linear`); all selected projects share one tracker (§2.3). |
+| `worktree_base`     | forwarded through coordinators to `deliver` (per-PR worktrees). Default `~/.worktrees`. |
+| `team_mode`         | forwarded through coordinators to `deliver` (review shape). Default `false`.            |
+| `copilot_available` | forwarded through coordinators to `deliver`. Default `true`.                            |
+| `max_parallel`      | the local-compute slot-ledger bound `MAX_PARALLEL` (§Slot ledger). Default `4`.         |
 
-The producer adapter, `MAX_PARALLEL`, the state root, and the staleness threshold
-are implementation/configuration details; the producer adapter is selected
+The producer adapter, the state root, and the staleness threshold are
+implementation/configuration details; the producer adapter is selected
 independently of the §2.1 mode (§Credential modes).
 
 See [`reference.md`](./reference.md) for the project-graph wire format, the slot

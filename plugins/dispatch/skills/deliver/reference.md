@@ -182,13 +182,13 @@ One line per entry:
 
 Kinds `deliver` emits:
 
-| Kind         | When                                                                                    |
-| ------------ | --------------------------------------------------------------------------------------- |
-| `INFO`       | Heartbeats while polling; substantive non-state events.                                 |
-| `WAIT`       | Entering a poll; message names the venue and awaited outcome.                           |
-| `RESUME`     | The awaited condition is met and work resumes.                                          |
-| `ERROR`      | Errors surfaced but not immediately fatal.                                              |
-| `TRANSITION` | (Ticket-driven runs) a ticket role change.                                             |
+| Kind         | When                                                                                                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INFO`       | Heartbeats — each tick while polling inline; one per wake in event-driven mode (silence between wakes is by design). Substantive non-state events. |
+| `WAIT`       | Entering a poll; event-driven: immediately before each yield. Names the venue, the awaited outcome, and (event-driven) `next_wakeup_at`.           |
+| `RESUME`     | The awaited condition is met and work resumes; event-driven: also on every wake, before the tick.                                                  |
+| `ERROR`      | Errors surfaced but not immediately fatal.                                                                                                         |
+| `TRANSITION` | (Ticket-driven runs) a ticket role change.                                                                                                         |
 
 When a linked ticket's role changes, also post a state-change comment to the PR
 (or ticket) in wire format, body exactly:

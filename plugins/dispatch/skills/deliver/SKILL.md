@@ -257,12 +257,14 @@ Apply in every state.
   ones. The PR body's Motivation/Test plan stay stable.
 - **First green.** Gate 1 needs a green rollup achieved *after* the agent first
   attempts to leave `draft`. Earlier greens don't count.
-- **Heartbeats.** While polling, emit INFO heartbeats (see
-  [`reference.md`](./reference.md#operational-logging); `ticket=-` when none).
+- **Heartbeats.** Inline loop: emit INFO heartbeats while polling. Event-driven
+  mode: one per wake — silence between wakes is by design. (See
+  [`reference.md`](./reference.md#operational-logging); `ticket=-` when none.)
 - **Termination is narrow.** Only PR closure or explicit operator "stop"
   terminates. Plan completion, green CI, review requests, `ready_for_merge`, and
   "nobody to ask" do not. The agent runs the loop through itself (§Polling) and
-  is never re-prodded.
+  is never re-prodded *by the caller* — wakeups the agent armed itself
+  (event-driven mode) are part of the loop, not re-prodding.
 - **Re-derive termination each tick** from the current `pr-status`. Never carry
   "if X then stop" across ticks — the loop amplifies them.
 
@@ -271,35 +273,119 @@ Apply in every state.
 Adaptive, not fixed. Build project memory to dodge needless traffic. **Never
 poll faster than once per minute.**
 
-| Waiting on                             | Schedule                                                                                 |
-| -------------------------------------- | ---------------------------------------------------------------------------------------- |
-| CI (`<checks state="pending">`)        | 60 s; lengthen to ~5 min once past the project's typical CI duration.                    |
-| Reviewer reply after a request         | 5 min for the first hour; then 30 min.                                                    |
-| Operator to clear draft (team)         | 5 min for the first hour; then 30 min.                                                    |
-| Merge after `ready_for_merge`          | 5 min for the first hour; then 30 min.                                                    |
+| Waiting on                      | Schedule                                                              |
+| ------------------------------- | --------------------------------------------------------------------- |
+| CI (`<checks state="pending">`) | 60 s; lengthen to ~5 min once past the project's typical CI duration. |
+| Reviewer reply after a request  | 5 min for the first hour; then 30 min.                                |
+| Operator to clear draft (team)  | 5 min for the first hour; then 30 min.                                |
+| Merge after `ready_for_merge`   | 5 min for the first hour; then 30 min.                                |
 
-### Mechanism
+### Mode selection
 
-The agent **is** the poll loop — inline, sequential foreground tool calls
-(`Bash` `sleep`, then a `pr-status` re-read and any reactive work). Stay
+The waiting *mechanism* depends on two axes — execution environment and
+invocation context:
+
+| Environment    | Main agent                                                  | Subagent                                  |
+| -------------- | ----------------------------------------------------------- | ----------------------------------------- |
+| Local CLI      | Inline loop; bounded waits via foreground `sleep`           | Same as local main                        |
+| Remote sandbox | Event-driven; degrade to inline loop with `Monitor` waits   | Inline loop; bounded waits via `Monitor`  |
+
+Resolve the cell once at entry and record it in the wait-state file:
+
+1. **Invocation** — read `agent_context=main|subagent` from the dispatch brief.
+   Standalone `/deliver` → `main`. Absent or unknown → `subagent` (the inline
+   loop never yields, so it is safe everywhere).
+2. **Environment** — probe `Bash` `sleep 1`. Succeeds → local. Blocked (remote
+   sandboxes block foreground `sleep`, subagents included) → remote.
+3. **Remote main** — `send_later` (claude-code-remote MCP) available →
+   event-driven; also `subscribe_pr_activity` when present. No `send_later` →
+   inline loop with bounded `Monitor` waits.
+
+### Bounded wait
+
+One wait tick of **≤ ~10 min**, after which control returns to the agent:
+
+- **Local** — foreground `Bash` `sleep N`.
+- **Remote** — arm `Monitor` with a pure wall-clock deadline ≤ 10 min out (an
+  until-loop on the clock, never on the awaited outcome); treat the wake
+  exactly like `sleep` returning.
+
+Schedule entries past 10 min split into ticks (a 30-min wait ≈ 5×6-min ticks,
+each followed by a cheap `pr-status` check). Re-checking more often than the
+schedule is fine; the table is an upper bound.
+
+A bounded wait is **not a yield**. *Yield* = ending the turn. The rule:
+subagents and inline-mode main agents never yield before a lifecycle terminal;
+an event-driven main agent yields only with a confirmed armed check-in recorded
+in wait-state.
+
+### Inline loop
+
+The agent **is** the poll loop — inline, sequential foreground tool calls (a
+bounded wait, then a `pr-status` re-read and any reactive work). Stay
 continuously active in the current turn until a lifecycle terminal; never yield
-the turn, hand off to a wakeup, or expect re-prodding. Holds whether `deliver`
-is invoked directly or dispatched as a subagent.
+the turn or expect re-prodding. This is the **only** conforming mechanism for
+subagents — webhook events and scheduled wakeups land in the main transcript,
+never in a subagent — and for any main agent outside event-driven mode.
 
-For waits past the Bash timeout (~10 min), split into shorter intervals (a
-30-min wait ≈ 5×6-min `sleep`s, each followed by a cheap `pr-status` check).
-Re-checking more often than the schedule is fine; the table is an upper bound.
+### Event-driven waiting
 
-**Forbidden** (each has stranded a PR):
+Remote main agents only. The session can be woken between turns, so long waits
+need not burn the loop:
+
+- **Subscribe** on entry/resume: `subscribe_pr_activity` for the PR when the
+  tool exists. Webhooks deliver comments, reviews, and CI *failures* — **not**
+  CI success, new pushes, or merge-conflict transitions. The armed check-in
+  therefore carries termination detection; the subscription only lowers
+  reactive latency and is required only where the tool exists.
+- **End of each tick** — exactly one of: more work now → keep going; expected
+  wait **short** (under one bounded tick, by `_history.jsonl` median — e.g.
+  fast CI) → take an inline bounded wait, don't yield; expected wait **long** →
+  arm a `send_later` check-in at the adaptive-schedule interval, log `WAIT`
+  naming `next_wakeup_at`, write wait-state, end the turn.
+- **Never yield on an unconfirmed arm.** If `send_later` errors, retry once,
+  then run the remainder of the lifecycle as an inline loop.
+- **On wake** (webhook or check-in): log `RESUME` + heartbeat, re-read
+  `pr-status`, do the reactive work, re-arm, yield again. Ticks are idempotent;
+  duplicate or stale wakes are cheap no-ops. Track exactly one logical
+  `next_wakeup_at` (cancel-and-replace where supported).
+- **Terminal**: best-effort unsubscribe, stop re-arming, clear wait-state, run
+  cleanup. A leaked subscription only produces no-op post-terminal ticks that
+  re-attempt the unsubscribe.
+- An out-of-band operator "stop" is observed at the next wake — latency bounded
+  by `next_wakeup_at`. Known property, by design; a stop posted on the PR wakes
+  the session via webhook.
+
+### Wait state
+
+Maintain `<cache-base>/<skill>/<repo-slug>/<pr-number>/wait-state.json`:
+
+```json
+{ "agent_id": "...", "pr_url": "...", "lifecycle_state": "...", "mode": "inline|event", "subscription_active": false, "next_wakeup_at": "...", "updated_at": "..." }
+```
+
+Write it at entry, on every lifecycle transition, and before every yield; clear
+it at terminal. Callers judge staleness by `now > next_wakeup_at + grace` —
+never by fixed heartbeat age (an event-mode agent is silent between wakes by
+design).
+
+### Forbidden
+
+Each has stranded a PR:
 
 - **Detached background poll loops** — any `run_in_background` Bash repeating
   `touch <lock>; sleep; poll` (`while`, `until`, `nohup`, `disown`, …). The OS
-  process polls forever while the agent is reaped; the PR sits orphaned.
-- **`Monitor` as the poll vehicle** — the armed-monitor wake observably fails on
-  long polls. Use foreground `sleep`.
-- **Ending the turn before a lifecycle terminal** — returning early for "no work
-  right now" or "the caller will check back" orphans the PR. Don't design a
-  caller around mid-lifecycle re-dispatch.
+  process polls forever while the agent is reaped; the PR sits orphaned. A
+  background process's exit does not reliably wake the agent — it is never a
+  waiting vehicle.
+- **Long-armed `Monitor`** — armed past ~10 min, or with the awaited outcome as
+  its condition ("until CI green"): the wake observably fails on long polls.
+  Only bounded wall-clock deadlines, re-armed each tick (§Bounded wait).
+- **Yielding without a wakeup** — subagents and inline-mode mains never end the
+  turn before a lifecycle terminal; an event-driven main never ends it without
+  a confirmed armed check-in in wait-state. "No work right now" or "the caller
+  will check back" orphans the PR; don't design a caller around mid-lifecycle
+  re-dispatch.
 
 At a lifecycle terminal (or a caught operator "stop") run whatever cleanup the
 dispatch brief specifies (lock removal, `agent-working` label removal, status
@@ -317,7 +403,8 @@ wait, append one line:
 
 On entry to a polling state, read the median `elapsed_s` for that kind and tune
 the schedule (shorten the head for fast CI; lengthen the tail for slow
-reviewers). Cap at ~100 entries per kind.
+reviewers). The same medians size event-mode check-in intervals and the
+short/long yield threshold. Cap at ~100 entries per kind.
 
 ## Configuration
 

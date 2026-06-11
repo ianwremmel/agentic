@@ -52,7 +52,10 @@ Same rules; only the reporting surface differs. **Standalone** — a human runs
 `/work-ticket <ID>`; report the outcome to the session. **Dispatched** — the §2.6
 orchestrator hands over the item and expects an outcome artifact + heartbeated lock
 ([`reference.md`](./reference.md#dispatch-artifacts)), and passes identity/mode +
-operator login, which you forward to every `deliver`.
+operator login + `agent_context` (absent → assume `subagent`), which you forward
+to every `deliver`. Staleness note: an event-mode `deliver` (remote main agent)
+is silent between wakes by design — judge its liveness by the `next_wakeup_at`
+in its wait-state file, never by fixed heartbeat age.
 
 Assigned for the run, you are bound by the §2.3 **communication restriction**:
 never solicit a session response or block on session input for progress; route
@@ -83,11 +86,16 @@ straight to `in-progress`.
 
 Drive each in-scope unit's PR to terminal through `deliver` — one §2.4 instance
 each. Invoke `dispatch:deliver` inline (single PR) or as a subagent (concurrent
-PRs), forwarding operator login + identity/mode. **Sequential by default** (one
-building PR at a time, keeping PRs small and the ledger draw minimal); go
-concurrent only for independent work, one slot per building PR. Record the
-ticket↔PR mapping on the ticket as each PR opens. Read a delegated PR's status only
-via §2.4/§2.2.
+PRs), forwarding operator login + identity/mode + `agent_context`:
+subagent-dispatched → `subagent`; inline → your **own** effective context
+(`main` only when work-ticket itself runs standalone in the main session —
+dispatched, you are a subagent and so is an inline deliver); unknown at any hop
+→ `subagent`. **Sequential by default** (one building PR at a time, keeping PRs
+small and the ledger draw minimal); go concurrent only for independent work,
+one slot per building PR. In a remote sandbox, concurrent deliver subagents
+each run an inline bounded-`Monitor` loop holding context for the whole PR life
+— supported, but weigh against sequential. Record the ticket↔PR mapping on the
+ticket as each PR opens. Read a delegated PR's status only via §2.4/§2.2.
 
 ## Sync the role (§2.3)
 

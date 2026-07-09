@@ -10,7 +10,7 @@
     "source": { "type": ["string", "null"] },
     "cursor": {
       "type": ["string", "null"],
-      "description": "The latest opaque sync cursor. The orchestrator persists this and passes it back on the next delta."
+      "description": "The latest opaque sync cursor, echoed for visibility. Its durable home is the graph cache (graph.json), which build-graph/derive rewrite atomically each tick — the single source of truth. The orchestrator does not persist or pass the cursor itself; it passes cache_path to build-graph, which reads the cursor from the cache to request the next delta."
     },
     "projects": { "type": "array", "items": { "type": "string" } },
     "nodes": {

@@ -29,7 +29,15 @@ if [[ "${CMD}" == "--dir" ]]; then DIR="${1:-}"; shift; CMD="${1:-}"; shift || t
 command -v jq >/dev/null || { echo "locks: jq required" >&2; exit 2; }
 
 now() { date +%s; }
-path_for() { printf '%s/%s.json' "$DIR" "$1"; }
+path_for() {  # reject keys that would escape the lock dir; callers slug, we verify
+  case "$1" in
+    ""|*/*|*..*) echo "locks: invalid key '$1' (must be non-empty and contain no '/' or '..')" >&2; exit 2 ;;
+  esac
+  printf '%s/%s.json' "$DIR" "$1"
+}
+require_int() {  # require_int <val> <what>
+  [[ "$1" =~ ^[0-9]+$ ]] || { echo "locks: $2 must be an integer" >&2; exit 2; }
+}
 
 write_atomic() {  # write_atomic <file> <json>
   local tmp; tmp="$(mktemp "$1.XXXXXX")"
@@ -55,7 +63,7 @@ do_heartbeat() {
 }
 
 do_alive() {
-  local key="$1" stale="$2" f owner hb; f="$(path_for "$key")"
+  local key="$1" stale="$2" f owner hb; require_int "$stale" "<stale_sec>"; f="$(path_for "$key")"
   [[ -f "$f" ]] || return 1
   owner="$(jq -r '.agent_id // empty' "$f")"; hb="$(jq -r '.heartbeat // 0' "$f")"
   if (( $(now) - hb <= stale )); then echo "$owner"; return 0; fi
@@ -67,7 +75,7 @@ do_owner() { local f; f="$(path_for "$1")"; [[ -f "$f" ]] && jq -r '.agent_id //
 do_clear() { rm -f "$(path_for "$1")"; }
 
 do_sweep() {
-  local stale="$1" cutoff f owner hb; cutoff=$(( $(now) - stale ))
+  local stale="$1" cutoff f owner hb; require_int "$stale" "<stale_sec>"; cutoff=$(( $(now) - stale ))
   shopt -s nullglob
   for f in "$DIR"/*.json; do
     hb="$(jq -r '.heartbeat // 0' "$f")"

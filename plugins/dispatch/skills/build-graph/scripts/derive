@@ -219,12 +219,27 @@ def compute(cache: dict, exclude: set, top: list) -> dict:
     def is_blocked(nid: str) -> bool:
         return dep_blocked(nid) or milestone_blocked(nodes[nid], cache, gate_open)
 
-    # transitive-dependent count = unblocking leverage (for ranking)
-    dependents: dict = {nid: 0 for nid in nodes}
+    # transitive-dependent count = unblocking leverage (for ranking): how many
+    # nodes (transitively) depend on a node — the reach it frees when it lands.
+    # Reverse adjacency + reverse-reachability; cycle-safe via the visited set.
+    rdeps: dict = {nid: [] for nid in nodes}
     for nid, n in nodes.items():
         for b in n.get("blocked_by", []):
-            if b in dependents:
-                dependents[b] += 1
+            if b in rdeps:
+                rdeps[b].append(nid)
+
+    def leverage(nid: str) -> int:
+        seen: set = set()
+        stack = list(rdeps.get(nid, []))
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            stack.extend(rdeps.get(cur, []))
+        return len(seen)
+
+    dependents: dict = {nid: leverage(nid) for nid in nodes}
 
     def human(n: dict) -> bool:
         return bool(n.get("human_interactive")) or n.get("role") in PARKED_ROLES

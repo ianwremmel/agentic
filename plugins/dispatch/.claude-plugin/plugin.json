@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
-  "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.8.0",
+  "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge), per-ticket coordination, and tracker-neutral project orchestration over a dependency graph.",
+  "version": "0.9.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -46,8 +46,20 @@
     "tracker": {
       "type": "string",
       "title": "Work-item tracker",
-      "description": "Default work-item tracker for `work-ticket`. For ticket-backed work the tracker is resolved from the ticket's URL, so a Linear-by-default install still handles a project whose tickets live on another tracker; this value is the fallback when the ticket URL is ambiguous. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) The skill body speaks §2.3 roles; the tracker-specific mapping lives in the skill's reference.md, the same seam a §2.6 producer reuses. Only `linear` is implemented today — a ticket on any other tracker errors.",
+      "description": "Default work-item tracker for `work-ticket`. For ticket-backed work the tracker is resolved from the ticket's URL, so a Linear-by-default install still handles a project whose tickets live on another tracker; this value is the fallback when the ticket URL is ambiguous. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) It also selects the `build-graph` producer adapter (`build-graph-<tracker>`) for `work-project` orchestration. The skill body speaks §2.3 roles; the tracker-specific mapping lives in the skill's reference.md, the same seam a §2.6 producer reuses. Only `linear` is implemented today — a ticket on any other tracker errors.",
       "default": "linear"
+    },
+    "max_parallel": {
+      "type": "number",
+      "title": "Max parallel compute slots",
+      "description": "MAX_PARALLEL for `work-project` orchestration: the size of the shared compute-slot ledger that bounds how many agents (coordinators and their deliver workers) may be in a local-compute stage (write code, install, build, test) at once. Slots gate local compute, not work-in-flight — an open PR awaiting CI/review/merge holds no slot. Default 3.",
+      "default": 3
+    },
+    "human_interactive_label": {
+      "type": "string",
+      "title": "Human-interactive ticket signal",
+      "description": "Tracker label (or field value) that marks a ticket as human-interactive for `work-project` orchestration: the orchestrator parks it in awaiting-external, keeps exactly one outstanding human alert, and never dispatches a coordinator for it. Forwarded to the `build-graph` producer, which surfaces it on the graph node. Unset disables the explicit-signal path (worker-discovered handoffs still park tickets).",
+      "default": "human-interactive"
     }
   }
 }

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# state — atomic on-disk bookkeeping for the §2.6 orchestrator.
+#
+# The orchestrator is STATELESS across ticks: every decision derives from disk.
+# This helper owns the small named JSON blobs (the active work set, the persisted
+# sync cursor) with atomic write-temp-then-rename, plus the injection inbox drain.
+# The durable graph itself is written by build-graph/scripts/derive; the slot
+# ledger and liveness locks have their own scripts (`slots`, `locks`).
+#
+# Base dir: --base <path> or env DISPATCH_STATE_DIR. Layout under the base:
+#   <name>.json        named blobs (e.g. active-set.json, cursor.json)
+#   inbox/             injection drop directory (one *.json per injected item)
+#
+# Usage:
+#   state put <name>              read JSON from stdin, write <name>.json atomically
+#   state get <name>              print <name>.json (empty if absent)
+#   state inbox-add <json>        drop one injection item into the inbox
+#   state inbox-drain             print a JSON array of all inbox items, then remove them
+#
+# Requires: jq. Exit: 2 usage.
+set -euo pipefail
+
+BASE="${DISPATCH_STATE_DIR:-}"
+CMD="${1:-}"; shift || true
+if [[ "${CMD}" == "--base" ]]; then BASE="${1:-}"; shift; CMD="${1:-}"; shift || true; fi
+[[ -n "$BASE" ]] || { echo "state: set DISPATCH_STATE_DIR or pass --base <path>" >&2; exit 2; }
+command -v jq >/dev/null || { echo "state: jq required" >&2; exit 2; }
+
+blob() { printf '%s/%s.json' "$BASE" "$1"; }
+
+put() {
+  local f; f="$(blob "${1:?usage: state put <name>}")"; mkdir -p "$BASE"
+  local tmp; tmp="$(mktemp "$f.XXXXXX")"
+  if jq . >"$tmp" </dev/stdin; then mv -f "$tmp" "$f"; else rm -f "$tmp"; echo "state put: invalid JSON on stdin" >&2; exit 2; fi
+}
+
+get() { local f; f="$(blob "${1:?usage: state get <name>}")"; [[ -f "$f" ]] && cat "$f" || true; }
+
+inbox_add() {
+  local item="${1:?usage: state inbox-add <json>}" d="$BASE/inbox"
+  mkdir -p "$d"
+  jq -e . >/dev/null 2>&1 <<<"$item" || { echo "state inbox-add: invalid JSON" >&2; exit 2; }
+  local tmp; tmp="$(mktemp "$d/item.XXXXXX")"
+  printf '%s\n' "$item" >"$tmp"; mv -f "$tmp" "$tmp.json"
+}
+
+inbox_drain() {
+  local d="$BASE/inbox" f items=() ; shopt -s nullglob
+  # Atomically claim each file by renaming aside before reading, so a concurrent
+  # injector writing a NEW file is never lost.
+  for f in "$d"/*.json; do
+    local claimed="$f.draining"
+    mv -f "$f" "$claimed" 2>/dev/null || continue
+    items+=("$claimed")
+  done
+  if ((${#items[@]}==0)); then echo '[]'; return 0; fi
+  jq -s '.' "${items[@]}"
+  rm -f "${items[@]}"
+}
+
+case "$CMD" in
+  put)         put "${1:-}" ;;
+  get)         get "${1:-}" ;;
+  inbox-add)   inbox_add "${1:-}" ;;
+  inbox-drain) inbox_drain ;;
+  *) echo "state: unknown command '${CMD}' (put|get|inbox-add|inbox-drain)" >&2; exit 2 ;;
+esac

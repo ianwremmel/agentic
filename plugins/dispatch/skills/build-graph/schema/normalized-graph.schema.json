@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dispatch/normalized-graph",
+  "title": "Normalized graph (adapter output)",
+  "description": "What a per-tracker producer ADAPTER emits: a tracker-neutral, already-role-mapped snapshot (`sync`) or change set (`delta`). This is the ONLY tracker-specific step; all graph reasoning is done downstream by `scripts/derive`, which consumes exactly this shape. An adapter MUST map its tracker's substates to §2.3 roles/groups and MUST NOT compute blocking, ranking, or derived sections.",
+  "type": "object",
+  "required": ["schema", "kind", "source"],
+  "properties": {
+    "schema": { "const": "dispatch/normalized-graph@1" },
+    "kind": {
+      "enum": ["sync", "delta"],
+      "description": "`sync` = the complete document for the selected projects (replaces the cache). `delta` = only what changed since `cursor` (upsert nodes/milestones/projects; `removed` deletes). Incremental delta is the steady state; sync is first-run/recovery/cursor-gap fallback."
+    },
+    "source": {
+      "type": "string",
+      "description": "Opaque per-source id identifying the tracker + selected project set. Stable across ticks so the orchestrator can key its cursor."
+    },
+    "cursor": {
+      "type": ["string", "null"],
+      "description": "Opaque tracker-defined cursor (Linear updatedAt, Jira updated, GitHub since). The orchestrator persists it and passes it back to request the next delta; it never interprets it."
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      }
+    },
+    "milestones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "project", "order"],
+        "properties": {
+          "id": { "type": "string" },
+          "project": { "type": "string" },
+          "name": { "type": "string" },
+          "order": {
+            "type": "integer",
+            "description": "Sequence within the project (0-based). derive uses it to gate later milestones on earlier ones' review (§2.3). Adapters MUST supply a total order per project."
+          },
+          "ready_for_review": {
+            "type": "boolean",
+            "description": "Tracker signal that the milestone is ready for its §2.3 review. derive FORCES this false when the milestone still has unresolved work (stale-review guard), so an adapter may pass the raw tracker signal without pre-checking completeness."
+          },
+          "review_recorded": {
+            "type": "boolean",
+            "description": "Whether the current ready-for-review episode's review has been recorded. derive forces it false whenever ready_for_review is false, so a stale record can never suppress §2.3 re-review."
+          }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "role", "group", "target_kind"],
+        "properties": {
+          "id": { "type": "string" },
+          "url": { "type": "string" },
+          "project": { "type": "string" },
+          "milestone": { "type": ["string", "null"] },
+          "role": {
+            "type": "string",
+            "description": "§2.3 role (adapter maps its substate -> role). Only `verified` and `canceled` clear a dependency; `awaiting-external`/`paused` mark a park."
+          },
+          "group": {
+            "enum": ["backlog", "unstarted", "started", "completed", "canceled"],
+            "description": "§2.3 top-level group."
+          },
+          "target_kind": {
+            "enum": ["pr", "verification", "human-only"],
+            "description": "What working the ticket entails. `human-only` is never dispatched to a coordinator."
+          },
+          "human_interactive": {
+            "type": "boolean",
+            "description": "True when the configured tracker signal (a label/field) marks the ticket for a human (§2.6). Such nodes are surfaced as human-blocked and never dispatched."
+          },
+          "terminated_without_verify": {
+            "type": "boolean",
+            "description": "Tracker-dependent classification: the ticket reached a dead terminal that is NOT `verified` and NOT `canceled` and will not progress (e.g. failed/abandoned-and-parked). derive uses it to classify permanently-blocked dependents. A `canceled` ticket MUST NOT set this (cancellation unblocks)."
+          },
+          "labels": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Consumed by the orchestrator ONLY as the source of the human_interactive signal; never to reason over ticket content."
+          },
+          "branch_seed": {
+            "type": ["string", "null"],
+            "description": "Non-authoritative dispatch hint forwarded to the coordinator."
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ids this node directly depends on (§2.3 dependency edges). Same-tracker cross-project edges are allowed and surfaced as anomalies; cross-tracker edges are illegal (§2.3)."
+          }
+        }
+      }
+    },
+    "removed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "delta only: node/milestone/project ids removed since the cursor."
+    }
+  }
+}

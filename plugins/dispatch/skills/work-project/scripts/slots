@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# slots — the §2.6 compute-slot ledger (MAX_PARALLEL local-compute capacity).
+#
+# One shared on-disk ledger of MAX_PARALLEL entries. EVERY agent that may compute
+# — coordinators and the §2.4 delivery workers they spawn — draws from this one
+# ledger, so concurrent local builds never exceed the bound. An entry is held only
+# while an agent is in a compute stage (write code / install / build / test) and
+# released on any wait (CI, review, merge, handoff, idle) or on exit. A PR that is
+# merely open awaiting CI holds NO slot.
+#
+# The binding bound is the ATOMIC acquire here (flock-guarded); the orchestrator's
+# start-of-step free-count is only a soft admission gate. Stale entries (crashed
+# owner) are reclaimed by heartbeat age so capacity can't leak.
+#
+# Ledger path: --ledger <path> or env DISPATCH_LEDGER. Owner: an agent id.
+#
+# Usage:
+#   slots init <max>            create the ledger if absent (idempotent)
+#   slots free-count            print number of free entries
+#   slots acquire <owner>       claim one free entry -> prints slot #; exit 3 if full
+#   slots heartbeat <owner>     refresh heartbeat on owner's entries; exit 4 if none
+#   slots release <owner>       free all entries held by owner
+#   slots reclaim <stale_sec>   free entries whose heartbeat is older than stale_sec
+#   slots list                  dump the ledger JSON
+#
+# Requires: jq. Exit codes: 2 usage, 3 ledger full, 4 no owned entry.
+set -euo pipefail
+
+LEDGER="${DISPATCH_LEDGER:-}"
+CMD="${1:-}"; shift || true
+if [[ "${CMD}" == "--ledger" ]]; then LEDGER="${1:-}"; shift; CMD="${1:-}"; shift || true; fi
+[[ -n "$LEDGER" ]] || { echo "slots: set DISPATCH_LEDGER or pass --ledger <path>" >&2; exit 2; }
+command -v jq >/dev/null || { echo "slots: jq required" >&2; exit 2; }
+
+now() { date +%s; }
+
+_with_lock() {  # _with_lock <fn> [args...] — serialize read-modify-write
+  mkdir -p "$(dirname "$LEDGER")"
+  exec 9>"$LEDGER.lock"
+  flock 9
+  "$@"
+}
+
+_read() { [[ -f "$LEDGER" ]] && cat "$LEDGER" || echo '{"max":0,"entries":[]}'; }
+
+_write() {  # _write <json> — atomic replace
+  local tmp; tmp="$(mktemp "$LEDGER.XXXXXX")"
+  printf '%s\n' "$1" >"$tmp"
+  mv -f "$tmp" "$LEDGER"
+}
+
+do_init() {
+  local max="$1"
+  [[ "$max" =~ ^[0-9]+$ ]] || { echo "slots init: <max> must be an integer" >&2; exit 2; }
+  if [[ -f "$LEDGER" ]]; then return 0; fi   # idempotent: never clobber a live ledger
+  _write "$(jq -cn --argjson m "$max" '{max:$m, entries:[range(0;$m)|{slot:., owner:null, heartbeat:0}]}')"
+}
+
+do_free_count() { _read | jq '[.entries[]|select(.owner==null)]|length'; }
+
+do_acquire() {
+  local owner="$1" j slot
+  j="$(_read)"
+  slot="$(jq -r 'first(.entries[]|select(.owner==null)|.slot) // empty' <<<"$j")"
+  [[ -n "$slot" ]] || exit 3
+  _write "$(jq -c --argjson s "$slot" --arg o "$owner" --argjson t "$(now)" \
+    '(.entries[]|select(.slot==$s)) |= (.owner=$o | .heartbeat=$t)' <<<"$j")"
+  echo "$slot"
+}
+
+do_heartbeat() {
+  local owner="$1" j n
+  j="$(_read)"
+  n="$(jq --arg o "$owner" '[.entries[]|select(.owner==$o)]|length' <<<"$j")"
+  [[ "$n" -gt 0 ]] || exit 4
+  _write "$(jq -c --arg o "$owner" --argjson t "$(now)" \
+    '(.entries[]|select(.owner==$o)).heartbeat=$t' <<<"$j")"
+}
+
+do_release() {
+  local owner="$1" j
+  j="$(_read)"
+  _write "$(jq -c --arg o "$owner" \
+    '(.entries[]|select(.owner==$o)) |= (.owner=null | .heartbeat=0)' <<<"$j")"
+}
+
+do_reclaim() {
+  local stale="$1" j cutoff
+  [[ "$stale" =~ ^[0-9]+$ ]] || { echo "slots reclaim: <stale_sec> must be an integer" >&2; exit 2; }
+  cutoff=$(( $(now) - stale ))
+  j="$(_read)"
+  jq -r --argjson c "$cutoff" \
+    '.entries[]|select(.owner!=null and .heartbeat<$c)|"\(.slot)\t\(.owner)"' <<<"$j"
+  _write "$(jq -c --argjson c "$cutoff" \
+    '(.entries[]|select(.owner!=null and .heartbeat<$c)) |= (.owner=null | .heartbeat=0)' <<<"$j")"
+}
+
+case "$CMD" in
+  init)       _with_lock do_init "${1:?usage: slots init <max>}" ;;
+  free-count) do_free_count ;;
+  acquire)    _with_lock do_acquire "${1:?usage: slots acquire <owner>}" ;;
+  heartbeat)  _with_lock do_heartbeat "${1:?usage: slots heartbeat <owner>}" ;;
+  release)    _with_lock do_release "${1:?usage: slots release <owner>}" ;;
+  reclaim)    _with_lock do_reclaim "${1:?usage: slots reclaim <stale_sec>}" ;;
+  list)       _read ;;
+  *) echo "slots: unknown command '${CMD}' (init|free-count|acquire|heartbeat|release|reclaim|list)" >&2; exit 2 ;;
+esac

@@ -5,15 +5,39 @@
 #   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> \
 #     DISPATCH_OPERATOR_LOGIN=<login> pr-status <pr>
 #
+# The three DISPATCH_* inputs are all required and hard-fail if unset. Plugin
+# option values are NOT present in this process's environment (the harness only
+# exports CLAUDE_PLUGIN_OPTION_* to hook/MCP subprocesses, not to the agent's
+# Bash calls), so the invoking skill must interpolate ${user_config.*} into the
+# invocation — e.g. DISPATCH_OPERATOR_LOGIN=${user_config.operator_login}.
+#
 # Requires: gh, jq, claude. Run from inside the repo's git worktree.
 
 set -euo pipefail
 
 PR="${1:-}"
 [[ -n "$PR" ]] || { echo "usage: pr-status <pr>" >&2; exit 2; }
+
+# Required tools: the script cannot emit valid XML without gh + jq. Fail loudly
+# up front rather than partway through with a cryptic error. (git and claude
+# degrade gracefully in content_present/summarize, so they are not hard-required.)
+for _tool in gh jq; do
+  command -v "$_tool" >/dev/null 2>&1 \
+    || { echo "pr-status: required tool not found on PATH: $_tool" >&2; exit 3; }
+done
+
 : "${DISPATCH_AGENT_ID:?DISPATCH_AGENT_ID required}"
 : "${DISPATCH_SKILL:?DISPATCH_SKILL required}"
 : "${DISPATCH_OPERATOR_LOGIN:?DISPATCH_OPERATOR_LOGIN required (operator GitHub login; see §2.2.2 Operator identity)}"
+
+# Catch a botched interpolation: if the skill forwarded a literal
+# `${user_config.operator_login}` (or any unsubstituted `${...}` placeholder)
+# instead of the resolved plugin-option value, fail loudly — proceeding would
+# silently misclassify every <review role> and never satisfy Gate 6.
+case "$DISPATCH_OPERATOR_LOGIN" in
+  *'${'*) echo "pr-status: DISPATCH_OPERATOR_LOGIN is an unsubstituted plugin-config placeholder ($DISPATCH_OPERATOR_LOGIN); the skill must interpolate \${user_config.operator_login} before invoking" >&2; exit 2 ;;
+esac
+
 OPERATOR_LC="$(printf '%s' "$DISPATCH_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
 
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"

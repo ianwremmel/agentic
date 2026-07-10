@@ -11,31 +11,17 @@ actionable concern, then evaluate the gates to decide whether to transition.
 **Operator** = the one human directing this agent; the only human with stop
 authority. Role glossary in [`reference.md`](./reference.md#roles-1).
 
-**Running `pr-status`.** The script is at
-`${CLAUDE_PLUGIN_ROOT}/skills/deliver/scripts/pr-status`. It requires env
-`DISPATCH_AGENT_ID`, `DISPATCH_SKILL`, `DISPATCH_OPERATOR_LOGIN` and hard-fails
-if any is unset. Plugin option values are **not** in this agent's Bash
-environment (`CLAUDE_PLUGIN_OPTION_*` is exported only to hook/MCP subprocesses),
-so interpolate them here and pass them explicitly:
-
-```
-DISPATCH_AGENT_ID=<this agent's id> \
-DISPATCH_SKILL=deliver \
-DISPATCH_OPERATOR_LOGIN=${user_config.operator_login} \
-  "${CLAUDE_PLUGIN_ROOT}/skills/deliver/scripts/pr-status" <pr>
-```
-
-`${user_config.operator_login}` is substituted into this skill at load time —
-it's a **required** plugin option, so the skill and script always assume it's
-present (in Mode B it's the shared/authenticated account). Never fall back to the
-ticket assigner.
+**Running `pr-status`.** Run `scripts/pr-status <pr>`. It reads the
+`operator_login` plugin option straight from the environment (the harness
+exports it) — you don't pass it in. `operator_login` is **required**; if it's
+unset the script errors and tells the operator to configure the plugin. It
+classifies `<review>` roles from that login and never falls back to the ticket
+assigner (in Mode B it's the shared/authenticated account).
 
 ## Setup
 
-1. **Worktree.** Work in `${user_config.worktree_base}/<owner>/<repo>/<branch>`
-   (the plugin option, substituted into this skill at load time; it always has a
-   value — the declared default is `~/.worktrees`). Locate via `git worktree
-   list` — never guess. Reuse if present.
+1. **Worktree.** Work in `${user_config.worktree_base}/<owner>/<repo>/<branch>`.
+   Locate via `git worktree list` — never guess. Reuse if present.
 2. **Open PR** (skip if one already exists for the branch):
    - `git commit --allow-empty -m "chore: open PR [skip ci]"` — never amend or
      squash this commit.
@@ -335,18 +321,17 @@ reviewers). Cap at ~100 entries per kind.
 
 ## Configuration
 
-From the plugin's `userConfig`. Read each value as `${user_config.<key>}`,
-which is substituted into this skill at load time — the resolved value is right
-there in the text. Do **not** try to read `CLAUDE_PLUGIN_OPTION_*` from the
-environment: those are exported only to hook/MCP subprocesses, never to this
-agent's Bash calls. The current resolved values are shown below.
+Behavior keys from the plugin's `userConfig`. The values the agent branches on
+are interpolated inline above — `${user_config.team_mode}` (Solo vs team mode)
+and `${user_config.worktree_base}` (Setup); `operator_login` is consumed by
+`pr-status` directly.
 
-| Key                 | Resolved value                     | Effect                                                                                                                                       |
-| ------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `copilot_available` | `${user_config.copilot_available}` | `false` → skip Copilot: `draft → ready_for_public_review` (solo) or `→ ready_for_private_review` (team) directly. Default `true`.            |
-| `worktree_base`     | `${user_config.worktree_base}`     | Root for per-PR worktrees (`<base>/<owner>/<repo>/<branch>`). Always set (default `~/.worktrees`).                                           |
-| `team_mode`         | `${user_config.team_mode}`         | `true` → operator is one of several reviewers; insert `private_review_*` (draft) before clearing draft for `public_review_*`. Default `false`. |
-| `operator_login`    | `${user_config.operator_login}`    | Operator's GitHub login. **Required** (the agent/script always assume it's set; no assigner fallback). Targets Mode A review requests and classifies `<review>` role (operator vs team); in Mode B it's the shared/authenticated account. |
+| Key                 | Effect                                                                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator_login`    | Operator's GitHub login. **Required.** Read by `pr-status`; targets Mode A review requests and classifies `<review>` role (operator vs team). Mode B: the shared/authenticated account. |
+| `team_mode`         | `true` → operator is one of several reviewers; insert `private_review_*` (draft) before clearing draft for `public_review_*`. Default `false`. |
+| `copilot_available` | `false` → skip Copilot: `draft → ready_for_public_review` (solo) or `→ ready_for_private_review` (team) directly. Default `true`.            |
+| `worktree_base`     | Root for per-PR worktrees (`<base>/<owner>/<repo>/<branch>`). Default `~/.worktrees`.                                                        |
 
 ## References
 

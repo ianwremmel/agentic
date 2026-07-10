@@ -14,6 +14,12 @@ aims are **verified** — not merely merged. It does **not** own the PR lifecycl
 **Operator** = the human directing this run. **Delivery worker** = a `deliver`
 instance, one per PR. Glossary and lookup tables: [`reference.md`](./reference.md).
 
+Your default tracker is `${user_config.tracker}` (the per-item tracker is still
+resolved from each ticket's URL/identity — §Tracker). The operator is
+`${user_config.operator_login}`. Everything else `deliver` needs (`worktree_base`,
+`team_mode`, `copilot_available`) it reads from the shared plugin config itself —
+you don't forward it.
+
 ## Target kind & inputs
 
 Branch on `target-kind`; the inputs decide it:
@@ -170,26 +176,6 @@ the session.
 Emit `TRANSITION` / `WAIT` / `RESUME` / `BLOCK` / `INFO` / `ERROR` one-liners, and
 echo every role change as a state-change comment on the primary venue. Format and
 fields: [`reference.md`](./reference.md#logging-23).
-
-## Config
-
-From the plugin's `userConfig`, shared with `deliver`. Read the values this
-skill needs as `${user_config.<key>}`, substituted into this skill at load time
-— the resolved value is right there in the text. Do **not** read
-`CLAUDE_PLUGIN_OPTION_*` from the environment: those are exported only to
-hook/MCP subprocesses, never to this agent's Bash calls.
-
-This skill only needs `operator_login` and `tracker` directly; the rest are read
-by `deliver` from the same shared plugin config when you delegate a code change
-— you don't forward their values.
-
-| key                 | effect                                                                                                     |
-| ------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `operator_login`    | operator's GitHub login (`${user_config.operator_login}`); used for §2.1 routing. Required.                |
-| `tracker`           | **default** tracker (`${user_config.tracker}`); the per-item tracker is resolved from its URL/identity (§Tracker). |
-| `worktree_base`     | read by `deliver` (per-PR worktrees). Default `~/.worktrees`.                                              |
-| `team_mode`         | read by `deliver` (review shape). Default `false`.                                                         |
-| `copilot_available` | read by `deliver`. Default `true`.                                                                         |
 
 See [`reference.md`](./reference.md) for the role mapping, tracker operations, §2.1
 recap, dispatch-artifact shapes, and log format. The spec (§2.1/§2.3/§2.4/§2.5/§2.6)

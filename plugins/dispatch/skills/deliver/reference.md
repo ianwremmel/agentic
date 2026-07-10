@@ -159,8 +159,9 @@ A comment or thread is **non-actionable** iff any of:
 - the newest comment was written by the calling agent (author = calling
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
   terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional
-  trailing period, or `✓`/`✅`). If `gh api user` fails, this degrades to the
-  pre-fix "exact `$DISPATCH_AGENT_ID` marker alone" rule (warning to stderr).
+  trailing period, or `✓`/`✅`). The author match keys on the gh-authenticated
+  login; if `gh api user` fails this suppression simply doesn't fire (warning to
+  stderr).
 - the platform has explicitly resolved the thread (threads only).
 
 A reviewer reply after the agent's last turn re-actionables the item. An

@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # pr-status — emit PR state XML per §2.2.2 PR Status Protocol.
 #
-# Usage:
-#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> \
-#     DISPATCH_OPERATOR_LOGIN=<login> pr-status <pr>
+# Usage: pr-status <pr>
 #
-# The three DISPATCH_* inputs are all required and hard-fail if unset. Plugin
-# option values are NOT present in this process's environment (the harness only
-# exports CLAUDE_PLUGIN_OPTION_* to hook/MCP subprocesses, not to the agent's
-# Bash calls), so the invoking skill must interpolate ${user_config.*} into the
-# invocation — e.g. DISPATCH_OPERATOR_LOGIN=${user_config.operator_login}.
+# Config comes from the plugin's userConfig, which the harness exports to this
+# subprocess as CLAUDE_PLUGIN_OPTION_* — the invoking skill never forwards it.
+# Only CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN is required (the operator sets it in
+# the plugin config); the script errors, pointing at the plugin config, if unset.
 #
 # Requires: gh, jq, claude. Run from inside the repo's git worktree.
 
@@ -26,24 +23,17 @@ for _tool in gh jq; do
     || { echo "pr-status: required tool not found on PATH: $_tool" >&2; exit 3; }
 done
 
-: "${DISPATCH_AGENT_ID:?DISPATCH_AGENT_ID required}"
-: "${DISPATCH_SKILL:?DISPATCH_SKILL required}"
-: "${DISPATCH_OPERATOR_LOGIN:?DISPATCH_OPERATOR_LOGIN required (operator GitHub login; see §2.2.2 Operator identity)}"
+# Required plugin option. If unset, the operator hasn't configured the dispatch
+# plugin — surface that (the agent must NOT invent a login or fall back to the
+# ticket assigner; it's the operator's to set). §2.2.2 Operator identity.
+: "${CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN:?the dispatch plugin option operator_login is not set; the operator must configure it in the plugin config — pr-status cannot classify reviews without it}"
 
-# Catch a botched interpolation: if the skill forwarded a literal
-# `${user_config.operator_login}` (or any unsubstituted `${...}` placeholder)
-# instead of the resolved plugin-option value, fail loudly — proceeding would
-# silently misclassify every <review role> and never satisfy Gate 6.
-case "$DISPATCH_OPERATOR_LOGIN" in
-  *'${'*) echo "pr-status: DISPATCH_OPERATOR_LOGIN is an unsubstituted plugin-config placeholder ($DISPATCH_OPERATOR_LOGIN); the skill must interpolate \${user_config.operator_login} before invoking" >&2; exit 2 ;;
-esac
-
-OPERATOR_LC="$(printf '%s' "$DISPATCH_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
+OPERATOR_LC="$(printf '%s' "$CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
 
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 SLUG="${REPO/\//__}"
 BASE="${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}"
-DIR="$BASE/$DISPATCH_SKILL/$SLUG/$PR"
+DIR="$BASE/deliver/$SLUG/$PR"
 mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations"
 
 INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|codeql)$"
@@ -57,12 +47,12 @@ STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
 # period.
 TERMINAL_RE='^[[:space:]]*(✓|✅|done\.?|declined\.?|shipped\.?|acknowledged\.?|wontfix\.?|dismissed\.?|resolved\.?)[[:space:]]*$'
 
-# gh-authenticated identity used as a fallback in classify_actionable so
-# agent-id drift in markers across runs does not re-actionable the calling
-# agent's own resolved replies. Empty if `gh api user` fails; one breadcrumb
-# then logs the fallback path as inactive.
+# gh-authenticated identity — the agent's own login. classify_actionable uses it
+# (author match + marker) to recognize the calling agent's plan/engagement/
+# terminal-tagged artifacts and suppress them. Empty only if `gh api user` fails
+# (rare — gh is a hard requirement); a breadcrumb then warns suppression is off.
 CALLER_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
-[[ -z "$CALLER_LOGIN" ]] && echo "pr-status: warning: gh api user failed; author-identity actionability fallback disabled" >&2
+[[ -z "$CALLER_LOGIN" ]] && echo "pr-status: warning: gh api user failed; self-artifact actionability suppression disabled" >&2
 
 xml_attr() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
 xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -358,10 +348,9 @@ has_terminal_signal() {
 # engagement comment (line-anchored agent-plan/agent-engagement sentinel +
 # author identity, so a human quoting the marker stays actionable), or the body
 # is the calling agent's terminal-tagged reply (any agent-reply marker + author
-# identity + terminal signal on the last non-empty line). When $CALLER_LOGIN is
-# unavailable (`gh api user` failed), the reply check falls back to the pre-fix
-# behavior — exact $DISPATCH_AGENT_ID marker alone — so the script degrades, not
-# fails.
+# identity + terminal signal on the last non-empty line). All three author
+# checks key on $CALLER_LOGIN; if it is unavailable (`gh api user` failed) the
+# agent-artifact/terminal-reply suppressions simply don't fire.
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
   [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
@@ -376,21 +365,12 @@ classify_actionable() {
     printf 'false\tagent-artifact\n'; return
   fi
 
-  # Terminal-tagged reply by the calling agent.
-  if has_terminal_signal "$body"; then
-    if [[ -n "$CALLER_LOGIN" ]]; then
-      if [[ "$author" == "$CALLER_LOGIN" ]] \
-          && grep -qF '<!-- agent-reply:' <<<"$body"; then
-        printf 'false\tagent-terminal-reply\n'; return
-      fi
-    else
-      # Degraded path: no caller identity; gate on the exact agent-id marker
-      # alone. False-positive on a human quoting the exact marker + terminal
-      # signal is preserved from the pre-fix behavior.
-      if grep -qF "<!-- agent-reply:$DISPATCH_AGENT_ID -->" <<<"$body"; then
-        printf 'false\tagent-terminal-reply\n'; return
-      fi
-    fi
+  # Terminal-tagged reply by the calling agent: own login + an agent-reply marker
+  # + a terminal signal on the last non-empty line.
+  if has_terminal_signal "$body" \
+      && [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+      && grep -qF '<!-- agent-reply:' <<<"$body"; then
+    printf 'false\tagent-terminal-reply\n'; return
   fi
   printf 'true\t\n'
 }

@@ -27,12 +27,12 @@ Plugins currently published:
   dependency-graph-driven projects. Four composable skill tiers, each specified
   in `docs/spec`: `deliver` (§2.4, one PR to merge), `work-ticket` (§2.5, one
   tracked work item), `work-project` (§2.6, orchestrate whole projects over a
-  merged dependency graph), and `build-graph` (§2.6 producer, emits the
-  tracker-neutral project-graph document). Graph *reasoning* is one shared
-  `derive` engine; the only tracker-specific step is a per-tracker fetch/normalize
-  **adapter** (`build-graph-<tracker>`) added incrementally against the contract
-  in `plugins/dispatch/skills/build-graph/adapters/README.md`. No adapter ships
-  yet — the tracker-neutral scaffold is complete and an adapter drops in behind it.
+  merged dependency graph — one invocation is one stateless tick, driven on an
+  interval with `/loop`), and `build-graph` (§2.6 producer, emits the
+  tracker-neutral project-graph document as XML). The skills are agent-driven and
+  work as-is today (Linear via MCP); adding deterministic scripting where it's
+  safe — a per-tracker fetch adapter, a reasoning engine — is a later pass that
+  doesn't change the document contract or the orchestrator.
 
 Agents and hooks are still being migrated from another repo; those subdirectories
 are scaffolding for now.

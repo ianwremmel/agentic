@@ -1,120 +1,132 @@
 ---
 name: build-graph
-description: Produce the tracker-neutral project-graph document for §2.6 orchestration — resolve the tracker's producer adapter, fetch a full sync or an incremental delta, run the shared derive engine, and update the durable graph cache. Use to refresh the graph each orchestrator tick, or standalone to inspect a project's frontier. Delegates all tracker access to a per-tracker adapter; does zero graph reasoning itself.
+description: Build the tracker-neutral project-graph document for §2.6 orchestration — fetch the selected projects' tickets, milestones, and dependency edges from the tracker, map each ticket to its §2.3 role, merge into one dependency graph spanning every project, and emit the derived frontier (available / blocked / human-blocked / permanently-blocked / milestones / counts / anomalies) as XML. Use to refresh the graph each work-project tick, or standalone to inspect a project's frontier.
 ---
 
 # build-graph
 
-The §2.6 **producer**. It emits the
-[project-graph document](./schema/project-graph.schema.json) the
-[`work-project`](../work-project/SKILL.md) orchestrator reads — the merged graph
-plus derived sections (`available` / `blocked` / `human-blocked` /
-`permanently-blocked` / `milestones` / `counts` / `anomalies`). The orchestrator
-invokes it **identically** regardless of tracker or access mechanism.
+The §2.6 **producer**. It emits the one document the
+[`work-project`](../work-project/SKILL.md) orchestrator reads: a **tracker-neutral
+project-graph** — the merged graph plus the *derived* sections the orchestrator
+acts on directly. All graph **reasoning** happens here, so the orchestrator never
+re-derives blocking, ranking, or cycles and never parses a raw ticket body.
 
-Two responsibilities, cleanly split:
-
-- **Fetch/normalize** — the *only* tracker-specific step — is delegated to a
-  per-tracker **adapter** (`build-graph-<tracker>`), which emits a
-  [normalized graph](./schema/normalized-graph.schema.json). Adapters are added
-  incrementally; the contract is [`adapters/README.md`](./adapters/README.md).
-  **No adapter ships yet** — without one, build-graph `ERROR`s (see §Resolve).
-- **Reason** — effective-blocking (§2.3), ranking, cycle detection, milestone
-  gating, the derived sections — is done once, tracker-neutrally, by
-  [`scripts/derive`](./scripts/derive). build-graph never reasons over the graph
-  or reads a raw ticket body; that keeps every tracker's semantics identical.
+This skill **works as-is today**: the agent fetches from the tracker (Linear via
+MCP) and reasons over the result in-context. Determinism and speed come later —
+see [§Later](#later-determinism--per-tracker-adapters). The document shape is
+fixed now so `work-project` depends only on it, not on how it was produced.
 
 ## Inputs
 
 Passed by the orchestrator (or a human, standalone):
 
-| input               | meaning                                                                                          |
-| ------------------- | ------------------------------------------------------------------------------------------------ |
-| `projects`          | one or more project identifiers, **all on the same tracker** (§2.3 forbids cross-tracker deps).   |
-| `cache_path`        | durable normalized graph cache (also holds the persisted `cursor`); absent on first run.          |
-| `doc_path`          | where to write the project-graph document (`-` = stdout).                                          |
-| `exclude`           | ids in flight / done / failed — kept out of scheduling sections only (§2.6).                       |
-| `top`               | injected ids to force to the head of `available` (§Runtime injection, orchestrator-supplied).      |
-| `--sync`            | force a full sync (recovery / operator request); otherwise the mode is chosen per §Sync vs delta. |
+| input      | meaning                                                                                         |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| `projects` | one or more project identifiers, **all on the same tracker** (§2.3 forbids cross-tracker deps). |
+| `doc_path` | where to write the project-graph XML (`-` = stdout).                                            |
+| `cursor`   | opaque "changed-since" marker from the last build, for an incremental refresh (optional).       |
+| `exclude`  | ids in flight / done / failed — kept out of the scheduling frontier only (§2.6).                |
+| `top`      | injected ids to force to the head of `available` (orchestrator-supplied injection).             |
 
-## Resolve the tracker & adapter
+## Resolve the tracker
 
-The tracker comes from config `tracker` (default `linear`); all selected
-projects share it. Select the adapter skill `build-graph-<tracker>`. If it is not
-installed, **`ERROR` and stop** — "no producer adapter for `<tracker>`; see
-`adapters/README.md`" — never fabricate graph data. Because no adapter ships in
-this repo yet, that is the expected outcome of an end-to-end run today; the
-tracker-neutral engine and contract are complete and an adapter drops in behind
-them.
+The tracker comes from config `tracker` (default `linear`); all selected projects
+share it. **Only `linear` is implemented today** (via Linear MCP), matching
+[`work-ticket`](../work-ticket/SKILL.md); a project on any other tracker →
+`ERROR` and stop. The Linear substate→§2.3-role mapping is the one in
+[`work-ticket/reference.md`](../work-ticket/reference.md) — the single source of
+truth; reuse it, never invent a second.
 
-## Sync vs delta
+## Fetch
 
-Incremental delta is the steady state; sync is the fallback (§2.6 producer
-contract):
+Pull the raw state for every selected project from the tracker:
 
-- **Full sync** when: no `cache_path` yet (first run), `--sync` (recovery /
-  operator), the adapter reports a **cursor gap**, or the adapter has no delta
-  support.
-- **Incremental delta** otherwise: read `cursor` from the cache
-  (`jq -r .cursor <cache_path>`) and ask the adapter only for what changed since
-  it. This is the per-tick path.
+- **Tickets** — id, url, project, milestone, tracker substate, dependency edges
+  (`blockedBy`/`blocks`), the configured `human_interactive` label/field, and any
+  branch-name hint.
+- **Milestones** — id, project, a **total order per project** (needed to gate
+  later milestones on earlier reviews), and the tracker's `ready-for-review` /
+  `review-recorded` signals.
 
-Exclusions are passed through but MUST NOT suppress node/edge updates — a sync or
-delta still emits the current state of an excluded ticket, so the cache never
-goes stale for in-flight or terminal work.
+**Full refresh** builds everything for the selected projects; use it on the first
+build, on recovery, or when no `cursor` is supplied. **Incremental refresh** —
+when a `cursor` is supplied and the tracker supports "changed since" — fetches
+only what changed and updates the prior document; it is the steady state. Either
+way, an `exclude`d ticket's state is still fetched and reflected in node tags — it
+is only withheld from the scheduling frontier, never from the graph.
 
-## Run
+## Map & merge
 
-1. **Fetch** — invoke the resolved adapter for `sync` or `delta`, passing
-   `projects`, the `cursor` (delta only), the configured `human_interactive`
-   signal, and `exclude`. A **scripted** adapter (tracker with an API/token) is
-   run directly; an **MCP-only** adapter is a fetch subagent. Either way its
-   stdout is one normalized-graph JSON. Capture it to a temp file.
-2. **Reason + merge + persist** — run
+Map each ticket's substate to its §2.3 `role`/`group` (the mapping above), then
+merge all projects into **one** dependency graph. Same-tracker cross-project edges
+are kept; a cross-tracker edge is illegal (§2.3) and must not exist.
 
-   ```
-   scripts/derive --state <cache_path> --input <adapter-out.json> \
-     --doc <doc_path> [--exclude <ids>] [--top <ids>]
-   ```
+## Reason (the derived sections)
 
-   `derive` merges the input into the cache by a deterministic mechanical merge
-   (sync replaces; delta upserts/removes), computes every derived section, and
-   writes both the updated cache (atomically, with the new `cursor` inside) and
-   the document. The cache is the cursor's single source of truth.
-3. **Surface anomalies** — if the document's `anomalies` is non-empty, report it.
-   A `cycle` is illegal per §2.3: surface it and do **not** paper over it. A
-   `cross-project-edge` is informational (same-tracker cross-project deps are
-   allowed).
+Compute these so the orchestrator does not have to. Rules are normative:
+
+| rule                       | behavior                                                                                                                                                                                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| dependency-blocking (§2.3) | a ticket is **blocked** if any direct predecessor is not `verified`/`canceled` — only those two roles clear a dependency.                                                                                                                                                           |
+| cancellation unblocks      | a `canceled` predecessor never blocks and never causes a permanent block; its dependents move toward `available`.                                                                                                                                                                   |
+| milestone gate (§2.3)      | a ticket is **blocked** while any earlier milestone (lower `order`, same project) is not yet review-gate-open (below).                                                                                                                                                              |
+| stale-review guard (§2.6)  | a milestone with unresolved work is **not** `ready-for-review`; a not-ready milestone is **not** `review-recorded` — so §2.3's re-review is never suppressed by a stale record. A milestone's gate is open only when it is complete, `ready-for-review`, **and** `review-recorded`. |
+| permanent-block            | a ticket is **permanently-blocked** if it is itself dead (a terminal that is neither `verified` nor `canceled` and will not progress) or is gated behind such a dead predecessor (transitively).                                                                                    |
+| ranking                    | order `available` by earliest milestone, then by **unblocking leverage** (how many tickets it transitively frees), then id, for a stable frontier. Force `top` (injected) ids to the head.                                                                                          |
+| exclusion (§2.6)           | `exclude`d ids are omitted from `available` only; they still appear in the graph with their current state.                                                                                                                                                                          |
+| anomalies                  | surface `cycle` (illegal per §2.3 — never work around) and `cross-project-edge` (informational).                                                                                                                                                                                    |
+| completion                 | a project is terminal when every ticket is `verified`/`canceled`/permanently-blocked; the document reports it.                                                                                                                                                                      |
+
+## Emit
+
+Write the project-graph as **XML** (the house serialization, per §2.2's
+`pr-status`), containing the node tags and the derived sections
+`available` / `blocked` / `human-blocked` / `permanently-blocked` / `milestones` /
+`counts` / `anomalies`, plus the latest `cursor`. The exact element/attribute shape
+is in [`reference.md`](./reference.md#project-graph-document). Surface any
+`anomalies` to the caller; a `cycle` is illegal — do not paper over it.
 
 ## Standalone vs dispatched
 
-Same behavior; only the caller differs. **Dispatched** — the orchestrator calls
-build-graph at the top of each tick and reads `doc_path`. **Standalone** — a
-human runs `/build-graph <projects>` to inspect the current frontier; print a
-short summary of `available` / `blocked` / `human-blocked` / anomalies and the
-per-project `counts`. Standalone writes the same cache/document (harmless and
-reusable) but dispatches nothing.
+Same behavior; only the caller differs. **Dispatched** — `work-project` calls
+build-graph at the top of each tick and reads `doc_path`. **Standalone** — a human
+runs `/build-graph <projects>` to inspect the frontier; print a short summary of
+`available` / `blocked` / `human-blocked` / anomalies and the per-project counts.
+Standalone dispatches nothing.
 
 ## What build-graph never does
 
-- Never computes blocking, ranking, cycles, or any derived section — that is
-  `derive`'s (duplicating it is how trackers drift).
-- Never reads or interprets a raw ticket body, evaluates CI/reviews, or maps
-  substates to roles — the **adapter** owns substate→§2.3-role mapping, reusing
-  the tracker's `work-ticket` reference mapping as the single source of truth.
 - Never dispatches coordinators or workers — that is the orchestrator's.
+- Never evaluates CI/reviews or drives a PR — that is `deliver`'s (§2.4).
+- Never leaks a raw ticket body upward — the orchestrator sees only roles and the
+  derived sections, so it stays thin.
+
+## Later: determinism & per-tracker adapters
+
+The document is the stable contract; *how* it is produced hardens over time,
+without changing anything above it:
+
+- **Per-tracker fetch adapters.** The only tracker-specific step is fetch +
+  substate→role mapping. A tracker with an API and a token (Linear, Jira, GitHub
+  Issues) can be a **scripted** adapter emitting a normalized graph; a tracker
+  reachable only through MCP (e.g. Asana) stays an **agent-driven** fetch. Both
+  feed the same reasoning, so the orchestrator is unaffected.
+- **A deterministic reasoning engine.** The §Reason rules are mechanical and can
+  move into a script that takes the normalized graph and emits the document, once
+  the shape has settled in practice.
+
+Neither exists yet, and neither is required for the skill to work — they add speed
+and determinism, not capability.
 
 ## Config
 
 From the plugin's `userConfig` (env `CLAUDE_PLUGIN_OPTION_*`):
 
-| key                      | effect                                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `tracker`                | selects the adapter `build-graph-<tracker>` (default `linear`). All selected projects share it. |
-| `human_interactive_label`| tracker label/field that marks a node `human-interactive` (§2.6); forwarded to the adapter.      |
+| key                       | effect                                                                      |
+| ------------------------- | --------------------------------------------------------------------------- |
+| `tracker`                 | which tracker to fetch (default `linear`; only `linear` implemented today). |
+| `human_interactive_label` | tracker label/field that marks a node `human-interactive` (§2.6).           |
 
-Dependencies: `python3` (derive), `jq` (cursor read / adapter plumbing), plus
-whatever the resolved adapter needs. See [`reference.md`](./reference.md) for the
-document contents, the derive CLI, on-disk paths, and the adapter contract
-pointer. The spec (§2.3 dependency/milestone rules, §2.6 producer contract) is
-authoritative where they differ.
+See [`reference.md`](./reference.md) for the XML document shape, the reasoning
+rules, and the role-mapping pointer. The spec (§2.3 dependency/milestone rules,
+§2.6 producer contract) is authoritative where they differ.

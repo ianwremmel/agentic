@@ -1,55 +1,109 @@
 # build-graph — reference
 
 Lookup tables for [`SKILL.md`](./SKILL.md), bundled so the skill is
-self-contained. The spec is authoritative where they differ: §2.3 Ticket Workflow
-(roles, dependencies, milestones), §2.6 Orchestration (producer contract).
+self-contained. The spec is authoritative where they differ: §2.2 (XML house
+style), §2.3 (roles, dependencies, milestones), §2.6 (producer contract).
 
 ## Roles
 
-- **build-graph** — this skill; the §2.6 producer coordinator. Selects an adapter,
-  runs the fetch, runs `derive`, updates the cache + document. No graph reasoning.
-- **adapter** — a per-tracker `build-graph-<tracker>` skill; the only
-  tracker-specific part. Fetches + normalizes to
-  [`normalized-graph`](./schema/normalized-graph.schema.json). None ship yet;
-  contract in [`adapters/README.md`](./adapters/README.md).
-- **derive** — [`scripts/derive`](./scripts/derive); tracker-neutral engine. Merges
-  the normalized input and emits the
-  [`project-graph`](./schema/project-graph.schema.json) document.
-- **orchestrator** — [`work-project`](../work-project/SKILL.md); the sole
-  dispatched caller. Reads the document; never calls the adapter directly.
+- **build-graph** — this skill; the §2.6 producer. Fetches, maps, merges, reasons,
+  and emits the project-graph document. Does no dispatch and drives no PR.
+- **orchestrator** — [`work-project`](../work-project/SKILL.md); the dispatched
+  caller. Reads the document's derived sections and node tags; never re-derives.
+- **role mapping** — the Linear substate→§2.3-role table in
+  [`work-ticket/reference.md`](../work-ticket/reference.md); the single source of
+  truth, reused here.
 
-## The derive CLI
+## Project-graph document
 
+XML, mirroring §2.2's `pr-status` house style. The orchestrator reads the derived
+sections (the child lists) and node tags, and treats them as authoritative — it
+MUST NOT re-derive blocking, ranking, or cycles.
+
+```xml
+<project-graph tracker="linear" cursor="2026-07-09T20:59:12Z" all-terminal="false">
+  <projects>
+    <project id="A" name="Alpha"/>
+    <project id="B" name="Beta"/>
+  </projects>
+
+  <milestones>
+    <!-- ready-for-review / review-recorded are the guarded values (§stale-review) -->
+    <milestone id="A-m1" project="A" order="0"
+               ready-for-review="false" review-recorded="false" complete="false"/>
+    <milestone id="A-m2" project="A" order="1"
+               ready-for-review="false" review-recorded="false" complete="false"/>
+  </milestones>
+
+  <!-- ranked frontier: dispatch order, top-to-bottom -->
+  <available>
+    <node id="A-2" url="…" project="A" milestone="A-m1"
+          role="available" target-kind="pr" branch-seed="feat/a-2"/>
+  </available>
+
+  <blocked>
+    <node id="A-3" url="…" project="A" milestone="A-m1" role="available"
+          blocked-by="A-2"/>
+    <node id="A-4" url="…" project="A" milestone="A-m2" role="available"
+          blocked-by="milestone:A-m1"/>   <!-- milestone-gated -->
+  </blocked>
+
+  <human-blocked>
+    <node id="A-6" url="…" project="A" role="awaiting-external"
+          human-interactive="true"/>
+  </human-blocked>
+
+  <permanently-blocked>
+    <node id="A-5" url="…" project="A" role="available" blocked-by="X-dead"/>
+  </permanently-blocked>
+
+  <anomalies>
+    <cycle nodes="C1,C2,C3"/>                          <!-- illegal (§2.3) -->
+    <cross-project-edge from="A-2" to="B-1"
+                        from-project="A" to-project="B"/>
+  </anomalies>
+
+  <counts all-terminal="false">
+    <project id="A" total="9" verified="1" canceled="1"
+             permanently-blocked="2" remaining="5"/>
+  </counts>
+</project-graph>
 ```
-derive --state <cache.json> --input <adapter-out.json|-> \
-       [--doc <out.json|->] [--exclude id,id,...] [--top id,id,...]
-```
 
-- `--state` — durable graph cache (read + atomically rewritten). Holds the
-  `cursor` (single source of truth). Absent ⇒ first-run empty cache.
-- `--input` — the adapter's normalized `sync` or `delta` (schema
-  `dispatch/normalized-graph@1`).
-- `--doc` — where the `dispatch/project-graph@1` document is written (`-` stdout).
-- `--exclude` — ids kept out of `available` only (in-flight/done/failed); their
-  node state is still merged and emitted.
-- `--top` — injected ids forced to the head of `available` (already-blocked ids
-  are ignored — injection never overrides blocking).
+Node attributes: `id`, `url`, `project`, `milestone` (or omitted), `role` (§2.3),
+`target-kind` (`pr` | `verification` | `human-only`), `human-interactive`,
+`blocked-by` (comma-separated predecessor ids, or `milestone:<id>` for a gate),
+`branch-seed` (non-authoritative hint). A ticket appears in exactly one scheduling
+section (`available` / `blocked` / `human-blocked` / `permanently-blocked`) or in
+none when it is already terminal (`verified`/`canceled`).
 
-Stdlib-only Python 3. Exit 2 on bad input/schema.
+## Reasoning rules
 
-## What derive computes (so no one else does)
+The normative rules build-graph applies before emitting (so no one downstream
+repeats them):
 
-| rule                       | behavior                                                                                                    |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| dependency-blocking (§2.3) | blocked iff any direct `blocked_by` is not `verified`/`canceled`. Only those two roles clear a dependency.    |
-| cancellation unblocks      | a `canceled` ancestor never blocks and never causes permanent-block; dependents move toward `available`.     |
-| milestone gate (§2.3)      | a node is blocked while any earlier milestone (lower `order`, same project) is not review-gate-open.          |
-| stale-review guard (§2.6)  | an incomplete milestone is forced `ready_for_review=false`; a not-ready one is forced `review_recorded=false`. |
-| permanent-block            | a node (transitively) gated behind a `terminated_without_verify` (non-canceled) ancestor, or itself dead.    |
-| ranking                    | `available` sorted by milestone `order`, then descending unblock-leverage (transitive dependents), then id.   |
-| exclusion (§2.6)           | excluded ids omitted from `available` only; still merged/emitted.                                            |
-| anomalies                  | `cycle` (illegal, §2.3 — surface, don't work around) and `cross-project-edge` (informational).               |
-| completion                 | `counts.all_terminal` true when every project's `remaining` (total − verified − canceled − perm-blocked) is 0. |
+| rule                       | detail                                                                                                           |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| dependency-blocking (§2.3) | blocked iff any direct predecessor is not `verified`/`canceled`.                                                 |
+| cancellation unblocks      | a `canceled` predecessor is resolved: it never blocks and never causes a permanent block.                        |
+| milestone gate (§2.3)      | blocked while any earlier milestone (lower `order`, same project) is not gate-open.                              |
+| stale-review guard (§2.6)  | incomplete ⇒ not `ready-for-review`; not-ready ⇒ not `review-recorded`. Gate-open = complete ∧ ready ∧ recorded. |
+| permanent-block            | itself dead (non-`verified`, non-`canceled` terminal that won't progress) or transitively behind such a node.    |
+| ranking                    | `available` by earliest milestone, then transitive unblocking leverage, then id; injected `top` ids first.       |
+| exclusion (§2.6)           | `exclude`d ids omitted from `available` only; still present in the graph with current state.                     |
+| anomalies                  | `cycle` (illegal — surface, never work around) and `cross-project-edge` (informational).                         |
+| completion                 | project terminal when every ticket is `verified`/`canceled`/permanently-blocked → `all-terminal`.                |
+
+## Tracker operations (Linear)
+
+Reads follow §2.1 mode rules; MCP access is orthogonal to the §2.1 mode.
+
+| need                        | Linear MCP                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------- |
+| project tickets + relations | `list_issues(project)` / `get_issue(id, includeRelations=true)` → `blockedBy`/`blocks` |
+| substate → role             | `get_issue(id).state` + `list_issue_statuses(team)`; map via work-ticket reference     |
+| milestones + order          | the project's milestones and their sequence + review signals                           |
+| human-interactive           | the configured `human_interactive_label` on the ticket                                 |
 
 ## On-disk paths
 
@@ -57,22 +111,14 @@ The orchestrator owns the base and passes concrete paths; build-graph writes onl
 what it is told. Conventional layout under the run directory
 (`${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-project/<run-key>/`):
 
-| file          | written by | holds                                                     |
-| ------------- | ---------- | --------------------------------------------------------- |
-| `graph.json`  | `derive`   | durable normalized cache **+ `cursor`** (single source)   |
-| `doc.json`    | `derive`   | the project-graph document the orchestrator reads          |
+| file        | holds                                                            |
+| ----------- | ---------------------------------------------------------------- |
+| `graph.xml` | the project-graph document the orchestrator reads (+ its cursor) |
 
-`<run-key>` identifies the selected project set (the orchestrator derives it,
-e.g. a stable hash of the sorted project ids). Standalone runs may use any base.
+## Later
 
-## Adding a tracker
-
-1. Write `build-graph-<tracker>/SKILL.md` satisfying
-   [`adapters/README.md`](./adapters/README.md): fetch + map substates to §2.3
-   roles (reuse that tracker's `work-ticket` reference mapping), emit
-   `normalized-graph` for `sync` and (ideally) `delta`, return an opaque cursor.
-2. Validate its output against
-   [`schema/normalized-graph.schema.json`](./schema/normalized-graph.schema.json)
-   and run a fixture through `derive`, checking the derived sections by hand.
-3. No change to `derive`, `build-graph`, or `work-project` is needed — the whole
-   point of the split.
+The document is the stable contract. A per-tracker fetch/normalize **adapter**
+(scriptable for API trackers, MCP-driven for others) and a deterministic
+**reasoning engine** over a normalized graph are future determinism/speed work,
+added without changing this document or the orchestrator. See
+[`SKILL.md`](./SKILL.md#later-determinism--per-tracker-adapters).

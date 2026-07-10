@@ -6,10 +6,10 @@ Covers the full lifecycle in four composable tiers, each specified in [`docs/spe
 
 - **`deliver`** (§2.4) — drive one PR to merge: draft, push, CI triage, reviews, iterate, merge.
 - **`work-ticket`** (§2.5) — coordinate one tracked work item: fetch its brief, decompose, drive its PR(s) via `deliver`, sync its §2.3 role, verify its aims.
-- **`work-project`** (§2.6) — orchestrate one or more whole projects across a merged dependency graph: a stateless tick loop that dispatches a coordinator per unblocked frontier item and a review agent per ready milestone, accounts compute slots, and runs to completion.
-- **`build-graph`** (§2.6 producer) — emit the tracker-neutral project-graph document `work-project` reads. All graph *reasoning* (effective-blocking, ranking, cycles, milestone gating) is one shared `derive` engine; the *only* tracker-specific step is a per-tracker fetch/normalize **adapter** (`build-graph-<tracker>`), added incrementally against a documented [contract](skills/build-graph/adapters/README.md). No adapter ships yet — the tracker-neutral scaffold is complete and an adapter drops in behind it.
+- **`work-project`** (§2.6) — orchestrate one or more whole projects across a merged dependency graph. Each invocation is one stateless tick (refresh the graph, reconcile in-flight units, dispatch a coordinator per unblocked frontier item and a review agent per ready milestone, exit); drive it to completion by running it on an interval with the built-in `/loop`.
+- **`build-graph`** (§2.6 producer) — emit the tracker-neutral project-graph document (XML) `work-project` reads. The agent fetches from the tracker (Linear via MCP) and does all graph reasoning — effective-blocking, ranking, cycles, milestone gating — so the orchestrator never re-derives anything.
 
-Agents and hooks are still being migrated from a prior repo.
+The skills are agent-driven and work as-is today. Adding deterministic scripting where it's safe — a per-tracker fetch adapter (scriptable for API trackers, MCP-driven for others), a reasoning engine — is a later pass that doesn't change the document contract or the orchestrator. Agents and hooks are still being migrated from a prior repo.
 
 ## Install
 

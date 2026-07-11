@@ -1,25 +1,23 @@
 # work-ticket — reference
 
 Lookup tables for [`SKILL.md`](./SKILL.md), bundled so the skill is self-contained.
-The spec is authoritative where they differ: §2.1 Communication, §2.3 Ticket
-Workflow, §2.4 Delivery, §2.5 Ticket Coordination, §2.6 Orchestration.
 
 ## Roles
 
 - **Coordinator** — this skill; owns one work item end-to-end.
 - **Operator** — the human directing this run; identity is `operator_login`.
-- **Delivery worker** — a [`deliver`](../deliver/SKILL.md) (§2.4) instance, one per
-  PR; holds the compute slot while building. Read its PR status only via §2.4/§2.2.
-- **Orchestrator** — the §2.6 agent that dispatches coordinators; owns the graph,
+- **Delivery worker** — a [`deliver`](../deliver/SKILL.md) instance, one per
+  PR; holds the compute slot while building. Read its PR status only via `deliver`.
+- **Orchestrator** — the agent that dispatches coordinators; owns the graph,
   ranking, the slot ledger, and dispatch. Absent standalone.
 
-## Linear ↔ §2.3 roles
+## Linear ↔ roles
 
-The body speaks §2.3 roles; this is the only place tracker substates appear.
+The body speaks role names; this is the only place tracker substates appear.
 Resolution order: **team override → default below → error** (never guess). The same
-mapping a §2.6 Linear producer reuses. Adding a tracker = adding its mapping here.
+mapping a Linear producer reuses. Adding a tracker = adding its mapping here.
 
-| Linear substate | §2.3 group  | §2.3 role     |
+| Linear substate | role group  | role          |
 | --------------- | ----------- | ------------- |
 | Backlog         | `backlog`   | `backlog`     |
 | TODO            | `unstarted` | `available`   |
@@ -38,7 +36,7 @@ not a park).
 
 ## Tracker operations (Linear)
 
-Reads/writes follow §2.1 mode rules; MCP access is orthogonal to the §2.1 mode.
+Reads/writes follow the Mode A/B rules; MCP access is orthogonal to the mode.
 
 | operation                                   | Linear MCP                                                                                                        |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -55,9 +53,9 @@ Reads/writes follow §2.1 mode rules; MCP access is orthogonal to the §2.1 mode
 | one-edge neighbors                          | `get_issue(id, includeRelations=true)` → `blockedBy` / `blocks`                                                   |
 | scan open human alert                       | ticket: `list_comments` for the alert sentinel; PR: scan the forge per `deliver`                                  |
 
-PR-venue writes go through the **forge** (GitHub) under §2.1, the path `deliver`
+PR-venue writes go through the **forge** (GitHub), the path `deliver`
 uses — not Linear MCP. Linear rejects self-blocks; cycles MUST be refused at write
-and surfaced at read (§2.3); no cross-tracker dependencies.
+and surfaced at read; no cross-tracker dependencies.
 
 **Primary venue with several PRs** (first match): (1) the PR the event is about
 (its delivery triggered the transition, or a blocker arose in it); (2) else the
@@ -65,7 +63,7 @@ most recently updated open PR; (3) else the ticket — and ticket-level transiti
 (`available → in-progress`, the aggregate `delivered`, `verified`) go to the
 ticket. The DoD artifact always lives on the ticket.
 
-## §2.1 recap
+## Communication recap
 
 Full treatment in [`../deliver/reference.md`](../deliver/reference.md). Essentials:
 **Mode A** (agent) iff the account is a bot/integration or its id matches
@@ -76,7 +74,7 @@ Mode B wraps the body in `✨`; sentinels sit inside the body. Terminal signals:
 resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human, then
 `WAIT`.
 
-## Outcomes (§2.5)
+## Outcomes
 
 | outcome         | meaning                                                                | terminal?              | resumes                                                                      |
 | --------------- | ---------------------------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
@@ -90,8 +88,9 @@ resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human
 ## Dispatch artifacts
 
 Standalone writes none of this (report to the session and stop). A **dispatched**
-coordinator honors the §2.6 contract; §2.6 owns the real paths, the shapes below
-are the stub. Base: `${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-ticket/<key>/`,
+coordinator honors the orchestrator's contract; the orchestrator owns the real
+paths, the shapes below are the stub. Base:
+`${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-ticket/<key>/`,
 `<key>` = `ticket_id` (ticket) or `<repo>#<pr_number>` (bare PR).
 
 - **`lock.json`** — ticket- or PR-keyed; heartbeated on a fixed interval;
@@ -103,9 +102,9 @@ are the stub. Base: `${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispa
   ids on `decomposed`.)
 
 The compute-slot **ledger** (`MAX_PARALLEL`) is the orchestrator's, not written
-here — §Slot seam in `SKILL.md`, §2.6 §Slot accounting.
+here — see Slot seam in `SKILL.md`; it's the orchestrator's slot accounting.
 
-## Logging (§2.3)
+## Logging
 
 ```
 <timestamp> <kind> ticket=<url> pr=<url> ticket-role=<role> pr-state=<state> | <message>
@@ -126,7 +125,7 @@ here — §Slot seam in `SKILL.md`, §2.6 §Slot accounting.
 | `ERROR`      | tracker errors, verification failures                                     |
 
 Every role change also posts a state-change comment to the primary venue, body
-exactly (then §2.1 wrapping):
+exactly (then the Mode A/B wrapping):
 
 ```
 State: <prev-role> → <new-role>

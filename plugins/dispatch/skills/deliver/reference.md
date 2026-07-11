@@ -56,7 +56,7 @@ A terminal signal means "finished with this item"; it suppresses re-evaluation
 next poll. Anything else means "still working." The agent signals finished
 **only** via a terminal signal — it MUST NOT resolve the thread, even one it
 opened. Resolution is a human's call. Platform-resolved threads are read (see
-[§Actionability](#actionability)) but never written by the agent.
+[Actionability](#actionability)) but never written by the agent.
 
 Reactions (preferred where supported):
 
@@ -159,8 +159,9 @@ A comment or thread is **non-actionable** iff any of:
 - the newest comment was written by the calling agent (author = calling
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
   terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional
-  trailing period, or `✓`/`✅`). If `gh api user` fails, this degrades to the
-  pre-fix "exact `$DISPATCH_AGENT_ID` marker alone" rule (warning to stderr).
+  trailing period, or `✓`/`✅`). The author match keys on the gh-authenticated
+  login; `pr-status` exits early if it can't resolve that login (a `gh api user`
+  failure is fatal, since it's the only identity source).
 - the platform has explicitly resolved the thread (threads only).
 
 A reviewer reply after the agent's last turn re-actionables the item. An

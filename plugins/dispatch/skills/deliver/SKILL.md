@@ -11,18 +11,12 @@ actionable concern, then evaluate the gates to decide whether to transition.
 **Operator** = the one human directing this agent; the only human with stop
 authority. Role glossary in [`reference.md`](./reference.md#roles-1).
 
-**Running `pr-status`.** It requires env `DISPATCH_AGENT_ID`, `DISPATCH_SKILL`,
-`DISPATCH_OPERATOR_LOGIN` and hard-fails if any is unset. Pass
-`CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN` as `DISPATCH_OPERATOR_LOGIN` — it's a
-**required** plugin option, so the skill and script always assume it's present
-(in Mode B it's the shared/authenticated account). Never fall back to the ticket
-assigner.
+**Running `pr-status`.** Run `scripts/pr-status <pr>`.
 
 ## Setup
 
-1. **Worktree.** Work in `<worktree_base>/<owner>/<repo>/<branch>` (the plugin
-   sets `worktree_base`; fail if it's unset). Locate via `git worktree list` —
-   never guess. Reuse if present.
+1. **Worktree.** Work in `${user_config.worktree_base}/<owner>/<repo>/<branch>`.
+   Locate via `git worktree list` — never guess. Reuse if present.
 2. **Open PR** (skip if one already exists for the branch):
    - `git commit --allow-empty -m "chore: open PR [skip ci]"` — never amend or
      squash this commit.
@@ -116,6 +110,10 @@ stateDiagram-v2
     done --> [*]
 ```
 
+Copilot review is `${user_config.copilot_available}` on this install — when
+`false`, take the `Copilot unavailable` edges and skip the `copilot_*` states
+entirely.
+
 `private_review_*` is unreachable in solo mode. **Who clears draft depends on
 mode.** In solo mode the agent clears draft on the edge into
 `ready_for_public_review` (out of `copilot_review_requested`, or `draft` when
@@ -144,7 +142,7 @@ of `public_review_requested`). Worktree cleanup happens on any closure.
 
 | State                              | Do                                                                                                              | Poll?    |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
-| `starting`                         | Create or locate the worktree (§Setup).                                                                         | no       |
+| `starting`                         | Create or locate the worktree (see Setup).                                                                      | no       |
 | `draft`                            | **Coding happens here.** Edit; pre-push review; push. When ready, check gates 1–5.                              | no       |
 | `ready_for_copilot_review`         | Request Copilot review.                                                                                         | no       |
 | `copilot_review_requested`         | Await Copilot's review.                                                                                         | CI       |
@@ -169,10 +167,8 @@ gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
 
 ### Solo vs team mode
 
-**Read `CLAUDE_PLUGIN_OPTION_TEAM_MODE` at startup — never infer it.** The
-harness always exports it (configured value or declared default), so there's no
-unset case. Mode picks which states are reachable and who clears draft (the
-agent in solo, the operator in team); guessing drives the wrong lifecycle.
+**`team_mode` is `${user_config.team_mode}` — never infer it.** Mode picks which states are
+reachable and who clears draft (the agent in solo, the operator in team).
 
 - **Solo** (default). Operator is the only human reviewer. After Copilot, the
   agent clears draft and engages the operator as the public reviewer.
@@ -261,7 +257,7 @@ Apply in every state.
   [`reference.md`](./reference.md#operational-logging); `ticket=-` when none).
 - **Termination is narrow.** Only PR closure or explicit operator "stop"
   terminates. Plan completion, green CI, review requests, `ready_for_merge`, and
-  "nobody to ask" do not. The agent runs the loop through itself (§Polling) and
+  "nobody to ask" do not. The agent runs the loop through itself (see Polling) and
   is never re-prodded.
 - **Re-derive termination each tick** from the current `pr-status`. Never carry
   "if X then stop" across ticks — the loop amplifies them.
@@ -318,17 +314,6 @@ wait, append one line:
 On entry to a polling state, read the median `elapsed_s` for that kind and tune
 the schedule (shorten the head for fast CI; lengthen the tail for slow
 reviewers). Cap at ~100 entries per kind.
-
-## Configuration
-
-From `userConfig` (env `CLAUDE_PLUGIN_OPTION_*`):
-
-| Key                 | Effect                                                                                                                                       |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `copilot_available` | `false` → skip Copilot: `draft → ready_for_public_review` (solo) or `→ ready_for_private_review` (team) directly. Default `true`.            |
-| `worktree_base`     | Root for per-PR worktrees (`<base>/<owner>/<repo>/<branch>`). Set by the plugin; the agent fails if unset.                                   |
-| `team_mode`         | `true` → operator is one of several reviewers; insert `private_review_*` (draft) before clearing draft for `public_review_*`. Default `false`. |
-| `operator_login`    | Operator's GitHub login. **Required** (the agent/script always assume it's set; no assigner fallback). Targets Mode A review requests and classifies `<review>` role (operator vs team); in Mode B it's the shared/authenticated account. |
 
 ## References
 

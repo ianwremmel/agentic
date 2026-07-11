@@ -94,8 +94,8 @@ under the exported `DISPATCH_RUN_DIR`
 `<key>` = `ticket_id` (ticket) or `<repo>#<pr_number>` (bare PR).
 
 - **Lock** — `dispatch-state lock acquire <key> <agent-id> ticket|pr`, then
-  `lock heartbeat <key>` on a fixed interval; mirror a "working" label where
-  available. Release it only as you exit.
+  `dispatch-state lock heartbeat <key>` on a fixed interval; mirror a "working"
+  label where available. Release it only as you exit.
 - **`outcome.json`** — written as the final action, in `unit dir <key>` (ask the
   script for the path; keys are encoded, so never build it by hand).
   `{ "key":"DEV-123", "outcome":"…", "ticket_url":"…|null", "pr_urls":[…], "retryable":null, "subtasks":[], "detail":"…" }`

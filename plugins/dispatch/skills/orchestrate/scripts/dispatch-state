@@ -28,6 +28,14 @@ command -v jq >/dev/null 2>&1 || { echo "dispatch-state: jq not found on PATH" >
 MAX_PARALLEL="${DISPATCH_MAX_PARALLEL:-3}"
 STALE_SECS="${DISPATCH_STALE_SECS:-900}"
 
+# Both feed shell arithmetic. The plugin config types max_parallel as a number
+# (the manifest schema has no integer type), so a fractional or junk value would
+# otherwise blow up mid-acquire with a cryptic arithmetic error.
+for _var in MAX_PARALLEL STALE_SECS; do
+  [[ "${!_var}" =~ ^[1-9][0-9]*$ ]] \
+    || { echo "dispatch-state: $_var must be a positive integer, got '${!_var}'" >&2; exit 5; }
+done
+
 LEDGER="$DISPATCH_RUN_DIR/ledger"
 LOCKS="$DISPATCH_RUN_DIR/locks"
 INBOX="$DISPATCH_RUN_DIR/inbox"

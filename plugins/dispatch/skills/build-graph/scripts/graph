@@ -153,13 +153,20 @@ function derive(cachePath, excluded, prioritized) {
   ];
 
   // A milestone is ready for review when every ticket in it is terminal and no
-  // unresolved ticket is an ancestor of one (§2.3 Ready for review).
+  // unresolved ticket is an ancestor of one (§2.3 Ready for review). A member
+  // with a blocker outside the synced set is not known to be unblocked, so it
+  // holds the milestone back rather than opening the gate on an anomaly.
   const milestones = g.milestones.map((m) => {
     const members = g.nodes.filter((n) => n.milestone === m.id);
     const ready =
       members.length > 0 &&
       members.every(
-        (n) => terminal(n) && [...ancestorsOf(n.id)].every((a) => terminal(nodes.get(a))),
+        (n) =>
+          terminal(n) &&
+          !unknownBlockers.has(n.id) &&
+          [...ancestorsOf(n.id)].every(
+            (a) => terminal(nodes.get(a)) && !unknownBlockers.has(a),
+          ),
       );
     return {...m, members: members.map((n) => n.id), ready_for_review: ready};
   });
@@ -273,15 +280,15 @@ function derive(cachePath, excluded, prioritized) {
 // Rank: injected work first, then earliest milestone, then whatever unlocks the
 // most, then id (so the order is total and stable). `-Infinity` keeps an
 // injected ticket ahead of a node whose own `priority` is 0.
-const rankBy = (prioritized, milestoneById) => (a, b) => {
-  const pri = (n) => (prioritized.includes(n.id) ? -Infinity : (n.priority ?? DEFAULT_PRIORITY));
+const rankBy = (prioritized, milestoneById) => {
+  const top = new Set(prioritized);
+  const pri = (n) => (top.has(n.id) ? -Infinity : (n.priority ?? DEFAULT_PRIORITY));
   const ord = (n) => milestoneById.get(n.milestone)?.order ?? Number.MAX_SAFE_INTEGER;
-  return (
+  return (a, b) =>
     pri(a) - pri(b) ||
     ord(a) - ord(b) ||
     b.unlocks - a.unlocks ||
-    String(a.id).localeCompare(String(b.id))
-  );
+    String(a.id).localeCompare(String(b.id));
 };
 
 function memo(fn) {

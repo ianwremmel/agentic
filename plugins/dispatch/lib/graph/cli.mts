@@ -17,19 +17,18 @@ import {derive} from './derive.mts';
 import {readDelta} from './delta.mts';
 import {EMPTY, merge} from './merge.mts';
 import {writeDocument} from './document.mts';
+import {excludedKeys, injectedKeys, open} from '../state/db.mts';
 import type {Graph} from './types.mts';
 
 /** Where the run keeps its state. Mirrors `dispatch-state`'s layout. */
 interface RunPaths {
   graph: string;
   document: string;
-  active: string;
 }
 
 const paths = (runDir: string): RunPaths => ({
   graph: join(runDir, 'graph.json'),
   document: join(runDir, 'document.xml'),
-  active: join(runDir, 'active.json'),
 });
 
 /** Write via a unique temp file, so a crash mid-write cannot leave a torn cache. */
@@ -40,17 +39,17 @@ function writeAtomic(path: string, contents: string): void {
 }
 
 /**
- * The active set is `dispatch-state`'s. Read it rather than making the caller
- * pass exclusions in: every key in it is work that must stay off the frontier,
- * and an injected id must keep its rank across ticks.
+ * The active set is `dispatch-state`'s. Read it rather than making the caller pass
+ * exclusions in: every unit it knows about is work that must stay off the
+ * frontier, and an injected id must keep its rank across ticks.
  */
-function scheduling(activePath: string): {exclude: string[]; priority: string[]} {
-  if (!existsSync(activePath)) return {exclude: [], priority: []};
-  const active = JSON.parse(readFileSync(activePath, 'utf8')) as {
-    units?: Record<string, unknown>;
-    injected?: string[];
-  };
-  return {exclude: Object.keys(active.units ?? {}), priority: active.injected ?? []};
+function scheduling(runDir: string): {exclude: string[]; priority: string[]} {
+  const db = open(runDir);
+  try {
+    return {exclude: excludedKeys(db), priority: injectedKeys(db)};
+  } finally {
+    db.close();
+  }
 }
 
 const loadGraph = (path: string): Graph =>
@@ -58,7 +57,7 @@ const loadGraph = (path: string): Graph =>
 
 function emit(runDir: string): string {
   const p = paths(runDir);
-  const document = derive(loadGraph(p.graph), scheduling(p.active));
+  const document = derive(loadGraph(p.graph), scheduling(runDir));
   writeAtomic(p.document, writeDocument(document));
   return p.document;
 }

@@ -51,15 +51,15 @@ Tick brief, in order:
 1. **Refresh the graph.** Invoke [`build-graph`](../build-graph/SKILL.md) with the
    projects and the run dir. It reads the cursor and the active set itself and
    writes `document.xml`.
-2. **Drain the inbox** (`dispatch-state inbox drain`) — the run dir's drop-box for
-   work added mid-run ([`reference.md`](./reference.md#injection)). Record an
-   injected ticket with `active inject <id>` (the next fetch pulls it in and ranks
-   it first); record an injected PR as an active entry, `state: pending`.
+2. **Drain the queue** (`dispatch-state inbox drain`) — work added mid-run
+   ([`reference.md`](./reference.md#injection)). Record an injected ticket with
+   `inject add <id>` (the next fetch pulls it in and ranks it first); record an
+   injected PR with `unit put <key> pending`.
 3. **Sweep** (`lock sweep`, `slot reap`).
-4. **Reconcile each `dispatched` active entry** by its outcome artifact, else by
-   liveness — table in [`reference.md`](./reference.md#reconciling-a-coordinator).
-   Entries in any other state are not re-dispatched; they stay in the active set
-   so they stay out of `<available>`.
+4. **Reconcile each `dispatched` unit** by its outcome artifact, else by liveness
+   — table in [`reference.md`](./reference.md#reconciling-a-coordinator). Units in
+   any other state are not re-dispatched; they stay recorded, so they stay out of
+   `<available>`.
 5. **Reconcile each milestone reviewer** — outcome `recorded` ⇒ clear the
    sentinel; `failed` ⇒ surface, no re-dispatch; `awaiting-input` or no live owner
    ⇒ re-dispatch (a fresh reviewer finds its own open request and waits again).
@@ -75,7 +75,8 @@ Tick brief, in order:
    (a) injected PR, (b) a `deferred` parent whose subtasks are all
    `verified`/`canceled`, (c) the first ticket in `<available>` — and decrement.
    Dispatch reserves no ledger entry.
-9. **Persist** the active set, then **report** (below) and check termination.
+9. **Report** (below) and check termination. State is already durable — every
+   `dispatch-state` command committed as it ran.
 
 Per-unit failures are isolated: log and continue.
 

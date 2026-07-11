@@ -4,42 +4,40 @@ Lookups for [`SKILL.md`](./SKILL.md).
 
 ## Run directory
 
-`dispatch-state` is on `PATH`.
+`dispatch-state` is on `PATH` and holds the run's state in SQLite, so concurrent
+agents cannot lose each other's writes.
 
 ```
 <run-dir>/
-  graph.json        durable normalized graph + cursor  (project-graph owns it)
-  document.xml      the derived document you read
-  active.json       { units: {<key>: {state, …}}, injected: [<ticket-id>] }
-  ledger/slot-N/    one dir per held compute entry: owner + heartbeat
-  locks/…           ticket-, PR-, or milestone-keyed liveness
-  units/…           outcome.xml, written by each unit as its final action
-  inbox/*.json      injected work, drained each tick
+  state.db        slots, locks, units, injections
+  graph.json      durable normalized graph + cursor  (project-graph owns it)
+  document.xml    the derived document you read
+  units/<n>/      outcome.xml, written by each unit as its final action
 ```
 
-Keys are encoded into path names — ask `dispatch-state unit dir <key>` for the
-path, never build it from the key.
+| command                                    | use                                                            |
+| ------------------------------------------ | -------------------------------------------------------------- |
+| `slot acquire\|release\|heartbeat <owner>` | compute entries; `acquire` exits 1 when the ledger is full     |
+| `slot free` / `slot reap`                  | free-entry count / reclaim entries with a stale heartbeat      |
+| `lock acquire <key> <agent> <kind>`        | claim a unit; exits 1 if already locked                        |
+| `lock live <key>` / `lock sweep`           | is the owner alive / clear stale locks                         |
+| `unit put <key> <state> [detail]`          | record a unit; every key here is excluded from `<available>`   |
+| `unit keys` / `unit list`                  | the active set                                                 |
+| `unit dir\|outcome\|cleanup <key>`         | a unit's path / its outcome / drop it, its lock, its artifacts |
+| `inject add\|drop\|list <key>`             | ticket ids ranked to the top of the frontier                   |
+| `inject queue <json>` / `inbox drain`      | queue ad-hoc work / take what is queued                        |
 
-| command                                     | use                                                         |
-| ------------------------------------------- | ----------------------------------------------------------- |
-| `init`                                      | create the run dir (idempotent)                             |
-| `slot acquire\|release\|heartbeat <owner>`  | compute entries; `acquire` exits 1 when the ledger is full  |
-| `slot free` / `slot reap`                   | free-entry count / reclaim entries with a stale heartbeat   |
-| `lock acquire <key> <agent> <kind>`         | claim a unit; exits 1 if already locked                     |
-| `lock live <key>` / `lock sweep`            | is the owner alive / clear stale locks                      |
-| `active put <key> <json>` / `rm` / `keys`   | the active set; every key here is excluded from `<available>` |
-| `active inject\|uninject\|injected <id>`    | ticket ids ranked to the top of the frontier                |
-| `inbox drain`                               | print injected items and consume them                       |
-| `unit dir\|outcome\|cleanup <key>`          | a unit's path / its outcome / remove its artifacts and lock |
-
-Active-set `state`: `dispatched` (the only one reconciled for liveness),
-`pending` (an injected PR awaiting dispatch), `deferred` (a `decomposed` parent),
-`failed`, `human-blocked`. Every state keeps the key out of `<available>`.
+Unit `state`: `dispatched` (the only one reconciled for liveness), `pending` (an
+injected PR awaiting dispatch), `deferred` (a `decomposed` parent), `failed`,
+`human-blocked`. Each keeps the key out of `<available>`. An `inject add` alone
+does **not** — that ticket is waiting to be dispatched, at the top of the
+frontier.
 
 A slot `<owner>` must be unique per concurrently-computing agent (e.g.
 `deliver:<repo>#<pr>`) — a coordinator running two builds holds two entries.
 Staleness is `DISPATCH_STALE_SECS` (default 900 s); ledger size is
-`DISPATCH_MAX_PARALLEL` (from `max_parallel`).
+`DISPATCH_MAX_PARALLEL` (from `max_parallel`). Ask `unit dir <key>` for a unit's
+path; never build it from the key.
 
 ## Dispatch
 
@@ -90,14 +88,13 @@ and let the next fetch return the ticket to the frontier.
 
 ## Injection
 
-A human or another agent drops one JSON file per item into `<run-dir>/inbox/`:
+A human or another agent queues work for a running orchestrator:
 
-```json
-{ "kind": "ticket", "id": "DEV-42" }
-{ "kind": "pr", "repo": "owner/name", "pr_number": 17, "pr_url": "https://…", "branch": "…" }
+```
+dispatch-state inject queue '{"kind":"ticket","id":"DEV-42"}'
+dispatch-state inject queue '{"kind":"pr","repo":"owner/name","pr_number":17,"pr_url":"…","branch":"…"}'
 ```
 
-An injected ticket's dependency ancestors come in with it on the next fetch. Its
-top-of-frontier rank lives in `active injected` until the work reaches a terminal
-outcome — a tick that drains an injection while the ledger is full must not lose
-it.
+The next tick's `inbox drain` takes it (exactly once). An injected ticket's
+dependency ancestors come in with it on the next fetch, and its top-of-frontier
+rank persists — a tick that finds the ledger full must not lose the injection.

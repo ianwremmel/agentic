@@ -20,6 +20,7 @@ import {readDelta} from './delta.mts';
 import {writeDocument} from './document.mts';
 import {EMPTY, merge} from './merge.mts';
 import {main} from './cli.mts';
+import {open, inject, putUnit} from '../state/db.mts';
 import {parse} from './xml.mts';
 
 const FULL = `
@@ -98,7 +99,9 @@ test('the CLI refreshes a run directory end to end', () => {
   writeFileSync(deltaPath, FULL);
   // The active set is dispatch-state's: DEV-2 is in flight, so it must not be
   // offered again, and it must not be reported as stalled either.
-  writeFileSync(join(runDir, 'active.json'), JSON.stringify({units: {'DEV-2': {state: 'dispatched'}}, injected: []}));
+  const db = open(runDir);
+  putUnit(db, 'DEV-2', 'dispatched');
+  db.close();
 
   main(['refresh', '--run-dir', runDir, '--delta', deltaPath]);
 
@@ -127,7 +130,9 @@ test('an injected ticket outranks the frontier through the CLI', () => {
        </nodes>
      </project-graph-delta>`,
   );
-  writeFileSync(join(runDir, 'active.json'), JSON.stringify({units: {}, injected: ['ZZZ']}));
+  const db = open(runDir);
+  inject(db, 'ZZZ');
+  db.close();
 
   main(['refresh', '--run-dir', runDir, '--delta', deltaPath]);
   const available = parse(readFileSync(join(runDir, 'document.xml'), 'utf8')).children.find(

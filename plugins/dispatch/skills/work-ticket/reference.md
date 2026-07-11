@@ -97,7 +97,7 @@ which reads the exported `DISPATCH_RUN_DIR`
   `dispatch-state lock heartbeat <key>` on a fixed interval; mirror a "working"
   label where available. Release it only as you exit.
 - **`outcome.xml`** — written as the final action, in `dispatch-state unit dir
-  <key>` (ask for the path; keys are encoded, so never build it by hand):
+  <key>` (ask for the path; never build it from the key):
 
   ```xml
   <outcome key="DEV-123" result="verified|canceled|delivered|human-blocked|decomposed|failed"
@@ -109,9 +109,8 @@ which reads the exported `DISPATCH_RUN_DIR`
 
   `retryable` only on a `failed` verification; `<subtask>` only on `decomposed`.
 
-The compute-slot **ledger** (`DISPATCH_MAX_PARALLEL`) lives in the same run dir
-but is shared by every agent on the host — take entries via `dispatch-state slot`,
-never by writing the files (see Slot seam in `SKILL.md`).
+The compute-slot **ledger** (`DISPATCH_MAX_PARALLEL`) is shared by every agent on
+the host — take entries via `dispatch-state slot` (see Slot seam in `SKILL.md`).
 
 ## Logging
 

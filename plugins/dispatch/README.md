@@ -31,9 +31,9 @@ Once installed, the plugin's skills appear under the `dispatch:` namespace. Run 
 
 ## Layout
 
-`bin/` holds the two commands the skills call — `dispatch-state` (run state: the compute-slot ledger, locks, the active set, the injection inbox) and `project-graph` (merge a tracker delta into the cache, derive the document). They are on `PATH` when the plugin is installed, so no skill reaches into another's directory. `project-graph`'s implementation and its tests live in `lib/graph/`; run them with `node --test 'plugins/dispatch/lib/**/*.test.mts'`.
+`bin/` holds the two commands the skills call — `dispatch-state` (the run's compute-slot ledger, locks, active set, and injection queue, in SQLite) and `project-graph` (merge a tracker delta into the cache, derive the document). They are on `PATH` when the plugin is installed, so no skill reaches into another's directory. Both are TypeScript, run by node with no build step; implementations and tests live in `lib/`. Run them with `node --test 'plugins/dispatch/lib/**/*.test.mts'`.
 
-Agents read XML (the project-graph document, a tracker delta, a unit's outcome). The run's internal state — the cache, ledger, locks, active set — is JSON that only those two commands touch.
+Agents read XML: the project-graph document, a tracker delta, a unit's outcome. The run's own state is a SQLite database that only `dispatch-state` and `project-graph` touch — several agents heartbeat, claim slots, and update the active set concurrently, and a transaction is what keeps them from losing each other's writes.
 
 ## Contributing
 

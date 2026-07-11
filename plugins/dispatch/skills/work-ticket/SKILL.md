@@ -15,9 +15,10 @@ does).
 **Operator** = the human directing this run. **Delivery worker** = a `deliver`
 instance, one per PR. Glossary and lookup tables: [`reference.md`](./reference.md).
 
-Your default tracker is `${user_config.tracker}` (the per-item tracker is still
-resolved from each ticket's URL/identity). The operator is
-`${user_config.operator_login}`.
+Nothing below names a tracker. The roles, transitions, and ticket operations are
+the protocol's; a **tracker adapter** binds them to whichever platform the ticket
+lives on (next section). Your default tracker is `${user_config.tracker}`; the
+operator is `${user_config.operator_login}`.
 
 ## Target kind & inputs
 
@@ -42,14 +43,33 @@ successors) read-only when it shapes delivery; never walk or reason over the gra
 
 ## Tracker
 
-For **ticket-backed** work the ticket's URL selects its tracker (a `linear.app`
-ticket → Linear; a `github.com` issue → GitHub Issues); the `tracker` config
-(default `linear`) is the fallback when the input is ambiguous — so a
-Linear-by-default install still handles a project whose tickets live elsewhere.
-**Only `linear` is implemented today**; a ticket on an unimplemented tracker →
-`ERROR` and stop. A **bare PR** has no ticket and no tracker to resolve — it is
-driven on the forge (GitHub) via `deliver` regardless. The body speaks role
-names; the per-tracker mapping is in `reference.md`.
+Ticket-backed work runs through a **tracker adapter** — the one document that
+knows a platform's state names and tool calls. Load it before the first ticket
+read:
+
+1. **Search path**, most specific first — `.claude/dispatch/trackers/` under the
+   repo root, then `${user_config.tracker_adapters_dir}`, then this skill's own
+   `trackers/` directory. Each holds one `<tracker-id>.md` per tracker;
+   `TEMPLATE.md` is the skeleton for writing one, not an adapter — skip it.
+2. **Tracker id** — list the search path and read each adapter's Identity section
+   (don't assume the bundled set), then: the adapter whose *ticket URLs* shape
+   matches the ticket's URL; failing that (a bare id, no URL) the adapter whose
+   *ticket ids* shape matches; failing that `${user_config.tracker}`. A ticket URL
+   that matches no adapter is an `ERROR` — it is a tracker you have no adapter
+   for, not a default-tracker ticket.
+3. **Adapter file** — the first `<tracker-id>.md` on the search path. A file
+   earlier in the path replaces a same-named one later, wholesale.
+4. **No adapter, or one missing a section the contract requires** → `ERROR` and
+   stop. Never infer a state name or a tool call; a hand-written adapter is more
+   often wrong than absent.
+
+Every ticket read and write below is one of the adapter's **operations**: name
+the operation, run its binding, and speak roles, never native states. Contract,
+operation vocabulary, and the fallbacks for an operation an adapter marks
+`unsupported`: [`reference.md`](./reference.md#tracker-adapters).
+
+A **bare PR** has no ticket, hence no adapter — it is driven on the forge
+(GitHub) via `deliver` regardless of the `tracker` config.
 
 ## Standalone vs dispatched
 
@@ -106,10 +126,10 @@ status only via `deliver`.
 | aims validated and DoD artifact posted             | `verified`    |
 
 Never `delivered` until **all** required PRs land (intermediate merges are
-recorded, not promoted). No `finished` where the tracker lacks it (collapse
-`in-review → delivered`). Corrective transitions carry a rationale. Emit no
-unenumerated transition; every change → a `TRANSITION` log **and** a state-change
-comment on the primary venue.
+recorded, not promoted). No `finished` where the adapter leaves it unmapped
+(collapse `in-review → delivered`). Corrective transitions carry a rationale.
+Emit no unenumerated transition; every change → a `TRANSITION` log **and** a
+state-change comment on the primary venue.
 
 ## Definition of done
 
@@ -124,10 +144,10 @@ delete the original artifact.
 Read the named conformance suite and deployed target; confirm it is reachable at
 the expected revision; run the suite **read-only** (a verification never mutates —
 a required mutation is a structural failure); attach the evidence; advance the
-forward path to `verified` with the DoD artifact (the path collapses where the
-tracker lacks roles; no unenumerated transition). Can't pass → `failed` with
-`retryable` (transient cause = retryable; structural = not). Never `verified` on
-failure.
+forward path to `verified` with the DoD artifact (the path collapses over roles
+the adapter leaves unmapped; no unenumerated transition). Can't pass → `failed`
+with `retryable` (transient cause = retryable; structural = not). Never
+`verified` on failure.
 
 ## Injected bare PR (no ticket)
 
@@ -144,7 +164,7 @@ external step:
 
 1. **Alert** via PR → ticket → new ticket, tagging ≥1 human, stating what's needed
    and why you can't proceed.
-2. Transition to **`awaiting-external`** (or `paused`); if the tracker maps
+2. Transition to **`awaiting-external`** (or `paused`); if the adapter maps
    neither, `ERROR` — there is no valid park.
 3. Log **`WAIT`** (name the venue + awaited outcome).
 4. **Release** — dispatched: write the `human-blocked` outcome and exit; standalone:
@@ -168,7 +188,7 @@ entry per concurrent build, else sequence), release on any wait
 
 The outcome is one of `verified` · `canceled` · `delivered` · `human-blocked` ·
 `decomposed` · `failed` — meaning, terminality, and how each resumes are in
-[`reference.md`](./reference.md#outcomes-25). Dispatched: write the outcome artifact
+[`reference.md`](./reference.md#outcomes). Dispatched: write the outcome artifact
 as your **final action**, honoring the lock until then. Standalone: report it to
 the session.
 
@@ -176,7 +196,7 @@ the session.
 
 Emit `TRANSITION` / `WAIT` / `RESUME` / `BLOCK` / `INFO` / `ERROR` one-liners, and
 echo every role change as a state-change comment on the primary venue. Format and
-fields: [`reference.md`](./reference.md#logging-23).
+fields: [`reference.md`](./reference.md#logging).
 
-See [`reference.md`](./reference.md) for the role mapping, tracker operations,
-dispatch-artifact shapes, and log format.
+See [`reference.md`](./reference.md) for the role vocabulary, the tracker-adapter
+contract, dispatch-artifact shapes, and the log format.

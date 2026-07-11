@@ -49,14 +49,20 @@ MUST surface an error rather than guess.
 
 | Native substate | Group       | Role                |
 | --------------- | ----------- | ------------------- |
+| Triage          | `backlog`   | `backlog`           |
 | Backlog         | `backlog`   | `backlog`           |
-| TODO            | `unstarted` | `available`         |
+| Todo            | `unstarted` | `available`         |
 | In Progress     | `started`   | `in-progress`       |
 | In Review       | `started`   | `in-review`         |
 | Finished        | `started`   | `finished`          |
 | Delivered       | `started`   | `delivered`         |
 | Done            | `completed` | `verified`          |
 | Canceled        | `canceled`  | `canceled`          |
+| Duplicate       | `canceled`  | `canceled`          |
+
+`Finished` and `Delivered` are custom substates a team adds; `Triage` exists only
+where Linear's triage feature is enabled. A team lacking one of them collapses
+the forward path over the missing role.
 
 Linear's top-level groups (`Backlog`, `Unstarted`, `Started`, `Completed`,
 `Canceled`) cannot be customized and map directly to the protocol's groups.

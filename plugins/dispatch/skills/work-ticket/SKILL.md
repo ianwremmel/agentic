@@ -157,18 +157,20 @@ resume from a **fresh claim** (parked → `available` → `in-progress`).
 ## Slot seam
 
 A slot is the right to use **local compute** (write code, install, build, test).
-The delivery worker — and this coordinator while it runs a verification suite —
-must hold a ledger entry while computing and release it for any wait. The ledger
-is the orchestrator's; **standalone there is none**, so acquire/release are no-op
-seams at the mandated points: acquire before a worker builds or a suite runs (one
-entry per concurrent build, else sequence), release on any wait
-(CI/review/merge/handoff/idle) or exit.
+Each `deliver` worker acquires and releases its **own** entry around its builds;
+you hold one only for a verification suite *you* run — owner
+`work-ticket:<ticket>`. Release on any wait or exit, and never release a worker's
+entry for it. Dispatched: the ledger is
+[`dispatch-state slot acquire|release|heartbeat <owner>`](../orchestrate/reference.md#run-directory)
+under the exported `DISPATCH_RUN_DIR`; a failed `acquire` means the host is full
+— wait and retry, never compute without an entry. Standalone: no ledger; the same
+points are no-op seams.
 
 ## Report
 
 The outcome is one of `verified` · `canceled` · `delivered` · `human-blocked` ·
 `decomposed` · `failed` — meaning, terminality, and how each resumes are in
-[`reference.md`](./reference.md#outcomes-25). Dispatched: write the outcome artifact
+[`reference.md`](./reference.md#outcomes). Dispatched: write the outcome artifact
 as your **final action**, honoring the lock until then. Standalone: report it to
 the session.
 
@@ -176,7 +178,7 @@ the session.
 
 Emit `TRANSITION` / `WAIT` / `RESUME` / `BLOCK` / `INFO` / `ERROR` one-liners, and
 echo every role change as a state-change comment on the primary venue. Format and
-fields: [`reference.md`](./reference.md#logging-23).
+fields: [`reference.md`](./reference.md#logging).
 
 See [`reference.md`](./reference.md) for the role mapping, tracker operations,
 dispatch-artifact shapes, and log format.

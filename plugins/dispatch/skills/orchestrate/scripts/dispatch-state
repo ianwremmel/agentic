@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# dispatch-state — on-disk state for the orchestrator: compute-slot ledger,
+# liveness locks, active set, injection inbox. §2.6 State and recovery.
+#
+# Usage: dispatch-state <group> <command> [args]
+#
+# Every claim is atomic (mkdir) and every file write is atomic (write-temp,
+# then rename), so concurrent agents on one host cannot both hold the same slot
+# or lock.
+#
+# <owner> (slots) MUST be unique per concurrently-computing agent — e.g.
+# deliver:<repo>#<pr>, work-ticket:<ticket> — because a coordinator running two
+# builds holds two entries and release/heartbeat address them by owner.
+#
+# Env:
+#   DISPATCH_RUN_DIR      run directory (required; the orchestrator exports it to
+#                         every agent it dispatches)
+#   DISPATCH_MAX_PARALLEL ledger size (default 3)
+#   DISPATCH_STALE_SECS   lock/heartbeat staleness threshold (default 900)
+#
+# Requires: jq.
+
+set -euo pipefail
+
+command -v jq >/dev/null 2>&1 || { echo "dispatch-state: jq not found on PATH" >&2; exit 3; }
+
+: "${DISPATCH_RUN_DIR:?DISPATCH_RUN_DIR required: the run directory the orchestrator exports}"
+MAX_PARALLEL="${DISPATCH_MAX_PARALLEL:-3}"
+STALE_SECS="${DISPATCH_STALE_SECS:-900}"
+
+LEDGER="$DISPATCH_RUN_DIR/ledger"
+LOCKS="$DISPATCH_RUN_DIR/locks"
+INBOX="$DISPATCH_RUN_DIR/inbox"
+UNITS="$DISPATCH_RUN_DIR/units"
+ACTIVE="$DISPATCH_RUN_DIR/active.json"
+
+now() { date -u +%s; }
+iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# Atomically replace $1 with stdin. An empty payload is a producer that failed
+# (a broken jq upstream), so refuse it — clobbering the active set with `[]`
+# would read downstream as "nothing in flight".
+put() {
+  local dest="$1" tmp
+  tmp="$(mktemp "$dest.XXXXXX")"
+  cat >"$tmp"
+  if [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"
+    echo "dispatch-state: refusing to write empty $dest" >&2
+    return 1
+  fi
+  mv -f "$tmp" "$dest"
+}
+
+# mtime of $1 in epoch seconds. GNU and BSD disagree on how to ask, and a
+# wrong answer here silently reclaims live slots and locks, so an unparseable
+# mtime is a hard error rather than a default.
+mtime_of() {
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
+  [[ -n "$m" ]] || { echo "dispatch-state: cannot read mtime of $1" >&2; exit 4; }
+  echo "$m"
+}
+
+# Age of the claim rooted at $1: its heartbeat file if stamped, else the claim
+# directory itself. A claim mkdir'd microseconds ago has not been stamped yet;
+# reading its (fresh) directory mtime is what stops the reaper from deleting a
+# claim its owner is still in the middle of making.
+claim_age() {
+  local dir="$1" beat="$2"
+  [[ -e "$dir" ]] || { echo 999999999; return; }
+  if [[ -e "$beat" ]]; then echo $(( $(now) - $(mtime_of "$beat") ))
+  else echo $(( $(now) - $(mtime_of "$dir") )); fi
+}
+
+# Keys (ticket ids, owner/repo#pr, milestone:<id>) become one path segment.
+# Collapsing unsafe characters alone is not injective — `a/b` and `a_b` would
+# share a lock — so a short digest of the raw key disambiguates.
+safe_key() {
+  local raw="$1" slug digest
+  slug="$(printf '%s' "$raw" | tr -c 'A-Za-z0-9._-' '_')"
+  digest="$(printf '%s' "$raw" | cksum | cut -d' ' -f1)"
+  printf '%s-%s' "$slug" "$digest"
+}
+
+init() {
+  mkdir -p "$LEDGER" "$LOCKS" "$INBOX" "$UNITS"
+  [[ -f "$ACTIVE" ]] || echo '{"units":{},"injected":[]}' | put "$ACTIVE"
+  echo "$DISPATCH_RUN_DIR"
+}
+
+# --- ledger: one entry per concurrent local-compute stage -------------------
+
+slot_reap() {
+  local d owner
+  for d in "$LEDGER"/slot-*; do
+    [[ -d "$d" ]] || continue
+    if [[ "$(claim_age "$d" "$d/beat")" -gt "$STALE_SECS" ]]; then
+      owner="$(cat "$d/owner" 2>/dev/null || echo '?')"
+      rm -rf "$d"
+      echo "reclaimed $(basename "$d") (stale owner=$owner)"
+    fi
+  done
+}
+
+slot_free() {
+  local held=0 d
+  for d in "$LEDGER"/slot-*; do [[ -d "$d" ]] && held=$((held + 1)); done
+  echo $(( MAX_PARALLEL - held ))
+}
+
+# Acquire one entry for <owner>. Prints the entry name, or exits 1 if the ledger
+# is full — the caller waits and retries; it never proceeds without an entry.
+slot_acquire() {
+  local owner="$1" i d
+  slot_reap >/dev/null
+  for (( i = 1; i <= MAX_PARALLEL; i++ )); do
+    d="$LEDGER/slot-$i"
+    if mkdir "$d" 2>/dev/null; then
+      printf '%s' "$owner" >"$d/owner"
+      : >"$d/beat"
+      echo "slot-$i"
+      return 0
+    fi
+  done
+  echo "dispatch-state: ledger full ($MAX_PARALLEL held)" >&2
+  return 1
+}
+
+# Release and heartbeat act only on the caller's own entry, so no agent can free
+# or refresh another's. Stale entries are the reaper's job.
+slot_for_owner() {
+  local owner="$1" d
+  for d in "$LEDGER"/slot-*; do
+    [[ -d "$d" ]] || continue
+    [[ "$(cat "$d/owner" 2>/dev/null || true)" == "$owner" ]] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+
+slot_release() {
+  local d
+  d="$(slot_for_owner "$1")" || { echo "dispatch-state: no entry held by $1" >&2; return 1; }
+  rm -rf "$d"
+  echo "released $(basename "$d")"
+}
+
+slot_heartbeat() {
+  local d
+  d="$(slot_for_owner "$1")" || { echo "dispatch-state: no entry held by $1" >&2; return 1; }
+  : >"$d/beat"
+}
+
+# --- locks: one per dispatched unit (ticket / PR / milestone) ---------------
+
+lock_path() { echo "$LOCKS/$(safe_key "$1").lock"; }
+
+lock_acquire() {
+  local key="$1" agent="$2" kind="$3" d meta
+  d="$(lock_path "$key")"
+  lock_sweep >/dev/null
+  mkdir "$d" 2>/dev/null || {
+    echo "dispatch-state: $key is locked by $(jq -r .agent_id "$d/meta.json" 2>/dev/null || echo '?')" >&2
+    return 1
+  }
+  meta="$(jq -n --arg k "$key" --arg a "$agent" --arg n "$kind" --arg t "$(iso)" \
+    '{key:$k, agent_id:$a, kind:$n, heartbeat:$t}')"
+  printf '%s\n' "$meta" | put "$d/meta.json"
+  echo "$d"
+}
+
+lock_heartbeat() {
+  local d out; d="$(lock_path "$1")"
+  [[ -d "$d" ]] || { echo "dispatch-state: no lock for $1" >&2; return 1; }
+  out="$(jq --arg t "$(iso)" '.heartbeat = $t' "$d/meta.json")"
+  printf '%s\n' "$out" | put "$d/meta.json"
+}
+
+lock_release() { rm -rf "$(lock_path "$1")"; }
+
+# Live iff the lock exists and its heartbeat is fresh. Ticks branch on this.
+lock_live() {
+  local d; d="$(lock_path "$1")"
+  [[ -d "$d" && "$(claim_age "$d" "$d/meta.json")" -le "$STALE_SECS" ]]
+}
+
+# Clear stale locks: the unit is presumed dead and eligible for re-dispatch.
+lock_sweep() {
+  local d
+  for d in "$LOCKS"/*.lock; do
+    [[ -d "$d" ]] || continue
+    if [[ "$(claim_age "$d" "$d/meta.json")" -gt "$STALE_SECS" ]]; then
+      jq -r '"cleared stale lock \(.key) (agent=\(.agent_id))"' "$d/meta.json" 2>/dev/null \
+        || echo "cleared stale lock $(basename "$d")"
+      rm -rf "$d"
+    fi
+  done
+}
+
+lock_list() { for d in "$LOCKS"/*.lock; do [[ -d "$d" ]] && cat "$d/meta.json"; done | jq -s .; }
+
+# --- active set -------------------------------------------------------------
+# units: every unit the orchestrator is tracking, each with a `state` —
+#   dispatched | deferred | failed | human-blocked. Only `dispatched` entries are
+#   reconciled for liveness; every key here is excluded from `available`, which
+#   is what stops a failed or deferred ticket from being re-dispatched forever.
+# injected: ticket ids drained from the inbox, ranked to the top of the frontier
+#   until they reach a terminal outcome. Persisted because a tick that finds the
+#   ledger full must not lose the injection.
+
+active_put() { # <key> <json>
+  local out; out="$(jq --arg k "$1" --argjson v "$2" '.units[$k] = $v' "$ACTIVE")"
+  printf '%s\n' "$out" | put "$ACTIVE"
+}
+active_rm() {
+  local out; out="$(jq --arg k "$1" 'del(.units[$k])' "$ACTIVE")"
+  printf '%s\n' "$out" | put "$ACTIVE"
+}
+active_get() { cat "$ACTIVE"; }
+active_keys() { jq -r '.units | keys[]' "$ACTIVE"; }
+active_inject() {
+  local out; out="$(jq --arg k "$1" '.injected |= (. + [$k] | unique)' "$ACTIVE")"
+  printf '%s\n' "$out" | put "$ACTIVE"
+}
+active_uninject() {
+  local out; out="$(jq --arg k "$1" '.injected |= map(select(. != $k))' "$ACTIVE")"
+  printf '%s\n' "$out" | put "$ACTIVE"
+}
+active_injected() { jq -r '.injected[]?' "$ACTIVE"; }
+
+# --- injection inbox --------------------------------------------------------
+# Each *.json dropped in inbox/ is one injected ticket or PR. Draining prints
+# them as one array and moves the files aside. A file that isn't valid JSON is
+# quarantined rather than failing the drain, so one bad drop cannot hold every
+# other injection hostage.
+
+inbox_drain() {
+  local f drained="$INBOX/.drained" rejected="$INBOX/.rejected" valid=()
+  mkdir -p "$drained" "$rejected"
+  shopt -s nullglob
+  local files=("$INBOX"/*.json)
+  shopt -u nullglob
+  for f in "${files[@]}"; do
+    if jq -e . "$f" >/dev/null 2>&1; then valid+=("$f")
+    else mv -f "$f" "$rejected/"; echo "dispatch-state: quarantined invalid $f" >&2; fi
+  done
+  [[ ${#valid[@]} -eq 0 ]] && { echo '[]'; return; }
+  jq -s . "${valid[@]}"
+  for f in "${valid[@]}"; do mv -f "$f" "$drained/"; done
+}
+
+# --- unit artifacts ---------------------------------------------------------
+# Dispatched agents write their outcome under `unit dir <key>`/outcome.json.
+# Always ask for the path; never build it from the key by hand.
+
+unit_dir() { echo "$UNITS/$(safe_key "$1")"; }
+outcome_read() {
+  local f; f="$(unit_dir "$1")/outcome.json"
+  [[ -f "$f" ]] && cat "$f" || return 1
+}
+unit_cleanup() { rm -rf "$(unit_dir "$1")"; lock_release "$1"; }
+
+group="${1:-}"; cmd="${2:-}"; shift 2 2>/dev/null || true
+case "$group:$cmd" in
+  init:*)             init ;;
+  slot:acquire)       slot_acquire "$@" ;;
+  slot:release)       slot_release "$@" ;;
+  slot:heartbeat)     slot_heartbeat "$@" ;;
+  slot:reap)          slot_reap ;;
+  slot:free)          slot_free ;;
+  lock:acquire)       lock_acquire "$@" ;;
+  lock:heartbeat)     lock_heartbeat "$@" ;;
+  lock:release)       lock_release "$@" ;;
+  lock:live)          lock_live "$@" ;;
+  lock:sweep)         lock_sweep ;;
+  lock:list)          lock_list ;;
+  active:put)         active_put "$@" ;;
+  active:rm)          active_rm "$@" ;;
+  active:get)         active_get ;;
+  active:keys)        active_keys ;;
+  active:inject)      active_inject "$@" ;;
+  active:uninject)    active_uninject "$@" ;;
+  active:injected)    active_injected ;;
+  inbox:drain)        inbox_drain ;;
+  unit:dir)           unit_dir "$@" ;;
+  unit:outcome)       outcome_read "$@" ;;
+  unit:cleanup)       unit_cleanup "$@" ;;
+  *) echo "usage: dispatch-state {init|slot|lock|active|inbox|unit} <command> [args]" >&2; exit 2 ;;
+esac

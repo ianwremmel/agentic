@@ -2,7 +2,7 @@
 
 > Claude Code plugin for dispatching engineering work across pull requests and [Linear.app](https://linear.app) projects.
 
-Covers the full lifecycle: drafting PRs from a working branch, pushing and publishing, CI triage, responding to review comments, and merging — alongside Linear issue triage, project planning and breakdown, status updates, standups, and keeping Linear issues in sync with GitHub PRs. Skills, agents, and hooks are being migrated from a prior repo — this directory is scaffolding for now.
+Covers the full lifecycle at three scopes: a project (`orchestrate`), a ticket (`work-ticket`), and a pull request (`deliver`). Each dispatches the one below it.
 
 ## Install
 
@@ -17,6 +17,16 @@ See the [root README](/README.md#install) for marketplace setup.
 ## Usage
 
 Once installed, the plugin's skills appear under the `dispatch:` namespace. Run `/help` from inside Claude Code to list them.
+
+| Skill              | Scope                | Does                                                                                                                  |
+| ------------------ | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `orchestrate`      | one or more projects | Ticks over the dependency graph: dispatches a coordinator per unblocked ticket, gates milestones on review, bounds local compute, runs until every project is terminal. |
+| `work-ticket`      | one ticket           | Claims it, fetches its own brief, decomposes if needed, drives its PR(s) via `deliver`, verifies its aims.            |
+| `deliver`          | one PR               | Draft PR → CI → review → merge.                                                                                       |
+| `build-graph`      | the graph            | Produces the tracker-neutral project-graph document `orchestrate` reads.                                              |
+| `review-milestone` | one milestone        | Judges whether a completed milestone met its goal; files follow-ups; records the outcome.                             |
+
+`orchestrate` needs `max_parallel` (compute slots) and `tracker`; `deliver` needs `operator_login`. See the plugin config for the rest.
 
 ## Contributing
 

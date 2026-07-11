@@ -9,7 +9,7 @@ Land a code change via a PR. Each tick: run `scripts/pr-status`, address every
 actionable concern, then evaluate the gates to decide whether to transition.
 
 **Operator** = the one human directing this agent; the only human with stop
-authority. Role glossary in [`reference.md`](./reference.md#roles-1).
+authority. Role glossary in [`reference.md`](./reference.md#roles).
 
 **Running `pr-status`.** Run `scripts/pr-status <pr>`.
 
@@ -255,6 +255,13 @@ Apply in every state.
   attempts to leave `draft`. Earlier greens don't count.
 - **Heartbeats.** While polling, emit INFO heartbeats (see
   [`reference.md`](./reference.md#operational-logging); `ticket=-` when none).
+- **Hold a compute slot only while computing.** When `DISPATCH_RUN_DIR` is set,
+  acquire a ledger entry
+  ([`../orchestrate/reference.md`](../orchestrate/reference.md#run-directory),
+  owner `deliver:<repo>#<pr>`) before you write code, install, build, or test,
+  heartbeat it while you do, and release it the moment you start any wait — CI,
+  reviewer, merge, idle poll — or exit. A full ledger means waiting and retrying,
+  never building anyway. Unset ⇒ there is no ledger and these are no-ops.
 - **Termination is narrow.** Only PR closure or explicit operator "stop"
   terminates. Plan completion, green CI, review requests, `ready_for_merge`, and
   "nobody to ask" do not. The agent runs the loop through itself (see Polling) and

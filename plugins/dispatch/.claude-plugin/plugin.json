@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -46,8 +46,14 @@
     "tracker": {
       "type": "string",
       "title": "Work-item tracker",
-      "description": "Default work-item tracker for `work-ticket`. For ticket-backed work the tracker is resolved from the ticket's URL, so a Linear-by-default install still handles a project whose tickets live on another tracker; this value is the fallback when the ticket URL is ambiguous. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) The tracker-specific role mapping lives in the skill's reference.md. Only `linear` is implemented today — a ticket on any other tracker errors.",
+      "description": "Default work-item tracker for `work-ticket` and `build-graph`. For ticket-backed work the tracker is resolved from the ticket's URL, so a Linear-by-default install still handles a project whose tickets live on another tracker; this value is the fallback when the ticket URL is ambiguous. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) The tracker-specific role mapping lives in the skill's reference.md. Only `linear` is implemented today — a ticket on any other tracker errors.",
       "default": "linear"
+    },
+    "max_parallel": {
+      "type": "number",
+      "title": "Max parallel compute slots",
+      "description": "Size of the compute-slot ledger `orchestrate` maintains. Bounds how many agents may write code, install, build, or run tests on this host at once — a PR merely awaiting CI, review, or merge holds no slot. Raise it on a big machine; lower it if concurrent builds thrash.",
+      "default": 3
     }
   }
 }

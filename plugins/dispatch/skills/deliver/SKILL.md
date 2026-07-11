@@ -11,12 +11,7 @@ actionable concern, then evaluate the gates to decide whether to transition.
 **Operator** = the one human directing this agent; the only human with stop
 authority. Role glossary in [`reference.md`](./reference.md#roles-1).
 
-**Running `pr-status`.** Run `scripts/pr-status <pr>`. It reads the
-`operator_login` plugin option straight from the environment (the harness
-exports it) — you don't pass it in. `operator_login` is **required**; if it's
-unset the script errors and tells the operator to configure the plugin. It
-classifies `<review>` roles from that login and never falls back to the ticket
-assigner (in Mode B it's the shared/authenticated account).
+**Running `pr-status`.** Run `scripts/pr-status <pr>`.
 
 ## Setup
 
@@ -115,6 +110,10 @@ stateDiagram-v2
     done --> [*]
 ```
 
+Copilot review is `${user_config.copilot_available}` on this install — when
+`false`, take the `Copilot unavailable` edges and skip the `copilot_*` states
+entirely.
+
 `private_review_*` is unreachable in solo mode. **Who clears draft depends on
 mode.** In solo mode the agent clears draft on the edge into
 `ready_for_public_review` (out of `copilot_review_requested`, or `draft` when
@@ -168,11 +167,8 @@ gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
 
 ### Solo vs team mode
 
-**`team_mode` is `${user_config.team_mode}` — never infer it.** The harness
-substitutes the configured value (or the declared `false` default) into this
-skill at load time, so there's no unset case. Mode picks which states are
-reachable and who clears draft (the agent in solo, the operator in team);
-guessing drives the wrong lifecycle.
+**`team_mode` is `${user_config.team_mode}` — never infer it.** Mode picks which states are
+reachable and who clears draft (the agent in solo, the operator in team).
 
 - **Solo** (default). Operator is the only human reviewer. After Copilot, the
   agent clears draft and engages the operator as the public reviewer.
@@ -318,20 +314,6 @@ wait, append one line:
 On entry to a polling state, read the median `elapsed_s` for that kind and tune
 the schedule (shorten the head for fast CI; lengthen the tail for slow
 reviewers). Cap at ~100 entries per kind.
-
-## Configuration
-
-Behavior keys from the plugin's `userConfig`. The values the agent branches on
-are interpolated inline above — `${user_config.team_mode}` (Solo vs team mode)
-and `${user_config.worktree_base}` (Setup); `operator_login` is consumed by
-`pr-status` directly.
-
-| Key                 | Effect                                                                                                                                       |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator_login`    | Operator's GitHub login. **Required.** Read by `pr-status`; targets Mode A review requests and classifies `<review>` role (operator vs team). Mode B: the shared/authenticated account. |
-| `team_mode`         | `true` → operator is one of several reviewers; insert `private_review_*` (draft) before clearing draft for `public_review_*`. Default `false`. |
-| `copilot_available` | `false` → skip Copilot: `draft → ready_for_public_review` (solo) or `→ ready_for_private_review` (team) directly. Default `true`.            |
-| `worktree_base`     | Root for per-PR worktrees (`<base>/<owner>/<repo>/<branch>`). Default `~/.worktrees`.                                                        |
 
 ## References
 

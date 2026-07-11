@@ -48,11 +48,11 @@ STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
 TERMINAL_RE='^[[:space:]]*(✓|✅|done\.?|declined\.?|shipped\.?|acknowledged\.?|wontfix\.?|dismissed\.?|resolved\.?)[[:space:]]*$'
 
 # gh-authenticated identity — the agent's own login. classify_actionable uses it
-# (author match + marker) to recognize the calling agent's plan/engagement/
-# terminal-tagged artifacts and suppress them. Empty only if `gh api user` fails
-# (rare — gh is a hard requirement); a breadcrumb then warns suppression is off.
+# (author match + marker) to recognize the calling agent's own plan/engagement/
+# terminal-tagged artifacts and suppress them. It's the only identity source, so
+# a failure here is fatal — without it every self-authored item stays actionable.
 CALLER_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
-[[ -z "$CALLER_LOGIN" ]] && echo "pr-status: warning: gh api user failed; self-artifact actionability suppression disabled" >&2
+[[ -n "$CALLER_LOGIN" ]] || { echo "pr-status: could not resolve the authenticated GitHub user (gh api user failed); run 'gh auth status' — cannot proceed" >&2; exit 3; }
 
 xml_attr() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
 xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -348,9 +348,9 @@ has_terminal_signal() {
 # engagement comment (line-anchored agent-plan/agent-engagement sentinel +
 # author identity, so a human quoting the marker stays actionable), or the body
 # is the calling agent's terminal-tagged reply (any agent-reply marker + author
-# identity + terminal signal on the last non-empty line). All three author
-# checks key on $CALLER_LOGIN; if it is unavailable (`gh api user` failed) the
-# agent-artifact/terminal-reply suppressions simply don't fire.
+# identity + terminal signal on the last non-empty line). The author checks key
+# on $CALLER_LOGIN (guaranteed set — the script exits earlier if it can't be
+# resolved).
 classify_actionable() {
   local body="$1" author="$2" resolved="$3"
   [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
@@ -360,7 +360,7 @@ classify_actionable() {
   # approval (Gate 6) and would otherwise stay actionable forever — blocking
   # Gate 4 and thus the draft-clear/merge transitions — since the agent never
   # "addresses" its own request.
-  if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+  if [[ "$author" == "$CALLER_LOGIN" ]] \
       && grep -qE '^<!-- agent-(plan|engagement):[^ ]+ -->$' <<<"$body"; then
     printf 'false\tagent-artifact\n'; return
   fi
@@ -368,7 +368,7 @@ classify_actionable() {
   # Terminal-tagged reply by the calling agent: own login + an agent-reply marker
   # + a terminal signal on the last non-empty line.
   if has_terminal_signal "$body" \
-      && [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+      && [[ "$author" == "$CALLER_LOGIN" ]] \
       && grep -qF '<!-- agent-reply:' <<<"$body"; then
     printf 'false\tagent-terminal-reply\n'; return
   fi

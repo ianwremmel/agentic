@@ -15,10 +15,8 @@ aims are **verified** — not merely merged. It does **not** own the PR lifecycl
 instance, one per PR. Glossary and lookup tables: [`reference.md`](./reference.md).
 
 Your default tracker is `${user_config.tracker}` (the per-item tracker is still
-resolved from each ticket's URL/identity — §Tracker). The operator is
-`${user_config.operator_login}`. Everything else `deliver` needs (`worktree_base`,
-`team_mode`, `copilot_available`) it reads from the shared plugin config itself —
-you don't forward it.
+resolved from each ticket's URL/identity). The operator is
+`${user_config.operator_login}`.
 
 ## Target kind & inputs
 
@@ -177,6 +175,5 @@ Emit `TRANSITION` / `WAIT` / `RESUME` / `BLOCK` / `INFO` / `ERROR` one-liners, a
 echo every role change as a state-change comment on the primary venue. Format and
 fields: [`reference.md`](./reference.md#logging-23).
 
-See [`reference.md`](./reference.md) for the role mapping, tracker operations, §2.1
-recap, dispatch-artifact shapes, and log format. The spec (§2.1/§2.3/§2.4/§2.5/§2.6)
-is authoritative where they differ.
+See [`reference.md`](./reference.md) for the role mapping, tracker operations,
+dispatch-artifact shapes, and log format.

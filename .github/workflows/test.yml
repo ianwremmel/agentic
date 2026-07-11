@@ -1,0 +1,19 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: node --test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The plugin's TypeScript runs on node directly, with no build step, so
+          # the runtime has to be new enough to strip types natively.
+          node-version: '24'
+      - name: Run the dispatch plugin's tests
+        run: node --test 'plugins/dispatch/lib/**/*.test.mts'

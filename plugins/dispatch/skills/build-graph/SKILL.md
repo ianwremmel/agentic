@@ -1,66 +1,45 @@
 ---
 name: build-graph
-description: Produce the tracker-neutral project-graph document for one or more projects — fetch tracker state (full or since a cursor), normalize it, derive the ranked frontier, blocked sets, milestone flags, counts, and anomalies. Use when an orchestrator needs the graph, or to inspect a project's frontier standalone.
+description: Produce the tracker-neutral project-graph document for one or more projects — fetch tracker state via the tracker's adapter, merge it into the run's cache, and derive the ranked frontier, blocked sets, milestone flags, counts, and anomalies. Use when an orchestrator needs the graph, or to inspect a project's frontier standalone.
 ---
 
 # build-graph
 
 The **producer**: turn one tracker's projects into one merged, derived
-project-graph document. Three steps, in order:
-
-1. **Fetch** — tracker-specific. Full sync, or a delta since a `cursor`.
-2. **Normalize** — map tracker state onto the neutral node/edge shape.
-3. **Derive** — run `scripts/graph`. Never derive by hand.
+project-graph document.
 
 ## Inputs
 
-| input      | meaning                                                                       |
-| ---------- | ----------------------------------------------------------------------------- |
-| `projects` | one or more project identifiers, all on **one** tracker (cross-tracker: stop) |
-| `cache`    | path to the durable normalized graph (the caller's run dir)                   |
-| `cursor`   | opaque, tracker-defined; absent ⇒ full sync                                   |
-| `exclude`  | ids in flight, done, or failed — kept out of `available` only                 |
-| `priority` | ids to rank to the top of the frontier (injected work)                        |
+`projects` (one or more ids, all on **one** tracker — mixed trackers: stop) and
+the run directory. Everything else is state: the cursor lives in the cache, and
+the exclusions and injected priorities come from the run's active set.
 
-Full sync on first run, after a cursor gap, or when the tracker has no
-changed-since query. Otherwise fetch the delta.
+## 1. Fetch (the tracker's adapter)
 
-## 1. Fetch
+Resolve the tracker from the projects, falling back to
+`${user_config.tracker}`. Invoke `graph-fetch-<tracker>` — Linear:
+[`graph-fetch-linear`](../graph-fetch-linear/SKILL.md) — with the projects, the
+cursor from `<run-dir>/graph.json`, and an output path. It writes one
+`<project-graph-delta>` ([`reference.md`](./reference.md#the-delta)).
 
-Resolve the tracker from the project identifiers, falling back to
-`${user_config.tracker}`.
+No adapter for the tracker is an `ERROR` — never improvise one.
 
-**Prefer an adapter.** If a `graph-fetch-<tracker>` skill is installed, invoke it
-and use its output as the delta. Only when none exists, fetch through the
-tracker's MCP server yourself (Linear:
-[`reference.md`](./reference.md#linear-via-mcp)).
-
-An unmapped tracker is an `ERROR`, never a guess.
-
-## 2. Normalize
-
-Emit one delta document: `projects`, `milestones`, `nodes`, `edges`, `cursor`
-([`reference.md`](./reference.md#normalized-input)). Every node carries its role
-and group — map substates with the tracker's role table (Linear:
-[`work-ticket/reference.md`](../work-ticket/reference.md#linear--roles)); an
-unmapped substate is an `ERROR`.
-
-Exclusions **never** suppress a node or edge update; they only affect ranking
-(step 3).
-
-## 3. Derive
+## 2. Merge + derive
 
 ```
-scripts/graph merge  --cache <cache> --delta <delta.json>
-scripts/graph derive --cache <cache> --exclude <ids> --priority <ids> > <document.json>
+project-graph refresh --run-dir <run-dir> --delta <delta.xml>
 ```
 
-`merge` is a mechanical upsert; `derive` computes effective-blocking, the
-milestone-review gate, ranking, cycles, and counts.
+Merges the delta into the cache, then writes `<run-dir>/document.xml` and prints
+its path. `refresh` is the whole step — never merge or derive by hand.
+
+To re-derive without fetching, after the active set changed:
+`project-graph derive --run-dir <run-dir>`.
 
 ## Report
 
-The document path, plus a one-line summary (`N available · M blocked · K
-human-blocked · anomalies: …`). Surface anomalies loudly — a dependency cycle is
-illegal, and its nodes are withheld from `available`. Never edit the document by
-hand.
+The document path and a one-line summary: `N available · M blocked · K
+human-blocked · S stalled · anomalies: …`.
+
+Surface anomalies loudly: they withhold work from the frontier, so never report
+an empty frontier as "nothing to do". Never edit the document by hand.

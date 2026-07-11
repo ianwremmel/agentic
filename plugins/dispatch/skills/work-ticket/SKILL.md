@@ -162,9 +162,9 @@ you hold one only for a verification suite *you* run — owner
 `work-ticket:<ticket>`. Release on any wait or exit, and never release a worker's
 entry for it. Dispatched: the ledger is
 [`dispatch-state slot acquire|release|heartbeat <owner>`](../orchestrate/reference.md#run-directory)
-under the exported `DISPATCH_RUN_DIR`; a failed `acquire` means the host is full
-— wait and retry, never compute without an entry. Standalone: no ledger; the same
-points are no-op seams.
+— the command is on `PATH` and reads the exported `DISPATCH_RUN_DIR`. A failed
+`acquire` means the host is full: wait and retry, never compute without an entry.
+Standalone: no `DISPATCH_RUN_DIR`, no ledger; the same points are no-op seams.
 
 ## Report
 

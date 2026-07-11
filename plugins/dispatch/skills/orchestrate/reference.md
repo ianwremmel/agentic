@@ -2,51 +2,39 @@
 
 Lookups for [`SKILL.md`](./SKILL.md).
 
-## Actors
-
-- **Coordinator** — a [`work-ticket`](../work-ticket/SKILL.md) instance; owns one
-  work item (a ticket's PR(s), a no-PR verification, or one injected PR).
-- **Delivery worker** — a `deliver` instance inside a coordinator, one per PR.
-  Not dispatched by you, but draws from your ledger.
-- **Milestone reviewer** — a [`review-milestone`](../review-milestone/SKILL.md)
-  instance; one per ready-for-review milestone.
-- **Producer** — [`build-graph`](../build-graph/SKILL.md); your only *read* path
-  to the tracker. Your only writes are the park transition and the human alert.
-
 ## Run directory
+
+`dispatch-state` is on `PATH`.
 
 ```
 <run-dir>/
-  graph.json        durable normalized graph + cursor   (build-graph owns the contents)
-  document.json     last derived document               (read-only to you)
+  graph.json        durable normalized graph + cursor  (project-graph owns it)
+  document.xml      the derived document you read
   active.json       { units: {<key>: {state, …}}, injected: [<ticket-id>] }
   ledger/slot-N/    one dir per held compute entry: owner + heartbeat
   locks/…           ticket-, PR-, or milestone-keyed liveness
-  units/…           outcome.json, written by the unit as its final action
+  units/…           outcome.xml, written by each unit as its final action
   inbox/*.json      injected work, drained each tick
 ```
 
-Keys are encoded into path names — ask `unit dir <key>` for the path, never
-build it from the key.
+Keys are encoded into path names — ask `dispatch-state unit dir <key>` for the
+path, never build it from the key.
 
-`scripts/dispatch-state <group> <command>`:
-
-| command                                     | use                                                        |
-| ------------------------------------------- | ---------------------------------------------------------- |
-| `init`                                      | create the run dir (idempotent)                            |
-| `slot acquire\|release\|heartbeat <owner>`  | compute entries; `acquire` exits 1 when the ledger is full |
-| `slot free` / `slot reap`                   | free-entry count / reclaim entries with a stale heartbeat  |
-| `lock acquire <key> <agent> <kind>`         | claim a unit; exits 1 if already locked                    |
-| `lock live <key>` / `lock sweep`            | is the owner alive / clear stale locks                     |
-| `active put <key> <json>` / `rm` / `keys`   | the active set; every key here is excluded from `available` |
-| `active inject\|uninject\|injected <id>`    | ticket ids ranked to the top of the frontier               |
-| `inbox drain`                               | print injected items and consume them                      |
+| command                                     | use                                                         |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `init`                                      | create the run dir (idempotent)                             |
+| `slot acquire\|release\|heartbeat <owner>`  | compute entries; `acquire` exits 1 when the ledger is full  |
+| `slot free` / `slot reap`                   | free-entry count / reclaim entries with a stale heartbeat   |
+| `lock acquire <key> <agent> <kind>`         | claim a unit; exits 1 if already locked                     |
+| `lock live <key>` / `lock sweep`            | is the owner alive / clear stale locks                      |
+| `active put <key> <json>` / `rm` / `keys`   | the active set; every key here is excluded from `<available>` |
+| `active inject\|uninject\|injected <id>`    | ticket ids ranked to the top of the frontier                |
+| `inbox drain`                               | print injected items and consume them                       |
 | `unit dir\|outcome\|cleanup <key>`          | a unit's path / its outcome / remove its artifacts and lock |
 
 Active-set `state`: `dispatched` (the only one reconciled for liveness),
 `pending` (an injected PR awaiting dispatch), `deferred` (a `decomposed` parent),
-`failed`, `human-blocked`. Every state keeps the key out of `available`, which is
-what stops a failed or deferred ticket from being re-dispatched on a loop.
+`failed`, `human-blocked`. Every state keeps the key out of `<available>`.
 
 A slot `<owner>` must be unique per concurrently-computing agent (e.g.
 `deliver:<repo>#<pr>`) — a coordinator running two builds holds two entries.
@@ -55,8 +43,8 @@ Staleness is `DISPATCH_STALE_SECS` (default 900 s); ledger size is
 
 ## Dispatch
 
-Each unit holds a heartbeated lock and writes `units/<key>/outcome.json` as its
-final action.
+Each unit runs as a background subagent with `DISPATCH_RUN_DIR` exported, holds a
+heartbeated lock, and writes `outcome.xml` in its `unit dir` as its final action.
 
 | unit                | key                  | inputs                                                               |
 | ------------------- | -------------------- | -------------------------------------------------------------------- |
@@ -64,7 +52,8 @@ final action.
 | coordinator, PR     | `<repo>#<pr_number>` | `repo`, `pr_number`, `pr_url`, `branch`, identity/mode               |
 | milestone reviewer  | `milestone:<id>`     | milestone id + project                                               |
 
-Hints are non-authoritative.
+Hints are non-authoritative. Ticket *content* is never passed — the coordinator
+fetches its own brief.
 
 ## Reconciling a coordinator
 
@@ -81,10 +70,10 @@ Hints are non-authoritative.
 | **no outcome**, no live lock          | re-dispatch the same coordinator                                                       |
 | **no outcome**, live lock             | nothing this tick                                                                      |
 
-Dropping an entry re-admits its ticket to `available`, so only drop a unit whose
+Dropping an entry re-admits its ticket to `<available>`, so only drop a unit whose
 work is genuinely finished. Cleanup is the artifacts, the lock, any mirrored
-"working" label, and any worktree the unit left behind. Never force-release a
-live agent's ledger entry — the stale-heartbeat reaper takes those.
+"working" label, and any worktree the unit left behind. Never force-release a live
+agent's ledger entry — the stale-heartbeat reaper takes those.
 
 ## Human alerts
 
@@ -101,7 +90,7 @@ and let the next fetch return the ticket to the frontier.
 
 ## Injection
 
-Drop one JSON file per item into `inbox/`:
+A human or another agent drops one JSON file per item into `<run-dir>/inbox/`:
 
 ```json
 { "kind": "ticket", "id": "DEV-42" }

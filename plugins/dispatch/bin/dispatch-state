@@ -91,8 +91,13 @@ safe_key() {
   printf '%s-%s' "$slug" "$digest"
 }
 
+# Cheap and idempotent, and it runs before every command: `mkdir` on a claim
+# cannot distinguish "the parent does not exist" from "someone else holds it", so
+# an uninitialized run dir would otherwise look like a permanently full ledger.
+ensure_dirs() { mkdir -p "$LEDGER" "$LOCKS" "$INBOX" "$UNITS"; }
+
 init() {
-  mkdir -p "$LEDGER" "$LOCKS" "$INBOX" "$UNITS"
+  ensure_dirs
   [[ -f "$ACTIVE" ]] || echo '{"units":{},"injected":[]}' | put "$ACTIVE"
   echo "$DISPATCH_RUN_DIR"
 }
@@ -209,7 +214,7 @@ lock_list() { for d in "$LOCKS"/*.lock; do [[ -d "$d" ]] && cat "$d/meta.json"; 
 
 # --- active set -------------------------------------------------------------
 # units: every unit the orchestrator is tracking, each with a `state` —
-#   dispatched | deferred | failed | human-blocked. Only `dispatched` entries are
+#   dispatched | pending | deferred | failed | human-blocked. Only `dispatched` are
 #   reconciled for liveness; every key here is excluded from `available`, which
 #   is what stops a failed or deferred ticket from being re-dispatched forever.
 # injected: ticket ids drained from the inbox, ranked to the top of the frontier
@@ -248,6 +253,9 @@ inbox_drain() {
   shopt -s nullglob
   local files=("$INBOX"/*.json)
   shopt -u nullglob
+  # An empty inbox is the normal case, and bash 3.2 (macOS) treats "${empty[@]}"
+  # as an unbound variable under `set -u` — so never expand either array empty.
+  [[ ${#files[@]} -eq 0 ]] && { echo '[]'; return; }
   for f in "${files[@]}"; do
     if jq -e . "$f" >/dev/null 2>&1; then valid+=("$f")
     else mv -f "$f" "$rejected/"; echo "dispatch-state: quarantined invalid $f" >&2; fi
@@ -258,17 +266,18 @@ inbox_drain() {
 }
 
 # --- unit artifacts ---------------------------------------------------------
-# Dispatched agents write their outcome under `unit dir <key>`/outcome.json.
-# Always ask for the path; never build it from the key by hand.
+# Dispatched agents write their outcome under `unit dir <key>`/outcome.xml — XML
+# because an agent reads it. Always ask for the path; never build it from the key.
 
 unit_dir() { echo "$UNITS/$(safe_key "$1")"; }
 outcome_read() {
-  local f; f="$(unit_dir "$1")/outcome.json"
+  local f; f="$(unit_dir "$1")/outcome.xml"
   [[ -f "$f" ]] && cat "$f" || return 1
 }
 unit_cleanup() { rm -rf "$(unit_dir "$1")"; lock_release "$1"; }
 
 group="${1:-}"; cmd="${2:-}"; shift 2 2>/dev/null || true
+ensure_dirs
 case "$group:$cmd" in
   init:*)             init ;;
   slot:acquire)       slot_acquire "$@" ;;

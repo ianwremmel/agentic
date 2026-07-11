@@ -88,19 +88,26 @@ resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human
 ## Dispatch artifacts
 
 Standalone writes none of this (report to the session and stop). A **dispatched**
-coordinator honors the orchestrator's contract, using the `dispatch-state` script
-under the exported `DISPATCH_RUN_DIR`
+coordinator honors the orchestrator's contract via `dispatch-state` (on `PATH`),
+which reads the exported `DISPATCH_RUN_DIR`
 ([`orchestrate/reference.md`](../orchestrate/reference.md#run-directory)).
 `<key>` = `ticket_id` (ticket) or `<repo>#<pr_number>` (bare PR).
 
 - **Lock** — `dispatch-state lock acquire <key> <agent-id> ticket|pr`, then
   `dispatch-state lock heartbeat <key>` on a fixed interval; mirror a "working"
   label where available. Release it only as you exit.
-- **`outcome.json`** — written as the final action, in `unit dir <key>` (ask the
-  script for the path; keys are encoded, so never build it by hand).
-  `{ "key":"DEV-123", "outcome":"…", "ticket_url":"…|null", "pr_urls":[…], "retryable":null, "subtasks":[], "detail":"…" }`
-  (`retryable` is a boolean only for a `failed` verification; `subtasks` lists filed
-  ids on `decomposed`.)
+- **`outcome.xml`** — written as the final action, in `dispatch-state unit dir
+  <key>` (ask for the path; keys are encoded, so never build it by hand):
+
+  ```xml
+  <outcome key="DEV-123" result="verified|canceled|delivered|human-blocked|decomposed|failed"
+           ticket-url="https://…" retryable="true" detail="one line">
+    <pr url="https://github.com/o/r/pull/7"/>
+    <subtask id="DEV-124"/>
+  </outcome>
+  ```
+
+  `retryable` only on a `failed` verification; `<subtask>` only on `decomposed`.
 
 The compute-slot **ledger** (`DISPATCH_MAX_PARALLEL`) lives in the same run dir
 but is shared by every agent on the host — take entries via `dispatch-state slot`,

@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+// project-graph — the deterministic half of the project-graph producer.
+// The implementation lives in ../lib/graph; this is the entry point on PATH.
+
+import {main} from '../lib/graph/cli.mts';
+
+try {
+  main(process.argv.slice(2));
+} catch (error) {
+  console.error(`project-graph: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}

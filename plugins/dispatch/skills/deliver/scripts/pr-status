@@ -8,7 +8,9 @@
 # Only CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN is required (the operator sets it in
 # the plugin config); the script errors, pointing at the plugin config, if unset.
 #
-# Requires: gh, jq, claude. Run from inside the repo's git worktree.
+# Requires: gh + jq (hard — the script exits if either is missing). git and
+# claude are optional: content_present (terminal resolution) and summarize
+# degrade gracefully without them. Run from inside the repo's git worktree.
 
 set -euo pipefail
 

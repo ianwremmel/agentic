@@ -160,8 +160,8 @@ A comment or thread is **non-actionable** iff any of:
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
   terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional
   trailing period, or `✓`/`✅`). The author match keys on the gh-authenticated
-  login; if `gh api user` fails this suppression simply doesn't fire (warning to
-  stderr).
+  login; `pr-status` exits early if it can't resolve that login (a `gh api user`
+  failure is fatal, since it's the only identity source).
 - the platform has explicitly resolved the thread (threads only).
 
 A reviewer reply after the agent's last turn re-actionables the item. An

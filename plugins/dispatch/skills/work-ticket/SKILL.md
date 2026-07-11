@@ -56,8 +56,9 @@ names; the per-tracker mapping is in `reference.md`.
 Same rules; only the reporting surface differs. **Standalone** — a human runs
 `/work-ticket <ID>`; report the outcome to the session. **Dispatched** — the
 orchestrator hands over the item and expects an outcome artifact + heartbeated lock
-([`reference.md`](./reference.md#dispatch-artifacts)), and passes identity/mode +
-operator login, which you forward to every `deliver`.
+([`reference.md`](./reference.md#dispatch-artifacts)), and passes identity/mode,
+which you forward to every `deliver`. (Operator login is not forwarded — each
+`deliver` reads it from the shared plugin config.)
 
 Assigned for the run, you are bound by the **communication restriction**:
 never solicit a session response or block on session input for progress; route
@@ -89,7 +90,7 @@ straight to `in-progress`.
 
 Drive each in-scope unit's PR to terminal through `deliver` — one `deliver`
 instance each. Invoke `dispatch:deliver` inline (single PR) or as a subagent
-(concurrent PRs), forwarding operator login + identity/mode. **Sequential by
+(concurrent PRs), forwarding identity/mode. **Sequential by
 default** (one building PR at a time, keeping PRs small and the ledger draw
 minimal); go concurrent only for independent work, one slot per building PR.
 Record the ticket↔PR mapping on the ticket as each PR opens. Read a delegated PR's

@@ -56,7 +56,7 @@ A terminal signal means "finished with this item"; it suppresses re-evaluation
 next poll. Anything else means "still working." The agent signals finished
 **only** via a terminal signal — it MUST NOT resolve the thread, even one it
 opened. Resolution is a human's call. Platform-resolved threads are read (see
-[§Actionability](#actionability)) but never written by the agent.
+[Actionability](#actionability)) but never written by the agent.
 
 Reactions (preferred where supported):
 

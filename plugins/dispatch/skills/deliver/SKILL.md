@@ -142,7 +142,7 @@ of `public_review_requested`). Worktree cleanup happens on any closure.
 
 | State                              | Do                                                                                                              | Poll?    |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
-| `starting`                         | Create or locate the worktree (§Setup).                                                                         | no       |
+| `starting`                         | Create or locate the worktree (see Setup).                                                                      | no       |
 | `draft`                            | **Coding happens here.** Edit; pre-push review; push. When ready, check gates 1–5.                              | no       |
 | `ready_for_copilot_review`         | Request Copilot review.                                                                                         | no       |
 | `copilot_review_requested`         | Await Copilot's review.                                                                                         | CI       |
@@ -257,7 +257,7 @@ Apply in every state.
   [`reference.md`](./reference.md#operational-logging); `ticket=-` when none).
 - **Termination is narrow.** Only PR closure or explicit operator "stop"
   terminates. Plan completion, green CI, review requests, `ready_for_merge`, and
-  "nobody to ask" do not. The agent runs the loop through itself (§Polling) and
+  "nobody to ask" do not. The agent runs the loop through itself (see Polling) and
   is never re-prodded.
 - **Re-derive termination each tick** from the current `pr-status`. Never carry
   "if X then stop" across ticks — the loop amplifies them.

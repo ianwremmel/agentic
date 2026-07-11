@@ -46,7 +46,7 @@
     "tracker": {
       "type": "string",
       "title": "Work-item tracker",
-      "description": "Default work-item tracker for `work-ticket`. For ticket-backed work the tracker is resolved from the ticket's URL, so a Linear-by-default install still handles a project whose tickets live on another tracker; this value is the fallback when the ticket URL is ambiguous. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) The skill body speaks §2.3 roles; the tracker-specific mapping lives in the skill's reference.md, the same seam a §2.6 producer reuses. Only `linear` is implemented today — a ticket on any other tracker errors.",
+      "description": "Default work-item tracker for `work-ticket`. For ticket-backed work the tracker is resolved from the ticket's URL, so a Linear-by-default install still handles a project whose tickets live on another tracker; this value is the fallback when the ticket URL is ambiguous. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) The tracker-specific role mapping lives in the skill's reference.md. Only `linear` is implemented today — a ticket on any other tracker errors.",
       "default": "linear"
     }
   }

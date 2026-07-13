@@ -66,16 +66,29 @@ if ! node_version_raw="$("$node_path" --version 2>/dev/null)"; then
   die "'${node_path}' is not runnable as node ('--version' failed)." 127
 fi
 
-# v24.18.0 -> 24.18.0; v25.0.0-nightly20260101 -> 25.0.0
+# v24.18.0 -> 24.18.0; v25.0.0-nightly20260101 -> 25.0.0 + prerelease
 node_version="${node_version_raw#v}"
-node_version="${node_version%%-*}"
+node_prerelease='false'
+if [[ "$node_version" == *-* ]]; then
+  node_prerelease='true'
+  node_version="${node_version%%-*}"
+fi
 
 if [[ ! "$node_version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
   die "could not read a version from '${node_path} --version' (got '${node_version_raw}')."
 fi
 
+# A prerelease sorts before its own release (22.18.0-rc.1 < 22.18.0), so it only
+# clears the gate when its numbers are strictly above the minimum.
+too_old='false'
 if version_lt "$node_version" "$MIN_NODE_VERSION"; then
-  die "node ${node_version} (${node_path}) is too old. dispatch requires Node.js >= ${MIN_NODE_VERSION}, which runs TypeScript sources natively."
+  too_old='true'
+elif [[ "$node_prerelease" == 'true' ]] && ! version_lt "$MIN_NODE_VERSION" "$node_version"; then
+  too_old='true'
+fi
+
+if [[ "$too_old" == 'true' ]]; then
+  die "node ${node_version_raw} (${node_path}) is too old. dispatch requires Node.js >= ${MIN_NODE_VERSION}, which runs TypeScript sources natively."
 fi
 
 log_debug 'msg="node resolved"' "node_bin=${node_path}" "node_version=${node_version}" "min_node_version=${MIN_NODE_VERSION}"

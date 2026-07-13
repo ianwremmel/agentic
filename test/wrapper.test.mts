@@ -21,8 +21,33 @@ describe('bin/dispatch node preflight', () => {
 
     assert.equal(stdout, '', 'a rejected node must not produce a greeting');
     assert.notEqual(code, 0);
-    assert.match(stderr, /^error: node 20\.11\.0 .* is too old/mu);
+    assert.match(stderr, /^error: node v20\.11\.0 .* is too old/mu);
     assert.match(stderr, /22\.18\.0/u, 'the message states the minimum');
+  });
+
+  it('refuses a prerelease of the minimum version', async () => {
+    // 22.18.0-rc.1 predates the 22.18.0 release, so its type stripping is not
+    // the release behavior the CLI is built against.
+    const dir = await fakeNodeDir('v22.18.0-rc.1');
+
+    const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
+      env: {PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`},
+    });
+
+    assert.equal(stdout, '');
+    assert.notEqual(code, 0);
+    assert.match(stderr, /^error: node v22\.18\.0-rc\.1 .* is too old/mu);
+  });
+
+  it('accepts a prerelease above the minimum version', async () => {
+    const dir = await fakeNodeDir('v25.0.0-nightly20260101');
+
+    const {stdout, stderr} = await runDispatch(['greet', 'World'], {
+      env: {PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`},
+    });
+
+    assert.doesNotMatch(stderr, /too old/u);
+    assert.match(stdout, /^v25\.0\.0-nightly20260101$/mu);
   });
 
   it('accepts a node at exactly the minimum version', async () => {

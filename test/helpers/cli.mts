@@ -1,6 +1,5 @@
 import {execFile} from 'node:child_process';
-import {constants} from 'node:fs';
-import {access, chmod, mkdtemp, writeFile} from 'node:fs/promises';
+import {chmod, mkdtemp, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {promisify} from 'node:util';
@@ -61,24 +60,31 @@ export async function runDispatch(
   }
 }
 
+/** The external commands the wrapper needs before it ever looks for node. */
+const WRAPPER_TOOLS = ['bash', 'date', 'dirname'];
+
 /**
- * The caller's PATH with every directory that holds a `node` executable removed.
- * Which directories those are varies by host (fnm, nvm, /usr/bin, a CI toolcache),
- * so they are discovered rather than assumed.
+ * A PATH holding exactly the tools the wrapper needs and no `node`.
+ *
+ * Filtering `node` out of the real PATH would be wrong on a host where node and
+ * bash share a directory (Debian's /usr/bin, most CI images): removing that
+ * directory takes bash with it, and the wrapper dies in its shebang instead of
+ * reaching the check under test.
  */
 export async function pathWithoutNode(): Promise<string> {
-  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  const kept = await Promise.all(
-    dirs.map(async (dir) => {
-      try {
-        await access(path.join(dir, 'node'), constants.X_OK);
-        return undefined;
-      } catch {
-        return dir;
-      }
+  const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-no-node-'));
+
+  await Promise.all(
+    WRAPPER_TOOLS.map(async (tool) => {
+      const {stdout} = await execFileAsync('command', ['-v', tool], {
+        shell: '/bin/bash',
+        encoding: 'utf8',
+      });
+      await symlink(stdout.trim(), path.join(dir, tool));
     }),
   );
-  return kept.filter((dir) => dir !== undefined).join(path.delimiter);
+
+  return dir;
 }
 
 /**

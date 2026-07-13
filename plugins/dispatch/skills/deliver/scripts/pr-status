@@ -228,8 +228,13 @@ reaction_emoji() {
 
 # --- checks -------------------------------------------------------------------
 checks_xml() {
+  # `nowsec`, not `now`: a jq function may call itself, so `def now: (now|floor)`
+  # is infinite recursion, not a shadow of the builtin. It only detonates when
+  # `stuck` actually evaluates it — the `and` chain short-circuits otherwise —
+  # so this stayed hidden until a check was observed IN_PROGRESS, at which point
+  # jq exhausts memory and pr-status emits no <checks> at all.
   jq -r --arg info "$INFORMATIONAL_RE" --argjson stuck_after "$STUCK_AFTER_SEC" '
-    def now: (now | floor);
+    def nowsec: (now | floor);
     .statusCheckRollup // [] | map({
       name: (.name // .context // "check"),
       conclusion: (.conclusion // .state // ""),
@@ -240,7 +245,7 @@ checks_xml() {
     }) | map(. + {
       pending: (.status == "IN_PROGRESS" or .status == "QUEUED" or .status == "PENDING" or .conclusion == "" and .status != ""),
       failing: ((.conclusion // "") | test("FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE"; "i")),
-      stuck: (.status == "IN_PROGRESS" and .started != "" and ((now - (.started | fromdateiso8601? // now)) > $stuck_after))
+      stuck: (.status == "IN_PROGRESS" and .started != "" and ((nowsec - (.started | fromdateiso8601? // nowsec)) > $stuck_after))
     }) as $cs
     | (any($cs[]; .pending and (.stuck | not))) as $any_pending
     | (any($cs[]; .failing and (.informational | not) and (.pending | not))) as $any_failing

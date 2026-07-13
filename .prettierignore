@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+
+# Markdown is hand-wrapped: the skill and spec documents carry tuned line breaks
+# and YAML frontmatter that Prettier's prose wrapping rewrites. @eslint/markdown
+# lints their structure instead.
+*.md

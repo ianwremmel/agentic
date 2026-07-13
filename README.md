@@ -71,7 +71,25 @@ Layout:
 └── plugins/
     └── dispatch/
         ├── .claude-plugin/plugin.json
+        ├── cli/      # the shared `dispatch` CLI (TypeScript, no dependencies)
+        ├── scripts/  # bash entry points
         ├── skills/  agents/  commands/  hooks/
+```
+
+### The dispatch CLI
+
+Plugins ship with **no runtime dependencies**. The CLI is TypeScript (`.mts`) run
+directly by Node — no build step, no `npm install` — using only `node:` builtins,
+so it works straight out of the plugin install cache. It needs **Node 24 or
+newer**; `plugins/dispatch/scripts/dispatch` checks that before invoking it.
+
+The npm dependencies at the repo root are development tooling only:
+
+```shell
+npm install
+npm test        # node --test
+npm run lint    # eslint (typescript-eslint, markdown, prettier)
+npm run typecheck
 ```
 
 ## Contributing

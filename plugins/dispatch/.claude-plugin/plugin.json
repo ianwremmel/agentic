@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -42,6 +42,17 @@
       "title": "Operator GitHub login",
       "description": "GitHub login of the operator directing this agent. Required — the deliver skill and pr-status script always assume it is set. Targets the operator with PR review requests (Mode A) and classifies <review> elements in pr-status XML; the agent never falls back to the ticket assigner. In Mode B (shared credentials) set this to the shared/authenticated account.",
       "required": true
+    },
+    "graph_db": {
+      "type": "string",
+      "title": "Project-graph database",
+      "description": "Path to the SQLite database holding the project dependency graph built by `build-graph`. Defaults to graph.sqlite under the XDG cache directory. Delete the file to force a rebuild — a full sync reconstructs it.",
+      "default": "~/.cache/dispatch/graph.sqlite"
+    },
+    "graph_config": {
+      "type": "string",
+      "title": "Project-graph config file",
+      "description": "Optional path to a JSON file of team overrides for `build-graph`: custom tracker-state → role mappings, and the label names that mark a ticket human-interactive or verification-only. Needed only when a team uses statuses or labels the built-in defaults do not cover; see the build-graph skill's reference.md."
     },
     "tracker": {
       "type": "string",

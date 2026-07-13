@@ -18,7 +18,11 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ├── .claude-plugin/marketplace.json   # marketplace catalog
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
-└── docs/                             # spec + design docs
+│       ├── cli/                      # the shared `dispatch` CLI (.mts, no deps)
+│       ├── scripts/                  # bash entry points (runtime preflight)
+│       └── skills/
+├── docs/                             # spec + design docs
+└── package.json                      # dev tooling only (eslint, prettier, tsc)
 ```
 
 Plugins currently published:
@@ -60,6 +64,34 @@ subdirectories exist as scaffolding only.
   `obsoleted` appear explicitly, as a `Status: cancelled` / `Status:
   obsoleted` line under the title, optionally followed by a one-line
   note or link to the superseding doc.
+
+## The dispatch CLI
+
+`plugins/dispatch/cli/` is the shared entry point every skill can call for
+anything that must be computed identically on every run — today, the project
+dependency graph. Skills fetch (over MCP, `gh`, an API); the CLI computes and
+stores.
+
+- **Zero runtime dependencies, and it must stay that way.** Plugins are copied
+  into an install cache with no `npm install` step. The CLI runs `.mts` directly
+  on Node's built-in type stripping and imports only `node:` builtins
+  (`sqlite`, `util`, `test`, …). Adding a package to the CLI's import graph
+  breaks every install. The root `package.json` is **dev tooling only**.
+- **Node 24+.** Type stripping and `node:sqlite` both need a flag below it.
+  `scripts/dispatch` enforces this and explains the fix.
+- **Errors are read by an agent.** Every failure exits with a stable code
+  (2 = bad call, 3 = bad environment, 4 = needs config) and prints a `remedy:`
+  line naming the next action. Never fail with a bare stack trace.
+- **Logs are logfmt on stderr**; stdout carries command output only.
+- **Storage is async by contract.** `node:sqlite` is synchronous, but the store's
+  methods are `async` so a future async driver is a change behind the facade
+  rather than a rewrite of every caller.
+
+```shell
+npm test           # node --test
+npm run lint       # eslint: typescript-eslint, @eslint/markdown, prettier
+npm run typecheck
+```
 
 ## Adding a new plugin
 

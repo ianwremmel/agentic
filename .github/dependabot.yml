@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # The lint toolchain moves together — eslint, its plugins, and prettier
+      # break each other when they drift apart, so review them as one PR.
+      lint:
+        patterns:
+          - '@eslint/*'
+          - '@eslint-community/*'
+          - eslint
+          - eslint-*
+          - prettier
+          - typescript-eslint
+      types:
+        patterns:
+          - '@types/*'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

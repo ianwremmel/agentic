@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# dispatch — entry point for the shared dispatch CLI.
+#
+# Checks the Node runtime, then hands off to cli/dispatch.mts. The CLI has no
+# npm dependencies: it runs on Node's built-in TypeScript type stripping and
+# uses only node: builtins (sqlite, util, test), so there is nothing to install
+# and it works straight out of the plugin cache.
+#
+# Every failure here is written for the agent that invoked it: what is wrong,
+# and whether the agent can fix it or must escalate to the operator.
+#
+# Usage: dispatch <group> <command> [flags]   (see `dispatch --help`)
+
+set -euo pipefail
+
+# Node 24 is the floor. Below it, `node file.mts` needs an explicit flag (type
+# stripping) and `node:sqlite` needs --experimental-sqlite. Rather than paper
+# over that with flags that differ per version, require the runtime where both
+# are on by default.
+readonly REQUIRED_MAJOR=24
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly CLI="$SCRIPT_DIR/../cli/dispatch.mts"
+
+escalate() {
+  # Exit 3 = environment. The agent cannot fix this by changing its own call.
+  printf 'dispatch: %s\n' "$1" >&2
+  printf '  remedy: %s\n' "$2" >&2
+  exit 3
+}
+
+if ! command -v node >/dev/null 2>&1; then
+  escalate \
+    "Node.js is not installed, or is not on PATH. The dispatch CLI cannot run." \
+    "Escalate to the operator: they need Node.js ${REQUIRED_MAJOR} or newer on PATH (https://nodejs.org). Do not attempt to install it yourself, and do not fall back to hand-computing the graph — the results would be inconsistent with every other run."
+fi
+
+node_version="$(node --version 2>/dev/null || true)"   # e.g. v24.18.0
+node_major="${node_version#v}"
+node_major="${node_major%%.*}"
+
+if ! [[ "$node_major" =~ ^[0-9]+$ ]]; then
+  escalate \
+    "could not read the Node.js version — \`node --version\` printed '${node_version}'." \
+    "Escalate to the operator: the \`node\` on PATH is not a working Node.js runtime."
+fi
+
+if (( node_major < REQUIRED_MAJOR )); then
+  escalate \
+    "Node.js ${node_version} is too old — the dispatch CLI needs ${REQUIRED_MAJOR} or newer (it runs TypeScript directly and uses the built-in SQLite module, both of which are off by default before ${REQUIRED_MAJOR})." \
+    "Escalate to the operator: they need to upgrade Node.js to ${REQUIRED_MAJOR}+, or expose a newer one on PATH (e.g. \`nvm use ${REQUIRED_MAJOR}\`). Do not work around this by computing the graph by hand."
+fi
+
+if [[ ! -f "$CLI" ]]; then
+  escalate \
+    "the dispatch CLI is missing — expected it at ${CLI}." \
+    "Escalate to the operator: the dispatch plugin install looks incomplete. Reinstalling the plugin should restore it."
+fi
+
+exec node "$CLI" "$@"

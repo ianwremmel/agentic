@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# dispatch — entry point for the plugin's TypeScript CLI.
+#
+# Usage: dispatch [--log-level <level>] <command> [args...]
+#
+# The plugin's bin/ directory is on PATH inside Claude Code, so skills can call
+# `dispatch <command>` directly. This wrapper exists to fail with a legible
+# message instead of a Node syntax error when the host's Node is missing or too
+# old: the CLI ships as unbuilt .mts and relies on native type stripping, which
+# Node enables by default only from MIN_NODE_VERSION on.
+#
+# Set DISPATCH_NODE to run against a specific Node binary. The wrapper's own
+# records honor DISPATCH_LOG_LEVEL (the CLI's --log-level flag is parsed later,
+# by the CLI itself).
+
+set -euo pipefail
+
+readonly MIN_NODE_VERSION='22.18.0'
+readonly LOG_LEVEL="${DISPATCH_LOG_LEVEL:-info}"
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly here
+readonly cli="${here}/../cli/main.mts"
+
+# Wrapper diagnostics are logfmt on stderr, matching the CLI's own records.
+# Values containing spaces must arrive already quoted by the caller.
+log_debug() {
+  [[ "$LOG_LEVEL" == 'debug' ]] || return 0
+  printf 'ts=%s level=debug component=dispatch-wrapper' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >&2
+  printf ' %s' "$@" >&2
+  printf '\n' >&2
+}
+
+# Failures a caller must act on are plain text, not logfmt.
+die() {
+  printf 'error: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+# True iff $1 sorts before $2 as a dotted numeric version. Missing components
+# read as 0, so 22.18 == 22.18.0.
+version_lt() {
+  local IFS='.'
+  local -a lhs rhs
+  read -r -a lhs <<<"$1"
+  read -r -a rhs <<<"$2"
+
+  local i l r
+  for i in 0 1 2; do
+    l="${lhs[i]:-0}"
+    r="${rhs[i]:-0}"
+    if ((10#$l < 10#$r)); then return 0; fi
+    if ((10#$l > 10#$r)); then return 1; fi
+  done
+  return 1
+}
+
+node_bin="${DISPATCH_NODE:-node}"
+
+if ! node_path="$(command -v -- "$node_bin" 2>/dev/null)"; then
+  die "node not found (looked for '${node_bin}'). dispatch requires Node.js >= ${MIN_NODE_VERSION}: https://nodejs.org" 127
+fi
+
+if ! node_version_raw="$("$node_path" --version 2>/dev/null)"; then
+  die "'${node_path}' is not runnable as node ('--version' failed)." 127
+fi
+
+# v24.18.0 -> 24.18.0; v25.0.0-nightly20260101 -> 25.0.0
+node_version="${node_version_raw#v}"
+node_version="${node_version%%-*}"
+
+if [[ ! "$node_version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+  die "could not read a version from '${node_path} --version' (got '${node_version_raw}')."
+fi
+
+if version_lt "$node_version" "$MIN_NODE_VERSION"; then
+  die "node ${node_version} (${node_path}) is too old. dispatch requires Node.js >= ${MIN_NODE_VERSION}, which runs TypeScript sources natively."
+fi
+
+log_debug 'msg="node resolved"' "node_bin=${node_path}" "node_version=${node_version}" "min_node_version=${MIN_NODE_VERSION}"
+log_debug 'msg="exec cli"' "cli=${cli}" "argc=$#"
+
+exec "$node_path" "$cli" "$@"

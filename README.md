@@ -61,6 +61,16 @@ Validate the marketplace and every plugin manifest:
 claude plugin validate .
 ```
 
+Plugin code is TypeScript, run unbuilt on Node's native type stripping (Node
+22.18+ required). Install the toolchain with `npm ci`, then:
+
+```shell
+npm test        # node:test suites under test/
+npm run lint    # eslint over .mts/.mjs and markdown
+npm run typecheck
+npm run format
+```
+
 Layout:
 
 ```
@@ -68,9 +78,12 @@ Layout:
 ├── .claude-plugin/
 │   └── marketplace.json
 ├── .github/workflows/
+├── test/                          # node:test suites
 └── plugins/
     └── dispatch/
         ├── .claude-plugin/plugin.json
+        ├── bin/dispatch           # CLI entry point (bash wrapper)
+        ├── cli/                   # CLI sources (.mts)
         ├── skills/  agents/  commands/  hooks/
 ```
 

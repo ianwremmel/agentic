@@ -18,6 +18,9 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ├── .claude-plugin/marketplace.json   # marketplace catalog
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
+│       ├── bin/dispatch              # CLI entry point (bash wrapper)
+│       └── cli/                      # CLI sources (.mts)
+├── test/                             # node:test suites
 └── docs/                             # spec + design docs
 ```
 
@@ -72,11 +75,29 @@ subdirectories exist as scaffolding only.
 5. Validate: `claude plugin validate .`
 6. Test locally: `claude --plugin-dir ./plugins/<name>`.
 
+## TypeScript
+
+Plugin code is TypeScript in `.mts` files, run unbuilt on Node's native type
+stripping — there is no build step and the CLI has no runtime dependencies.
+Consequences worth remembering:
+
+- Import sibling modules by their real path, extension included
+  (`./log/logger.mts`).
+- No TypeScript-only runtime constructs (enums, namespaces, parameter
+  properties); `erasableSyntaxOnly` enforces this.
+- Anything a skill invokes at run time lives inside the plugin directory. Tests
+  live at the repo root under `test/` and reach into the plugin.
+- Prefer promise-based APIs over callbacks and sync calls, even where sync
+  would do — retrofitting async later is the painful refactor.
+- `npm run lint`, `npm run typecheck`, `npm test` before pushing; CI runs all
+  three.
+
 ## Local iteration
 
 - Load a single plugin: `claude --plugin-dir ./plugins/dispatch`
 - Reload after edits: `/reload-plugins` (from inside Claude Code)
 - Validate the whole marketplace: `claude plugin validate .`
+- Run the CLI directly: `./plugins/dispatch/bin/dispatch greet --name World`
 
 ## Do not
 

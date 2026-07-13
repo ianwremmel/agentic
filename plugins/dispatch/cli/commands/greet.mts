@@ -19,7 +19,7 @@ export const greet: Command = {
 
     assertUsage(
       positionals.length <= 1,
-      `greet takes at most one name, got ${String(positionals.length)}: ${positionals.join(', ')}`,
+      `greet takes at most one name, got ${String(positionals.length)}: ${positionals.join(', ')}`
     );
 
     const name = values.name ?? positionals[0];

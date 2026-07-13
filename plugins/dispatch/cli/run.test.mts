@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import {logRecords, runDispatch} from './helpers/cli.mts';
+import {logRecords, runDispatch} from '../test-harness.mts';
 
-describe('dispatch', () => {
-  it('prints help on --help and exits 0', async () => {
+await describe('dispatch', async () => {
+  await it('prints help on --help and exits 0', async () => {
     const {code, stdout} = await runDispatch(['--help']);
 
     assert.equal(code, 0);
@@ -12,7 +12,7 @@ describe('dispatch', () => {
     assert.match(stdout, /^ {2}greet {2,}Print a greeting to stdout\.$/mu);
   });
 
-  it('rejects no command with a usage error and the command list', async () => {
+  await it('rejects no command with a usage error and the command list', async () => {
     const {code, stdout, stderr} = await runDispatch([]);
 
     assert.equal(code, 2);
@@ -21,7 +21,7 @@ describe('dispatch', () => {
     assert.match(stderr, /greet/u);
   });
 
-  it('rejects an unknown command by name', async () => {
+  await it('rejects an unknown command by name', async () => {
     const {code, stderr} = await runDispatch(['sing', 'World']);
 
     assert.equal(code, 2);
@@ -29,24 +29,24 @@ describe('dispatch', () => {
     assert.match(stderr, /greet/u);
   });
 
-  it('logs at info by default, without debug records', async () => {
+  await it('logs at info by default, without debug records', async () => {
     const {stderr} = await runDispatch(['greet', 'World']);
     const records = logRecords(stderr);
 
     assert.ok(records.length > 0, 'expected logfmt records on stderr');
     assert.ok(
       records.every((record) => record.level !== 'debug'),
-      'debug records must not appear at the default level',
+      'debug records must not appear at the default level'
     );
     assert.ok(
       records.every((record) =>
-        /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/u.test(record.ts ?? ''),
+        /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/u.test(record.ts ?? '')
       ),
-      'every record carries an ISO-8601 ts',
+      'every record carries an ISO-8601 ts'
     );
   });
 
-  it('emits debug records when --log-level debug is passed', async () => {
+  await it('emits debug records when --log-level debug is passed', async () => {
     const {code, stdout, stderr} = await runDispatch([
       '--log-level',
       'debug',
@@ -59,11 +59,11 @@ describe('dispatch', () => {
     assert.equal(stdout, 'hello World\n', 'log level must not change stdout');
     assert.ok(
       records.some((record) => record.level === 'debug'),
-      `expected debug records, got: ${stderr}`,
+      `expected debug records, got: ${stderr}`
     );
   });
 
-  it('takes the log level from DISPATCH_LOG_LEVEL', async () => {
+  await it('takes the log level from DISPATCH_LOG_LEVEL', async () => {
     const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
       env: {DISPATCH_LOG_LEVEL: 'error'},
     });
@@ -73,23 +73,23 @@ describe('dispatch', () => {
     assert.deepEqual(
       logRecords(stderr),
       [],
-      'an error-level run of a successful command logs nothing',
+      'an error-level run of a successful command logs nothing'
     );
   });
 
-  it('lets --log-level win over DISPATCH_LOG_LEVEL', async () => {
+  await it('lets --log-level win over DISPATCH_LOG_LEVEL', async () => {
     const {stderr} = await runDispatch(
       ['--log-level', 'debug', 'greet', 'World'],
-      {env: {DISPATCH_LOG_LEVEL: 'error'}},
+      {env: {DISPATCH_LOG_LEVEL: 'error'}}
     );
 
     assert.ok(
       logRecords(stderr).some((record) => record.level === 'debug'),
-      'the flag must override the environment',
+      'the flag must override the environment'
     );
   });
 
-  it('rejects an unknown log level instead of guessing one', async () => {
+  await it('rejects an unknown log level instead of guessing one', async () => {
     const {code, stderr} = await runDispatch([
       '--log-level',
       'chatty',
@@ -101,7 +101,7 @@ describe('dispatch', () => {
     assert.match(stderr, /unknown log level "chatty"/u);
   });
 
-  it('does not treat a global option value as the command name', async () => {
+  await it('does not treat a global option value as the command name', async () => {
     const {code, stdout} = await runDispatch([
       '--log-level',
       'warn',

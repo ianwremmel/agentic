@@ -43,7 +43,7 @@ export function resolveLogLevel(value: string | undefined): LogLevel {
   const normalized = value.trim().toLowerCase();
   assertUsage(
     isLogLevel(normalized),
-    `unknown log level "${value}"; expected one of ${LOG_LEVELS.join(', ')}`,
+    `unknown log level "${value}"; expected one of ${LOG_LEVELS.join(', ')}`
   );
   return normalized;
 }
@@ -58,7 +58,7 @@ export function createLogger({
   const emit = async (
     recordLevel: LogLevel,
     message: string,
-    fields: LogFields = {},
+    fields: LogFields = {}
   ): Promise<void> => {
     if (LOG_LEVELS.indexOf(recordLevel) < threshold) {
       return;
@@ -70,7 +70,7 @@ export function createLogger({
         level: recordLevel,
         msg: message,
         ...fields,
-      }),
+      })
     );
   };
 

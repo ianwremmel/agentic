@@ -1,26 +1,26 @@
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import {splitArgv} from '../plugins/dispatch/cli/args.mts';
+import {splitArgv} from './args.mts';
 
-describe('splitArgv', () => {
-  it('splits globals, command, and command args at the command name', () => {
+await describe('splitArgv', async () => {
+  await it('splits globals, command, and command args at the command name', () => {
     assert.deepEqual(
       splitArgv(['--log-level', 'debug', 'greet', '--name', 'Ada']),
       {
         globalArgs: ['--log-level', 'debug'],
         command: 'greet',
         commandArgs: ['--name', 'Ada'],
-      },
+      }
     );
   });
 
-  it('does not mistake a global option value for the command', () => {
+  await it('does not mistake a global option value for the command', () => {
     // `debug` is the value of --log-level, not a command name.
     assert.equal(splitArgv(['--log-level', 'debug', 'greet']).command, 'greet');
   });
 
-  it('leaves command flags unparsed, even ones the CLI also defines', () => {
+  await it('leaves command flags unparsed, even ones the CLI also defines', () => {
     assert.deepEqual(splitArgv(['greet', '--help', '--', '-x']), {
       globalArgs: [],
       command: 'greet',
@@ -28,7 +28,7 @@ describe('splitArgv', () => {
     });
   });
 
-  it('reports no command when only globals are given', () => {
+  await it('reports no command when only globals are given', () => {
     assert.deepEqual(splitArgv(['--help']), {
       globalArgs: ['--help'],
       command: undefined,
@@ -36,7 +36,7 @@ describe('splitArgv', () => {
     });
   });
 
-  it('reports no command for empty argv', () => {
+  await it('reports no command for empty argv', () => {
     assert.deepEqual(splitArgv([]), {
       globalArgs: [],
       command: undefined,
@@ -44,7 +44,7 @@ describe('splitArgv', () => {
     });
   });
 
-  it('keeps an unknown global flag in globalArgs for the strict parse to reject', () => {
+  await it('keeps an unknown global flag in globalArgs for the strict parse to reject', () => {
     assert.deepEqual(splitArgv(['--nope', 'greet']), {
       globalArgs: ['--nope'],
       command: 'greet',

@@ -18,7 +18,7 @@ export class UsageError extends Error {
  */
 export function assertUsage(
   condition: unknown,
-  message: string,
+  message: string
 ): asserts condition {
   if (!condition) {
     throw new UsageError(message);

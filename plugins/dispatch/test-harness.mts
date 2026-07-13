@@ -6,16 +6,8 @@ import {promisify} from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
-
 /** The bash wrapper under test — the same path skills invoke. */
-export const DISPATCH_BIN = path.join(
-  REPO_ROOT,
-  'plugins',
-  'dispatch',
-  'bin',
-  'dispatch',
-);
+export const DISPATCH_BIN = path.join(import.meta.dirname, 'bin', 'dispatch');
 
 export interface DispatchResult {
   readonly code: number;
@@ -34,7 +26,7 @@ export interface DispatchOptions {
  */
 export async function runDispatch(
   args: readonly string[],
-  {env = {}}: DispatchOptions = {},
+  {env = {}}: DispatchOptions = {}
 ): Promise<DispatchResult> {
   try {
     const {stdout, stderr} = await execFileAsync(DISPATCH_BIN, [...args], {
@@ -81,7 +73,7 @@ export async function pathWithoutNode(): Promise<string> {
         encoding: 'utf8',
       });
       await symlink(stdout.trim(), path.join(dir, tool));
-    }),
+    })
   );
 
   return dir;
@@ -98,7 +90,7 @@ export async function fakeNodeDir(version: string): Promise<string> {
   await writeFile(
     bin,
     ['#!/usr/bin/env bash', `printf '%s\\n' '${version}'`, ''].join('\n'),
-    'utf8',
+    'utf8'
   );
   await chmod(bin, 0o755);
   return dir;

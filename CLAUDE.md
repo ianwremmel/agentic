@@ -19,8 +19,7 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
 │       ├── bin/dispatch              # CLI entry point (bash wrapper)
-│       └── cli/                      # CLI sources (.mts)
-├── test/                             # node:test suites
+│       └── cli/                      # CLI sources + colocated tests (.mts)
 └── docs/                             # spec + design docs
 ```
 
@@ -83,14 +82,12 @@ Consequences worth remembering:
 
 - Import sibling modules by their real path, extension included
   (`./log/logger.mts`).
-- No TypeScript-only runtime constructs (enums, namespaces, parameter
-  properties); `erasableSyntaxOnly` enforces this.
-- Anything a skill invokes at run time lives inside the plugin directory. Tests
-  live at the repo root under `test/` and reach into the plugin.
+- Anything a skill invokes at run time lives inside the plugin directory.
+- Tests are colocated with the code they cover: `args.mts` → `args.test.mts`.
 - Prefer promise-based APIs over callbacks and sync calls, even where sync
   would do — retrofitting async later is the painful refactor.
 - `npm run lint`, `npm run typecheck`, `npm test` before pushing; CI runs all
-  three.
+  three. `npm run lint:fix` also formats (Prettier runs as an ESLint rule).
 
 ## Local iteration
 

@@ -19,7 +19,7 @@ export interface RunOptions {
  */
 export async function run(
   argv: readonly string[],
-  {stdout, stderr, env, now}: RunOptions,
+  {stdout, stderr, env, now}: RunOptions
 ): Promise<number> {
   const {globalArgs, command, commandArgs} = splitArgv(argv);
 
@@ -49,7 +49,7 @@ export async function run(
   const target = findCommand(command);
   assertUsage(
     target !== undefined,
-    `unknown command "${command}"\n\n${helpText()}`,
+    `unknown command "${command}"\n\n${helpText()}`
   );
 
   await log.info('running command', {command: target.name});

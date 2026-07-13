@@ -13,7 +13,7 @@ const BY_NAME = new Map(COMMANDS.map((command) => [command.name, command]));
 assert.equal(
   BY_NAME.size,
   COMMANDS.length,
-  'command names must be unique — a duplicate silently shadows an earlier command',
+  'command names must be unique — a duplicate silently shadows an earlier command'
 );
 
 export function findCommand(name: string): Command | undefined {
@@ -23,7 +23,7 @@ export function findCommand(name: string): Command | undefined {
 export function helpText(): string {
   const width = Math.max(...COMMANDS.map((command) => command.name.length));
   const commands = COMMANDS.map(
-    (command) => `  ${command.name.padEnd(width)}  ${command.summary}`,
+    (command) => `  ${command.name.padEnd(width)}  ${command.summary}`
   ).join('\n');
 
   return [

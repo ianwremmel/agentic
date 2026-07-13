@@ -31,7 +31,7 @@ export function encodeLine(fields: LogFields): string {
   return Object.entries(fields)
     .filter(
       (entry): entry is [string, Exclude<LogValue, undefined>] =>
-        entry[1] !== undefined,
+        entry[1] !== undefined
     )
     .map(([key, value]) => `${key}=${encodeValue(value)}`)
     .join(' ');

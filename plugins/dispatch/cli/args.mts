@@ -52,7 +52,7 @@ export function splitArgv(argv: readonly string[]): SplitArgv {
  * (a malformed config, i.e. our bug) propagates untouched.
  */
 export function parseArgsOrUsage<T extends ParseArgsConfig>(
-  config: T,
+  config: T
 ): ReturnType<typeof parseArgs<T>> {
   try {
     return parseArgs(config);

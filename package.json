@@ -1,15 +1,14 @@
 {
-  "name": "agentic",
+  "name": "@ianwremmel/agentic",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "A Claude Code plugin marketplace of agentic workflows for everyday software engineering.",
   "license": "MIT",
   "scripts": {
-    "format": "prettier --write .",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "node --test \"test/**/*.test.mts\"",
+    "test": "node --test \"plugins/**/*.test.mts\"",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

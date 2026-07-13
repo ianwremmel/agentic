@@ -1,26 +1,22 @@
 {
   "compilerOptions": {
-    "target": "es2024",
-    "lib": ["es2024"],
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "types": ["node"],
-
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true,
-    "verbatimModuleSyntax": true,
-
     // The CLI ships unbuilt and runs on Node's native type stripping: sources
     // import each other by their real .mts paths, and TypeScript-only runtime
     // constructs (enums, namespaces, parameter properties) are not available.
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
+    "exactOptionalPropertyTypes": true,
+    "lib": ["es2024"],
+    "module": "Node20",
+    "moduleResolution": "Node16",
     "noEmit": true,
-
-    "skipLibCheck": true
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "strict": true,
+    "target": "es2024",
+    "types": ["node"],
+    "verbatimModuleSyntax": true
   },
-  "include": ["plugins/**/*.mts", "test/**/*.mts", "eslint.config.mjs"]
+  "include": ["plugins/**/*.mts", "eslint.config.mjs"]
 }

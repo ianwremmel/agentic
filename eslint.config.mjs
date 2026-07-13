@@ -24,15 +24,8 @@ export default defineConfig([
     },
     rules: {
       // Every write and log call is async; a dropped promise is a silent hole in
-      // the CLI's output. `describe`/`it` return promises the runner owns.
-      '@typescript-eslint/no-floating-promises': [
-        'error',
-        {
-          allowForKnownSafeCalls: [
-            {from: 'package', package: 'node:test', name: ['describe', 'it']},
-          ],
-        },
-      ],
+      // the CLI's output. Tests await their suites rather than exempt them.
+      '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/consistent-type-imports': 'error',
       // The CLI writes to the streams it is handed; console bypasses them.
       'no-console': 'error',
@@ -46,7 +39,7 @@ export default defineConfig([
     rules: {
       // The spec and skill docs fence wire-format payloads, log lines, and
       // directory trees — content with no language to name.
-      'markdown/fenced-code-language': 'off',
+      'markdown/fenced-code-language': 'warn',
     },
   },
 

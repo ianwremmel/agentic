@@ -137,3 +137,24 @@ describe('dispatch global options after the command', () => {
     assert.equal(stdout, 'hello --log-level\n');
   });
 });
+
+describe('dispatch <command> --help', () => {
+  it('prints the command usage and exits 0', async () => {
+    const {code, stdout, stderr} = await runDispatch(['greet', '--help']);
+
+    assert.equal(code, 0);
+    assert.match(stdout, /^usage: dispatch greet <name>$/mu);
+    assert.doesNotMatch(
+      stderr,
+      /global option/u,
+      '--help after a command asks for that command usage, it is not misplaced'
+    );
+  });
+
+  it('greets a literal --help passed after --', async () => {
+    const {code, stdout} = await runDispatch(['greet', '--', '--help']);
+
+    assert.equal(code, 0);
+    assert.equal(stdout, 'hello --help\n');
+  });
+});

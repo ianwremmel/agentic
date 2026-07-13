@@ -4,6 +4,7 @@ import {
   GLOBAL_OPTIONS,
   misplacedGlobalOptions,
   parseArgsOrUsage,
+  requestsHelp,
   splitArgv,
 } from './lib/args.mts';
 import {assertUsage, EXIT_OK, UsageError} from './lib/errors.mts';
@@ -55,6 +56,11 @@ export async function run(
     target !== undefined,
     `unknown command "${command}"\n\n${helpText()}`
   );
+
+  if (requestsHelp(commandArgs)) {
+    await writeLine(stdout, `usage: ${target.usage}`);
+    return EXIT_OK;
+  }
 
   await log.info('running command', {command: target.name});
   const started = Date.now();

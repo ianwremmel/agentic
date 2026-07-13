@@ -49,16 +49,35 @@ export function splitArgv(argv: readonly string[]): SplitArgv {
   };
 }
 
-/** Global options that appear after the command, where they are no longer global. */
+/**
+ * Options that only mean anything before the command. `--help` is deliberately
+ * not one of them: after a command it asks for *that command's* usage.
+ */
+const GLOBAL_ONLY_OPTIONS = Object.keys(GLOBAL_OPTIONS).filter(
+  (name) => name !== 'help'
+);
+
+/** Everything up to `--`; past it, a token is the command's literal payload. */
+function beforeTerminator(argv: readonly string[]): readonly string[] {
+  const terminator = argv.indexOf('--');
+  return terminator === -1 ? argv : argv.slice(0, terminator);
+}
+
+/** Global-only options that appear after the command, where they no longer apply. */
 export function misplacedGlobalOptions(
   commandArgs: readonly string[]
 ): string[] {
-  const names = Object.keys(GLOBAL_OPTIONS).map((name) => `--${name}`);
-  const end = commandArgs.indexOf('--');
-  const searched = end === -1 ? commandArgs : commandArgs.slice(0, end);
+  const searched = beforeTerminator(commandArgs);
 
-  return names.filter((name) =>
-    searched.some((arg) => arg === name || arg.startsWith(`${name}=`))
+  return GLOBAL_ONLY_OPTIONS.map((name) => `--${name}`).filter((flag) =>
+    searched.some((arg) => arg === flag || arg.startsWith(`${flag}=`))
+  );
+}
+
+/** Whether the command args ask for the command's own usage. */
+export function requestsHelp(commandArgs: readonly string[]): boolean {
+  return beforeTerminator(commandArgs).some(
+    (arg) => arg === '--help' || arg === '-h'
   );
 }
 

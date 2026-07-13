@@ -1,10 +1,15 @@
 import type {Writable} from 'node:stream';
 
-import {GLOBAL_OPTIONS, parseArgsOrUsage, splitArgv} from './args.mts';
-import {assertUsage, EXIT_OK, UsageError} from './errors.mts';
-import {writeLine} from './io.mts';
-import {createLogger, resolveLogLevel} from './log/logger.mts';
-import {findCommand, helpText} from './registry.mts';
+import {
+  GLOBAL_OPTIONS,
+  misplacedGlobalOptions,
+  parseArgsOrUsage,
+  splitArgv,
+} from './lib/args.mts';
+import {assertUsage, EXIT_OK, UsageError} from './lib/errors.mts';
+import {writeLine} from './lib/io.mts';
+import {createLogger, resolveLogLevel} from './lib/log/logger.mts';
+import {findCommand, helpText} from './lib/registry.mts';
 
 export interface RunOptions {
   readonly stdout: Writable;
@@ -36,7 +41,6 @@ export async function run(
   await log.debug('parsed argv', {
     command: command ?? '-',
     argc: commandArgs.length,
-    level,
   });
 
   if (values.help === true) {
@@ -58,10 +62,22 @@ export async function run(
   try {
     await target.run(commandArgs, {stdout, stderr, log, env});
   } catch (error) {
-    // A command's own usage error should print that command's usage, not the CLI's.
-    throw error instanceof UsageError
-      ? new UsageError(`${error.message}\n\nusage: ${target.usage}`)
-      : error;
+    if (!(error instanceof UsageError)) {
+      throw error;
+    }
+
+    // A command's own usage error prints that command's usage, not the CLI's.
+    // A global option written after the command reaches the command as an
+    // unknown flag, so name the real problem rather than let it read as a typo.
+    const misplaced = misplacedGlobalOptions(commandArgs);
+    const hint =
+      misplaced.length === 0
+        ? ''
+        : `\n\nnote: ${misplaced.join(', ')} — a global option must come before the command: dispatch ${misplaced.join(' ')} ... ${target.name} ...`;
+
+    throw new UsageError(`${error.message}\n\nusage: ${target.usage}${hint}`, {
+      cause: error,
+    });
   }
 
   await log.info('command complete', {

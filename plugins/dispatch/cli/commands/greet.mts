@@ -1,7 +1,7 @@
-import {parseArgsOrUsage} from '../args.mts';
-import type {Command} from '../command.mts';
-import {assertUsage} from '../errors.mts';
-import {writeLine} from '../io.mts';
+import {parseArgsOrUsage} from '../lib/args.mts';
+import type {Command} from '../lib/command.mts';
+import {assertUsage} from '../lib/errors.mts';
+import {writeLine} from '../lib/io.mts';
 
 /** Print `hello <name>` to stdout. The name comes from `--name` or a lone positional. */
 export const greet: Command = {

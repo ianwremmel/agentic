@@ -3,8 +3,8 @@ import {describe, it} from 'node:test';
 
 import {logRecords, runDispatch} from '../test-harness.mts';
 
-await describe('dispatch', async () => {
-  await it('prints help on --help and exits 0', async () => {
+describe('dispatch', () => {
+  it('prints help on --help and exits 0', async () => {
     const {code, stdout} = await runDispatch(['--help']);
 
     assert.equal(code, 0);
@@ -12,7 +12,7 @@ await describe('dispatch', async () => {
     assert.match(stdout, /^ {2}greet {2,}Print a greeting to stdout\.$/mu);
   });
 
-  await it('rejects no command with a usage error and the command list', async () => {
+  it('rejects no command with a usage error and the command list', async () => {
     const {code, stdout, stderr} = await runDispatch([]);
 
     assert.equal(code, 2);
@@ -21,7 +21,7 @@ await describe('dispatch', async () => {
     assert.match(stderr, /greet/u);
   });
 
-  await it('rejects an unknown command by name', async () => {
+  it('rejects an unknown command by name', async () => {
     const {code, stderr} = await runDispatch(['sing', 'World']);
 
     assert.equal(code, 2);
@@ -29,7 +29,7 @@ await describe('dispatch', async () => {
     assert.match(stderr, /greet/u);
   });
 
-  await it('logs at info by default, without debug records', async () => {
+  it('logs at info by default, without debug records', async () => {
     const {stderr} = await runDispatch(['greet', 'World']);
     const records = logRecords(stderr);
 
@@ -46,7 +46,7 @@ await describe('dispatch', async () => {
     );
   });
 
-  await it('emits debug records when --log-level debug is passed', async () => {
+  it('emits debug records when --log-level debug is passed', async () => {
     const {code, stdout, stderr} = await runDispatch([
       '--log-level',
       'debug',
@@ -63,7 +63,7 @@ await describe('dispatch', async () => {
     );
   });
 
-  await it('takes the log level from DISPATCH_LOG_LEVEL', async () => {
+  it('takes the log level from DISPATCH_LOG_LEVEL', async () => {
     const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
       env: {DISPATCH_LOG_LEVEL: 'error'},
     });
@@ -77,7 +77,7 @@ await describe('dispatch', async () => {
     );
   });
 
-  await it('lets --log-level win over DISPATCH_LOG_LEVEL', async () => {
+  it('lets --log-level win over DISPATCH_LOG_LEVEL', async () => {
     const {stderr} = await runDispatch(
       ['--log-level', 'debug', 'greet', 'World'],
       {env: {DISPATCH_LOG_LEVEL: 'error'}}
@@ -89,7 +89,7 @@ await describe('dispatch', async () => {
     );
   });
 
-  await it('rejects an unknown log level instead of guessing one', async () => {
+  it('rejects an unknown log level instead of guessing one', async () => {
     const {code, stderr} = await runDispatch([
       '--log-level',
       'chatty',
@@ -101,7 +101,7 @@ await describe('dispatch', async () => {
     assert.match(stderr, /unknown log level "chatty"/u);
   });
 
-  await it('does not treat a global option value as the command name', async () => {
+  it('does not treat a global option value as the command name', async () => {
     const {code, stdout} = await runDispatch([
       '--log-level',
       'warn',
@@ -111,5 +111,29 @@ await describe('dispatch', async () => {
 
     assert.equal(code, 0);
     assert.equal(stdout, 'hello World\n');
+  });
+});
+
+describe('dispatch global options after the command', () => {
+  it('rejects them and says where they belong', async () => {
+    const {code, stdout, stderr} = await runDispatch([
+      'greet',
+      '--log-level',
+      'debug',
+      'World',
+    ]);
+
+    assert.equal(code, 2);
+    assert.equal(stdout, '', 'a misplaced global must not still greet');
+    assert.match(stderr, /--log-level/u);
+    assert.match(stderr, /a global option must come before the command/u);
+    assert.match(stderr, /before the command/u);
+  });
+
+  it('leaves a global-looking flag after -- alone', async () => {
+    const {code, stdout} = await runDispatch(['greet', '--', '--log-level']);
+
+    assert.equal(code, 0);
+    assert.equal(stdout, 'hello --log-level\n');
   });
 });

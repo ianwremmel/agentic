@@ -1,5 +1,5 @@
-import {EXIT_FAILURE, EXIT_USAGE, UsageError} from './errors.mts';
-import {writeLine} from './io.mts';
+import {EXIT_FAILURE, EXIT_USAGE, UsageError} from './lib/errors.mts';
+import {writeLine} from './lib/io.mts';
 import {run} from './run.mts';
 
 /**

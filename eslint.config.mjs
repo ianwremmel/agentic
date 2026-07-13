@@ -26,8 +26,18 @@ export default defineConfig([
     },
     rules: {
       // Every write and log call is async; a dropped promise is a silent hole in
-      // the CLI's output. Tests await their suites rather than exempt them.
-      '@typescript-eslint/no-floating-promises': 'error',
+      // the CLI's output. node:test's `describe`/`it` are the exception: the
+      // runner owns those promises and awaits them itself, and awaiting them at
+      // the call site is wrong (a promise returned from a `describe` body is
+      // treated as the suite's result).
+      '@typescript-eslint/no-floating-promises': [
+        'error',
+        {
+          allowForKnownSafeCalls: [
+            {from: 'package', package: 'node:test', name: ['describe', 'it']},
+          ],
+        },
+      ],
       '@typescript-eslint/consistent-type-imports': 'error',
       // The CLI writes to the streams it is handed; console bypasses them.
       'no-console': 'error',

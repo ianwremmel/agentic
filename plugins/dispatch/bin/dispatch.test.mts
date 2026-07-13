@@ -4,15 +4,15 @@ import {describe, it} from 'node:test';
 
 import {fakeNodeDir, pathWithoutNode, runDispatch} from '../test-harness.mts';
 
-await describe('bin/dispatch node preflight', async () => {
-  await it('runs the CLI when node is new enough', async () => {
+describe('bin/dispatch node preflight', () => {
+  it('runs the CLI when node is new enough', async () => {
     const {code, stdout} = await runDispatch(['greet', 'World']);
 
     assert.equal(code, 0);
     assert.equal(stdout, 'hello World\n');
   });
 
-  await it('refuses a node older than the minimum, naming the version it found', async () => {
+  it('refuses a node older than the minimum, naming the version it found', async () => {
     const dir = await fakeNodeDir('v20.11.0');
 
     const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
@@ -25,7 +25,7 @@ await describe('bin/dispatch node preflight', async () => {
     assert.match(stderr, /22\.18\.0/u, 'the message states the minimum');
   });
 
-  await it('refuses a prerelease of the minimum version', async () => {
+  it('refuses a prerelease of the minimum version', async () => {
     // 22.18.0-rc.1 predates the 22.18.0 release, so its type stripping is not
     // the release behavior the CLI is built against.
     const dir = await fakeNodeDir('v22.18.0-rc.1');
@@ -39,7 +39,7 @@ await describe('bin/dispatch node preflight', async () => {
     assert.match(stderr, /^error: node v22\.18\.0-rc\.1 .* is too old/mu);
   });
 
-  await it('accepts a prerelease above the minimum version', async () => {
+  it('accepts a prerelease above the minimum version', async () => {
     const dir = await fakeNodeDir('v25.0.0-nightly20260101');
 
     const {stdout, stderr} = await runDispatch(['greet', 'World'], {
@@ -50,7 +50,7 @@ await describe('bin/dispatch node preflight', async () => {
     assert.match(stdout, /^v25\.0\.0-nightly20260101$/mu);
   });
 
-  await it('accepts a node at exactly the minimum version', async () => {
+  it('accepts a node at exactly the minimum version', async () => {
     // The fake echoes its version whatever the arguments, so seeing that echo on
     // stdout proves the gate let 22.18.0 through and the wrapper exec'd it.
     const dir = await fakeNodeDir('v22.18.0');
@@ -64,7 +64,7 @@ await describe('bin/dispatch node preflight', async () => {
     assert.equal(code, 0);
   });
 
-  await it('reports a missing node with an actionable message and exit 127', async () => {
+  it('reports a missing node with an actionable message and exit 127', async () => {
     const {code, stderr} = await runDispatch(['greet', 'World'], {
       env: {PATH: await pathWithoutNode()},
     });
@@ -74,7 +74,7 @@ await describe('bin/dispatch node preflight', async () => {
     assert.match(stderr, /nodejs\.org/u);
   });
 
-  await it('honors DISPATCH_NODE when it points at a usable node', async () => {
+  it('honors DISPATCH_NODE when it points at a usable node', async () => {
     const {code, stdout} = await runDispatch(['greet', 'World'], {
       env: {DISPATCH_NODE: process.execPath},
     });
@@ -83,7 +83,7 @@ await describe('bin/dispatch node preflight', async () => {
     assert.equal(stdout, 'hello World\n');
   });
 
-  await it('reports a DISPATCH_NODE that does not exist', async () => {
+  it('reports a DISPATCH_NODE that does not exist', async () => {
     const {code, stderr} = await runDispatch(['greet', 'World'], {
       env: {DISPATCH_NODE: '/nonexistent/node'},
     });
@@ -95,7 +95,7 @@ await describe('bin/dispatch node preflight', async () => {
     );
   });
 
-  await it('logs its own preflight in logfmt only at debug level', async () => {
+  it('logs its own preflight in logfmt only at debug level', async () => {
     const quiet = await runDispatch(['greet', 'World']);
     assert.doesNotMatch(quiet.stderr, /component=dispatch-wrapper/u);
 

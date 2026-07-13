@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 
 import type {Command} from './command.mts';
-import {greet} from './commands/greet.mts';
+import {greet} from '../commands/greet.mts';
 
 /**
  * Every command the CLI exposes. Skills reach these through `bin/dispatch`;

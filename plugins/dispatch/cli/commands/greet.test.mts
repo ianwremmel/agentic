@@ -3,22 +3,22 @@ import {describe, it} from 'node:test';
 
 import {logRecords, runDispatch} from '../../test-harness.mts';
 
-await describe('dispatch greet', async () => {
-  await it('greets the positional name on stdout', async () => {
+describe('dispatch greet', () => {
+  it('greets the positional name on stdout', async () => {
     const {code, stdout} = await runDispatch(['greet', 'World']);
 
     assert.equal(stdout, 'hello World\n');
     assert.equal(code, 0);
   });
 
-  await it('greets the --name flag value', async () => {
+  it('greets the --name flag value', async () => {
     const {code, stdout} = await runDispatch(['greet', '--name', 'Ada']);
 
     assert.equal(stdout, 'hello Ada\n');
     assert.equal(code, 0);
   });
 
-  await it('keeps the greeting on stdout and the logs on stderr', async () => {
+  it('keeps the greeting on stdout and the logs on stderr', async () => {
     const {stdout, stderr} = await runDispatch(['greet', 'World']);
 
     assert.equal(stdout, 'hello World\n');
@@ -33,7 +33,7 @@ await describe('dispatch greet', async () => {
     );
   });
 
-  await it('greets a name containing spaces without splitting it', async () => {
+  it('greets a name containing spaces without splitting it', async () => {
     const {code, stdout, stderr} = await runDispatch([
       'greet',
       '--name',
@@ -53,14 +53,14 @@ await describe('dispatch greet', async () => {
     );
   });
 
-  await it('greets a name that looks like a flag when passed after --', async () => {
+  it('greets a name that looks like a flag when passed after --', async () => {
     const {code, stdout} = await runDispatch(['greet', '--', '--name']);
 
     assert.equal(stdout, 'hello --name\n');
     assert.equal(code, 0);
   });
 
-  await it('rejects a missing name with a usage error', async () => {
+  it('rejects a missing name with a usage error', async () => {
     const {code, stdout, stderr} = await runDispatch(['greet']);
 
     assert.equal(code, 2);
@@ -69,14 +69,14 @@ await describe('dispatch greet', async () => {
     assert.match(stderr, /usage: dispatch greet <name>/u);
   });
 
-  await it('rejects an empty name', async () => {
+  it('rejects an empty name', async () => {
     const {code, stdout} = await runDispatch(['greet', '--name', '']);
 
     assert.equal(code, 2);
     assert.equal(stdout, '');
   });
 
-  await it('rejects a second name rather than silently ignoring it', async () => {
+  it('rejects a second name rather than silently ignoring it', async () => {
     const {code, stdout, stderr} = await runDispatch(['greet', 'Ada', 'Grace']);
 
     assert.equal(code, 2);
@@ -84,7 +84,7 @@ await describe('dispatch greet', async () => {
     assert.match(stderr, /at most one name/u);
   });
 
-  await it('rejects an unknown flag', async () => {
+  it('rejects an unknown flag', async () => {
     const {code, stderr} = await runDispatch(['greet', '--shout', 'World']);
 
     assert.equal(code, 2);

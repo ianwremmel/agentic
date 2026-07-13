@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { EnvironmentError, UsageError } from './errors.mts';
+import { UsageError } from './errors.mts';
 import { parseStateMapping, type StateMapping } from './mapping.mts';
 import { isRole, type Role } from './roles.mts';
 
@@ -47,7 +47,10 @@ export async function loadConfig(
   path: string | undefined,
 ): Promise<GraphConfig> {
   const fromEnv = process.env.CLAUDE_PLUGIN_OPTION_GRAPH_CONFIG;
-  const target = path ?? (fromEnv === '' ? undefined : fromEnv);
+  // An empty string means "unset", not "the current directory" — the same rule
+  // resolveDbPath applies. Treating it as a path resolves to the cwd and fails
+  // with EISDIR, which tells the caller nothing useful.
+  const target = blank(path) ?? blank(fromEnv);
   if (target === undefined) return { ...DEFAULT_CONFIG };
 
   const full = resolve(expandHome(target));
@@ -55,9 +58,11 @@ export async function loadConfig(
   try {
     raw = await readFile(full, 'utf8');
   } catch (cause) {
-    throw new EnvironmentError(
+    // The caller chose this path, so a bad one is a usage error, not a broken
+    // machine: the fix is to correct the flag, not to escalate to the operator.
+    throw new UsageError(
       `cannot read the graph config file at ${full}: ${describe(cause)}`,
-      'check the path passed to --config (or the graph_config plugin option). Omit it to use the built-in defaults.',
+      'check the path passed to --config (or the graph_config plugin option). Omit it entirely to use the built-in defaults.',
     );
   }
 
@@ -122,6 +127,11 @@ function roleList(raw: unknown, fallback: Role[], source: string): Role[] {
     ),
   );
   return raw;
+}
+
+/** An empty or whitespace-only value is unset, not a path. */
+function blank(value: string | undefined): string | undefined {
+  return value === undefined || value.trim() === '' ? undefined : value;
 }
 
 function expandHome(path: string): string {

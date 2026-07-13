@@ -35,10 +35,25 @@ describe('effective blocking', () => {
     assert.equal(isEffectivelyBlocked(analysis, 'B'), false);
   });
 
-  it('keeps blocking through a verified ancestor that is itself still blocked', () => {
-    // "Any ancestor on any path": Z is open, so B stays blocked even though its
-    // direct blocker A is verified. Pruning the walk at A would dispatch B while
-    // the work it really depends on is still open.
+  it('releases a dependent when its blocker is canceled, even if work sits behind it', () => {
+    // The rule the protocol states outright: cancellation UNBLOCKS downstream
+    // work. C depended on A; A was abandoned. Walking past the canceled A into
+    // its own still-open blocker B would strand C forever on work nobody will
+    // ever do — the one outcome the protocol forbids.
+    const nodes = [
+      node('B', 'in-progress'),
+      node('A', 'canceled'),
+      node('C', 'available'),
+    ];
+    const analysis = analyzeBlocking(nodes, [edge('B > A'), edge('A > C')]);
+
+    assert.deepEqual(analysis.unresolvedAncestors.get('C'), []);
+    assert.equal(isEffectivelyBlocked(analysis, 'C'), false);
+  });
+
+  it('stops the walk at a verified ancestor that is itself still blocked', () => {
+    // The tracker says A is done. That judgment is authoritative over whatever
+    // is still open behind it, so B is free to start.
     const nodes = [
       node('Z', 'in-progress'),
       node('A', 'verified'),
@@ -46,7 +61,9 @@ describe('effective blocking', () => {
     ];
     const analysis = analyzeBlocking(nodes, [edge('Z > A'), edge('A > B')]);
 
-    assert.deepEqual(analysis.unresolvedAncestors.get('B'), ['Z']);
+    assert.deepEqual(analysis.unresolvedAncestors.get('B'), []);
+    // A is still an ancestor, it just is not a blocking one.
+    assert.ok(analysis.ancestors.get('B')?.has('A'));
   });
 
   it('reports a cycle and leaves every ticket on it blocked', () => {
@@ -113,16 +130,16 @@ describe('effective blocking', () => {
     assert.equal(isEffectivelyBlocked(analysis, 'B'), true);
   });
 
-  it('keeps blocking through a resolved ticket whose own blocker was never fetched', () => {
-    // The dangerous case. A is Done, so B looks ready — but A was itself blocked
-    // by GHOST, which the fetch never returned. If the unfetched blocker does not
-    // propagate transitively, it vanishes the moment A is marked Done, and B gets
-    // dispatched with its real blocker still open and invisible.
-    const nodes = [node('A', 'verified'), node('B', 'available')];
+  it('holds a ticket whose own blocker was never fetched, but not those behind it', () => {
+    // A's blocker was never fetched, so A itself is held — an unknown blocker is
+    // not an absent one. But A is `available`, not resolved, so B is blocked by
+    // A anyway; the unfetched GHOST reaches B through A because A is a live link
+    // in the chain.
+    const nodes = [node('A', 'available'), node('B', 'available')];
     const analysis = analyzeBlocking(nodes, [edge('GHOST > A'), edge('A > B')]);
 
     assert.deepEqual(analysis.unresolvedAncestors.get('A'), ['GHOST']);
-    assert.deepEqual(analysis.unresolvedAncestors.get('B'), ['GHOST']);
+    assert.deepEqual(analysis.unresolvedAncestors.get('B'), ['A', 'GHOST']);
     assert.equal(isEffectivelyBlocked(analysis, 'B'), true);
   });
 

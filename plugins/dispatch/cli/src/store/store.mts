@@ -2,7 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { EnvironmentError } from '../errors.mts';
+import { DispatchError, EnvironmentError } from '../errors.mts';
+import { analyzeBlocking } from '../graph/blocking.mts';
+import { findPermanentlyStuck } from '../graph/derive.mts';
+import { computeMilestoneStates } from '../graph/milestones.mts';
 import type {
   Exclusion,
   GraphEdge,
@@ -39,6 +42,8 @@ export interface IngestResult {
   nodesUpserted: number;
   nodesDeleted: number;
   edgesWritten: number;
+  /** Review records invalidated because their milestone stopped being ready. */
+  reviewsDropped: number;
   projects: number;
   milestones: number;
 }
@@ -76,21 +81,28 @@ export class GraphStore {
       }
     }
 
-    let db: DatabaseSync;
+    let store: GraphStore;
     try {
-      db = new DatabaseSync(path);
+      const db = new DatabaseSync(path);
       db.exec('PRAGMA journal_mode = WAL');
       db.exec('PRAGMA foreign_keys = ON');
+      // Several agents share one graph — an orchestrator tick can land while a
+      // producer is mid-ingest. Without a busy timeout SQLite fails the moment
+      // it meets a writer, turning routine contention into a hard error.
+      db.exec('PRAGMA busy_timeout = 5000');
       db.exec(SCHEMA);
+
+      store = new GraphStore(db);
+      // Inside the try: this is the first WRITE, so it is where a read-only file
+      // or a locked database actually surfaces.
+      store.#setMeta('schema_version', String(SCHEMA_VERSION));
     } catch (cause) {
       throw new EnvironmentError(
         `cannot open the graph database at ${path}: ${describe(cause)}`,
-        'check the file is a readable SQLite database and the disk is writable. Delete it to force a rebuild — a full sync reconstructs it.',
+        'check the file is a readable, writable SQLite database and the disk is not full. If it is locked, another dispatch command is mid-write — retry shortly. Delete the file to force a rebuild; a full sync reconstructs it.',
       );
     }
 
-    const store = new GraphStore(db);
-    store.#setMeta('schema_version', String(SCHEMA_VERSION));
     return store;
   }
 
@@ -205,13 +217,15 @@ export class GraphStore {
         }
       }
 
+      // Count rows actually written, not insert attempts. The two nodes of an
+      // edge routinely both declare it (A says it blocks B; B says it is blocked
+      // by A), and reporting that as two edges misleads whoever reads the log.
       let edgesWritten = 0;
       const insertEdge = (blocker: string, blocked: string): void => {
-        this.#run(
+        edgesWritten += this.#run(
           'INSERT INTO edge (blocker, blocked) VALUES (?, ?) ON CONFLICT DO NOTHING',
           [blocker, blocked],
         );
-        edgesWritten += 1;
       };
 
       for (const node of live) {
@@ -228,79 +242,148 @@ export class GraphStore {
         );
       }
 
+      const reviewsDropped = this.#pruneStaleReviews();
+
       return {
         nodesUpserted,
         nodesDeleted,
         edgesWritten,
+        reviewsDropped,
         projects: delta.projects.length,
         milestones: delta.milestones.length,
       };
     });
   }
 
-  async snapshot(): Promise<GraphSnapshot> {
+  /**
+   * Drop the review record of any milestone that is no longer ready for review.
+   *
+   * A recorded review belongs to one ready-for-review episode. The moment the
+   * milestone regains open work — a review filed follow-up tickets into it, or a
+   * member was reopened — that episode is over, and the old record must not
+   * survive to satisfy the gate when the milestone completes again. Pinning the
+   * record to a fingerprint of the member ids is not enough on its own: reopening
+   * and re-verifying a member leaves the id set identical.
+   *
+   * Runs inside the ingest transaction, so the record and the graph it describes
+   * can never disagree.
+   */
+  #pruneStaleReviews(): number {
     const nodes = this.#all('SELECT * FROM node ORDER BY id').map(toNode);
-    const edges = this.#all(
-      'SELECT blocker, blocked FROM edge ORDER BY blocker, blocked',
-    ).map((row): GraphEdge => ({
-      blocker: String(row.blocker),
-      blocked: String(row.blocked),
-    }));
+    if (nodes.length === 0) return 0;
 
-    const projects = this.#all('SELECT id, name FROM project ORDER BY id').map(
-      (row): Project => ({
+    const edges = this.#all('SELECT blocker, blocked FROM edge').map(
+      (row): GraphEdge => ({
+        blocker: text(row.blocker) ?? '',
+        blocked: text(row.blocked) ?? '',
+      }),
+    );
+    const milestones = this.#readMilestones();
+    const exclusions = this.#readExclusions();
+    const reviews = this.#readReviews();
+    if (reviews.length === 0) return 0;
+
+    const analysis = analyzeBlocking(nodes, edges);
+    const { permanentIds } = findPermanentlyStuck(nodes, exclusions, analysis);
+    const states = computeMilestoneStates(
+      nodes,
+      milestones,
+      reviews,
+      analysis,
+      permanentIds,
+    );
+
+    let dropped = 0;
+    for (const review of reviews) {
+      const state = states.get(review.milestone);
+      if (state !== undefined && state.readyForReview) continue;
+      dropped += this.#run('DELETE FROM review WHERE milestone = ?', [
+        review.milestone,
+      ]);
+    }
+    return dropped;
+  }
+
+  async snapshot(): Promise<GraphSnapshot> {
+    return this.#guard(() => {
+      const nodes = this.#all('SELECT * FROM node ORDER BY id').map(toNode);
+      const edges = this.#all(
+        'SELECT blocker, blocked FROM edge ORDER BY blocker, blocked',
+      ).map((row): GraphEdge => ({
+        blocker: text(row.blocker) ?? '',
+        blocked: text(row.blocked) ?? '',
+      }));
+
+      const projects = this.#all(
+        'SELECT id, name FROM project ORDER BY id',
+      ).map((row): Project => ({
         id: text(row.id) ?? '',
         name: text(row.name) ?? '',
         declared: true,
-      }),
-    );
+      }));
 
-    const milestones = this.#all(
-      'SELECT id, project, name, sort_order FROM milestone ORDER BY project, sort_order',
-    ).map((row): Milestone => ({
-      id: String(row.id),
-      project: String(row.project),
-      name: String(row.name),
-      sortOrder: Number(row.sort_order),
-    }));
+      const cursors: Record<string, string> = {};
+      for (const row of this.#all(
+        'SELECT source, value FROM cursor ORDER BY source',
+      )) {
+        cursors[text(row.source) ?? ''] = text(row.value) ?? '';
+      }
 
-    const exclusions = this.#all(
-      'SELECT id, kind FROM exclusion ORDER BY id',
-    ).map((row): Exclusion => {
-      const kind = String(row.kind);
+      // A project a ticket names but that was never fetched is NOT invented
+      // here. `derive` infers it and marks it partial, so the inference holds
+      // however the snapshot was assembled.
       return {
-        id: String(row.id),
-        kind: isExclusionKind(kind) ? kind : 'in-flight',
+        projects,
+        nodes,
+        edges,
+        milestones: this.#readMilestones(),
+        exclusions: this.#readExclusions(),
+        reviews: this.#readReviews(),
+        cursors,
       };
     });
+  }
 
-    const reviews = this.#all(
+  #readMilestones(): Milestone[] {
+    return this.#all(
+      'SELECT id, project, name, sort_order FROM milestone ORDER BY project, sort_order',
+    ).map((row): Milestone => ({
+      id: text(row.id) ?? '',
+      project: text(row.project) ?? '',
+      name: text(row.name) ?? '',
+      sortOrder: Number(row.sort_order),
+    }));
+  }
+
+  #readExclusions(): Exclusion[] {
+    return this.#all('SELECT id, kind FROM exclusion ORDER BY id').map(
+      (row): Exclusion => {
+        const kind = text(row.kind) ?? '';
+        return {
+          id: text(row.id) ?? '',
+          kind: isExclusionKind(kind) ? kind : 'in-flight',
+        };
+      },
+    );
+  }
+
+  #readReviews(): ReviewRecord[] {
+    return this.#all(
       'SELECT milestone, fingerprint, recorded_at FROM review',
     ).map((row): ReviewRecord => ({
-      milestone: String(row.milestone),
-      fingerprint: String(row.fingerprint),
-      recordedAt: String(row.recorded_at),
+      milestone: text(row.milestone) ?? '',
+      fingerprint: text(row.fingerprint) ?? '',
+      recordedAt: text(row.recorded_at) ?? '',
     }));
-
-    const cursors: Record<string, string> = {};
-    for (const row of this.#all(
-      'SELECT source, value FROM cursor ORDER BY source',
-    )) {
-      cursors[String(row.source)] = String(row.value);
-    }
-
-    // A project a ticket names but that was never fetched is NOT invented here.
-    // `derive` infers it and marks it partial, so the inference holds however
-    // the snapshot was assembled.
-
-    return { projects, nodes, edges, milestones, exclusions, reviews, cursors };
   }
 
   async getCursor(source: string): Promise<string | null> {
-    const row = this.#db
-      .prepare('SELECT value FROM cursor WHERE source = ?')
-      .get(source) as Record<string, unknown> | undefined;
-    return row === undefined ? null : String(row.value);
+    return this.#guard(() => {
+      const row = this.#db
+        .prepare('SELECT value FROM cursor WHERE source = ?')
+        .get(source) as Record<string, unknown> | undefined;
+      return row === undefined ? null : (text(row.value) ?? null);
+    });
   }
 
   async setCursor(source: string, value: string): Promise<void> {
@@ -349,19 +432,46 @@ export class GraphStore {
   }
 
   #transaction<T>(body: () => T): T {
-    this.#db.exec('BEGIN');
+    return this.#guard(() => {
+      this.#db.exec('BEGIN');
+      try {
+        const result = body();
+        this.#db.exec('COMMIT');
+        return result;
+      } catch (error) {
+        try {
+          this.#db.exec('ROLLBACK');
+        } catch {
+          // A failing ROLLBACK must not replace the error that caused it —
+          // that error is the one the caller needs to see.
+        }
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Turn a SQLite failure into an environment error.
+   *
+   * A locked or unwritable database is a fact about the machine, not a mistake
+   * in how the CLI was called. Left unwrapped it surfaces as "internal error —
+   * this is a bug in the dispatch CLI", which sends the calling agent off to
+   * report a transient lock as a defect instead of retrying.
+   */
+  #guard<T>(body: () => T): T {
     try {
-      const result = body();
-      this.#db.exec('COMMIT');
-      return result;
-    } catch (error) {
-      this.#db.exec('ROLLBACK');
-      throw error;
+      return body();
+    } catch (cause) {
+      if (cause instanceof DispatchError) throw cause;
+      throw new EnvironmentError(
+        `the graph database rejected an operation: ${describe(cause)}`,
+        'if the database is locked, another dispatch command is mid-write — retry shortly. Otherwise check the file is a writable SQLite database and the disk is not full.',
+      );
     }
   }
 
-  #run(sql: string, params: SqlValue[]): void {
-    this.#db.prepare(sql).run(...params);
+  #run(sql: string, params: SqlValue[]): number {
+    return Number(this.#db.prepare(sql).run(...params).changes);
   }
 
   #all(sql: string): Record<string, unknown>[] {

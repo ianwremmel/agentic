@@ -4,7 +4,7 @@ import { text } from 'node:stream/consumers';
 
 import { loadConfig, resolveDbPath, type GraphConfig } from '../config.mts';
 import { UsageError } from '../errors.mts';
-import { derive } from '../graph/derive.mts';
+import { derive, type ProjectCounts } from '../graph/derive.mts';
 import { toJson, toXml } from '../graph/document.mts';
 import { computeMilestoneStates } from '../graph/milestones.mts';
 import { analyzeBlocking } from '../graph/blocking.mts';
@@ -94,6 +94,10 @@ export async function graphIngest(ctx: CommandContext): Promise<void> {
       edges: result.edgesWritten,
       projects: result.projects,
       milestones: result.milestones,
+      // A milestone that stopped being ready loses its review record — its next
+      // completion needs a fresh review. Worth seeing in the log, since it
+      // re-closes a gate the orchestrator may have been about to walk through.
+      reviews_dropped: result.reviewsDropped,
       cursor: delta.cursors[source] ?? null,
     });
   });
@@ -126,12 +130,13 @@ export async function graphDoc(ctx: CommandContext): Promise<void> {
       permanently_blocked: graph.permanentlyBlocked.length,
       anomalies: graph.anomalies.length,
       projects: graph.counts.length,
-      // An empty graph is NOT terminal — `every` on no projects is vacuously
-      // true, and reporting that would tell an orchestrator its work was
-      // finished when in truth nothing has been ingested yet.
-      terminal:
-        graph.counts.length > 0 &&
-        graph.counts.every((count) => count.terminal),
+      // Completion is judged on the projects that were actually selected. A
+      // partial project — one seen only through a cross-project ancestor — is
+      // never terminal by construction, and letting it into this check would
+      // report `terminal=false` forever on any graph that reaches outside
+      // itself. An empty graph is not terminal either: `every` over no projects
+      // is vacuously true, which would announce success on a fresh database.
+      terminal: isTerminal(graph.counts),
     });
 
     for (const anomaly of graph.anomalies) {
@@ -229,6 +234,22 @@ export async function graphExclude(ctx: CommandContext): Promise<void> {
       ),
     );
 
+    // An exclusion for a ticket the graph has never heard of is almost always a
+    // typo'd id — and it excludes nothing, so the real ticket keeps ranking into
+    // the frontier and gets dispatched a second time. It is still stored (the
+    // orchestrator may legitimately exclude a ticket before the fetch that
+    // introduces it), but never silently.
+    const snapshot = await store.snapshot();
+    if (!snapshot.nodes.some((node) => node.id === id)) {
+      logger.warn({
+        cmd: 'graph.exclude',
+        action,
+        id,
+        kind,
+        msg: 'no such ticket in the graph — check the id; it excludes nothing until that ticket is ingested',
+      });
+    }
+
     await store.addExclusion(id, kind);
     logger.info({ cmd: 'graph.exclude', action, id, kind });
   });
@@ -268,6 +289,18 @@ export async function graphRecordReview(ctx: CommandContext): Promise<void> {
       ),
     );
 
+    // Recording a review for a milestone that still has open work would pin the
+    // record to a member set that is not finished. The gate would then spring
+    // open the moment the last ticket lands, with nobody ever having reviewed
+    // the completed milestone.
+    assert(
+      state.readyForReview,
+      new UsageError(
+        `milestone "${milestone}" is not ready for review — ${state.openCount} of ${state.memberCount} ticket(s) are still open`,
+        'review a milestone only once the graph reports ready-for-review="true" for it. Re-run the producer first if you believe the graph is stale.',
+      ),
+    );
+
     const recordedAt = new Date().toISOString();
     await store.recordReview(milestone, state.fingerprint, recordedAt);
 
@@ -281,13 +314,26 @@ export async function graphRecordReview(ctx: CommandContext): Promise<void> {
   });
 }
 
+/** Completion is judged on the selected projects only — never on a partial one. */
+function isTerminal(counts: readonly ProjectCounts[]): boolean {
+  const selected = counts.filter((count) => !count.partial);
+  return selected.length > 0 && selected.every((count) => count.terminal);
+}
+
+/** Nothing on stdin in this long → nobody is going to send anything. */
+const STDIN_IDLE_MS = 15_000;
+
 /**
  * Read the payload from `--file`, else from stdin.
  *
- * Both failure modes here are the caller's, not the CLI's, and both used to
- * present badly: an unreadable path surfaced as an internal crash (telling the
- * agent to escalate its own typo), and a missing stdin left the process waiting
- * on a pipe that would never be written — a hang with no output at all.
+ * Both failure modes here are the caller's, not the CLI's, and both present
+ * badly if left alone: an unreadable path surfaces as an internal crash (telling
+ * the agent to escalate its own typo), and an stdin nobody writes to blocks the
+ * process forever with no output at all.
+ *
+ * An `isTTY` check alone does not prevent the hang: an agent harness spawns the
+ * CLI with an inherited pipe that is not a TTY and may never be written. So the
+ * wait is also bounded — if not one byte arrives, we stop and say why.
  */
 async function readPayload(file: string | undefined): Promise<string> {
   if (file === undefined) {
@@ -298,7 +344,7 @@ async function readPayload(file: string | undefined): Promise<string> {
         'write the payload to a file and pass --file <path>, or pipe it on stdin.',
       ),
     );
-    return text(process.stdin);
+    return readStdin();
   }
 
   try {
@@ -308,6 +354,38 @@ async function readPayload(file: string | undefined): Promise<string> {
       `cannot read the ingest payload at ${file}: ${cause instanceof Error ? cause.message : String(cause)}`,
       'check the path passed to --file. Write the payload to a file first, then pass that path.',
     );
+  }
+}
+
+/**
+ * Read stdin, but never wait forever for a pipe nobody writes to. The first byte
+ * cancels the deadline — a large payload may stream slowly, and only a caller
+ * that sends *nothing* is stuck.
+ */
+async function readStdin(): Promise<string> {
+  let idle: NodeJS.Timeout | undefined;
+
+  const bounded = new Promise<never>((_resolve, reject) => {
+    idle = setTimeout(() => {
+      reject(
+        new UsageError(
+          `nothing arrived on stdin within ${STDIN_IDLE_MS / 1000}s, and no --file was given`,
+          'write the payload to a file and pass --file <path>. Piping only works if the caller actually writes to the pipe.',
+        ),
+      );
+    }, STDIN_IDLE_MS);
+    // A pending timer must not be the thing keeping the process alive.
+    idle.unref();
+  });
+
+  process.stdin.once('data', () => {
+    clearTimeout(idle);
+  });
+
+  try {
+    return await Promise.race([text(process.stdin), bounded]);
+  } finally {
+    clearTimeout(idle);
   }
 }
 

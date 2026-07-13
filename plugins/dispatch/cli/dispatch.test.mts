@@ -188,6 +188,29 @@ describe('dispatch CLI', () => {
     assert.match(doc.stdout, /<ticket id="CLC-9" rank="1"/);
   });
 
+  it('refuses to record a review for a milestone that is not ready', async () => {
+    // Recording early would pin the record to an unfinished member set, and the
+    // gate would spring open the moment the last ticket landed — with nobody
+    // ever having reviewed the completed milestone.
+    await dispatch(
+      ['graph', 'ingest'],
+      JSON.stringify({
+        nodes: [{ id: 'CLC-9', project: 'p1', state: 'Todo', milestone: 'm1' }],
+      }),
+    );
+
+    const result = await dispatch([
+      'graph',
+      'record-review',
+      '--milestone',
+      'm1',
+    ]);
+
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /is not ready for review/);
+    assert.match(result.stderr, /1 of \d+ ticket\(s\) are still open/);
+  });
+
   it('emits the same derivation as JSON', async () => {
     const doc = await dispatch(['graph', 'doc', '--format', 'json']);
     assert.equal(doc.code, 0, doc.stderr);

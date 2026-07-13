@@ -69,6 +69,28 @@ describe('milestone readiness', () => {
     assert.equal(result.get('m1')?.readyForReview, false);
   });
 
+  it('is ready even though a member can never be finished', () => {
+    // A member the orchestrator marked `failed` will never reach `verified`.
+    // Counting it as open would leave the milestone permanently un-reviewable —
+    // which gates every later milestone forever and stops the orchestrator ever
+    // terminating. The review is exactly where a human confronts the dead work,
+    // so it has to be allowed to run.
+    const nodes = [
+      node('A', 'verified', { milestone: 'm1' }),
+      node('DEAD', 'in-progress', { milestone: 'm1' }),
+    ];
+    const result = computeMilestoneStates(
+      nodes,
+      [M1, M2],
+      [],
+      analyzeBlocking(nodes, []),
+      new Set(['DEAD']),
+    );
+
+    assert.equal(result.get('m1')?.openCount, 0);
+    assert.equal(result.get('m1')?.readyForReview, true);
+  });
+
   it('is never ready when it holds no tickets', () => {
     // An empty milestone has nothing to review. Calling it "reviewed" would let
     // it gate every later milestone forever.

@@ -45,18 +45,23 @@ The protocol's vocabulary. A tracker's native states map onto these.
 
 Highest precedence first. A ticket lands in exactly one bucket.
 
+Highest precedence first. A ticket lands in exactly one bucket.
+
 | Bucket                | When                                                                                        |
 | --------------------- | ------------------------------------------------------------------------------------------- |
-| `verified`/`canceled` | Terminal role, or a `done` exclusion.                                                       |
+| `verified`/`canceled` | The **role** says so. An exclusion never overrides the tracker here.                        |
 | `permanently-blocked` | A `failed` exclusion, or an ancestor with one — it will never progress.                     |
-| `in-flight`           | An `in-flight` exclusion, or a `started`-group role.                                        |
+| `in-flight`           | An `in-flight` exclusion, or any `started`-group role.                                      |
 | `dormant`             | Role is `backlog`.                                                                          |
 | `blocked`             | Any unresolved ancestor, or an earlier milestone still awaiting review.                     |
 | `human-blocked`       | Labelled human-interactive, or parked in `awaiting-external`/`paused`.                      |
 | `available`           | Role is `available` and nothing above applies. Ranked.                                      |
 
-Three consequences worth knowing:
+Four consequences worth knowing:
 
+- **`in-flight` outranks the waiting buckets.** Work already underway is never
+  `blocked` (that bucket means "waiting on the graph") and never `human-blocked`
+  (a human-led ticket in progress means a human is already on it).
 - **`dormant` outranks every scheduling bucket.** A `backlog` ticket is not
   eligible to be picked up whatever else is true of it, so it never reads as
   `blocked` (which would imply clearing its blockers makes it workable — it does
@@ -70,12 +75,17 @@ Three consequences worth knowing:
   downstream work; it never permanently blocks it. Only a `failed` exclusion
   does that.
 
-`dormant` tickets do not hold a project open: a `backlog` ticket is not eligible
-to be picked up, so waiting on one would mean ticking forever until a human
-promotes it. A project whose tickets are *all* in the tracker's backlog is
-therefore `terminal` with an empty frontier — correctly: there is nothing to
-dispatch until a human promotes some of it. Everything else outstanding does keep
-a project non-terminal, including a human handoff.
+An exclusion says what the orchestrator is *doing* about a ticket; the role says
+what the ticket *is*. A `done` exclusion keeps a ticket off the frontier but does
+not tally it as `verified` — otherwise a merged-but-unverified ticket could let
+its project report itself complete.
+
+**`dormant` tickets keep a project open.** They are not eligible to be picked up,
+so a project whose tickets are all still in the tracker's backlog has an *empty
+frontier* — but it is not finished, because a human can still promote that work.
+The producer says so plainly (`available=0`, `dormant=N`, `terminal=false`)
+rather than announcing completion. Everything else outstanding keeps a project
+non-terminal too, including a human handoff.
 
 A `partial="true"` project was never fetched — it was inferred from a
 cross-project ancestor that named it. Only the tickets reachable as ancestors were
@@ -84,19 +94,25 @@ pulled in, so its counts describe those tickets and nothing more, and it is neve
 
 ## Effective blocking
 
-A ticket is blocked if **any** ticket in its transitive ancestor closure is not
-`verified` or `canceled`. The walk is not pruned at a resolved ancestor: a
-`verified` ticket that is itself still blocked keeps blocking its dependents.
-This is deliberately conservative — the alternative dispatches work whose real
-blocker is still open.
+A ticket is blocked if **any** ticket in its ancestor closure is not `verified`
+or `canceled`. The walk **stops at a resolved ancestor**: a `verified` or
+`canceled` ticket is not blocking, and the tickets behind it are no longer on a
+live path to its dependents.
 
-An **unfetched** ancestor counts as unresolved and propagates like any other. A
-blocker nobody has seen cannot be assumed done, and it must not disappear from
-the reasoning just because the ticket in front of it got marked `verified`.
+That pruning is the rule, not an optimization. **Cancellation releases
+downstream work** — a dependent of a canceled ticket becomes available. Walking
+past the canceled ticket into its own still-open blockers would strand the
+dependent forever on work that was abandoned. `verified` behaves the same way:
+the tracker says the ticket is done, and that judgment stands over whatever
+remains open behind it.
+
+An **unfetched** ancestor has no role, so it counts as unresolved and holds its
+dependent back — a blocker nobody has seen cannot be assumed done.
 
 A ticket on a cycle is its own ancestor, so it comes out blocked with no
 special-casing. Cycles are still reported as anomalies, and must be surfaced, not
-scheduled around.
+scheduled around. A ticket that depends on **itself** is a one-node cycle: it is
+reported, not quietly dropped.
 
 The `blocked-by` attribute lists **every** unresolved ancestor — the transitive
 set, not just the direct blockers — because that is the set the blocking decision
@@ -124,19 +140,31 @@ they cannot reach the frontier early no matter how they sort.
 
 ## Milestone gates
 
-A milestone is **ready for review** when every member is `verified`/`canceled`
-*and* no unresolved ticket is a dependency of any member. An empty milestone is
-never ready.
+A milestone is **ready for review** when every member is settled (`verified`,
+`canceled`, or permanently-blocked) *and* no unresolved ticket is a dependency of
+a member that could still move. An empty milestone is never ready.
+
+A permanently-blocked member counts as settled. It will never reach `verified`,
+and treating it as open would make its milestone un-reviewable forever — gating
+every later milestone and stopping the orchestrator from ever finishing. The
+review is where a human confronts the dead work, so it has to be able to run.
 
 A ticket is **gated** — reported `blocked` — while any earlier milestone in its
 project is not both ready-for-review and review-recorded. Complete is not the
 same as reviewed.
 
-`graph record-review --milestone <id>` records a review against the milestone's
-**current member set**. If a review files follow-up tickets into the milestone,
-the member set changes and the recorded review no longer counts: the milestone
-reopens and must be reviewed again once it re-completes. A stale review record
-can never suppress the re-review.
+`graph record-review --milestone <id>` records a review of the milestone's
+current ready-for-review **episode**. Two rules keep a stale record from ever
+opening a gate:
+
+- It **refuses** to record a review for a milestone that is not currently
+  ready-for-review (exit 2). Recording early would pin the record to an
+  unfinished member set, and the gate would spring open the moment the last
+  ticket landed — with nobody having reviewed the finished milestone.
+- The record is **dropped the moment the milestone stops being ready** — a review
+  filed follow-up tickets into it, or a member was reopened. When it completes
+  again it needs a fresh review. (Pinning to the member ids alone is not enough:
+  reopening and re-verifying a member leaves the id set identical.)
 
 ## Config file
 
@@ -196,7 +224,8 @@ team has a custom status the defaults do not know.
           effective-blocked="true" state="blocked" branch-hint="…"/>
   </nodes>
   <edges><edge blocker="CLC-917" blocked="CLC-945"/></edges>
-  <available><ticket id="CLC-917" rank="1" target-kind="human-only" url="…"/></available>
+  <!-- CLC-917 is human-led, so it is human-blocked and never on the frontier. -->
+  <available/>
   <blocked><ticket id="CLC-945" blocked-by="CLC-917" gated-by=""/></blocked>
   <human-blocked><ticket id="CLC-917" url="…" role="available" reason="explicit"/></human-blocked>
   <permanently-blocked/>

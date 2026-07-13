@@ -51,6 +51,27 @@ in the payload's `cursors` object. A single shared cursor is wrong once you sync
 more than one project: the newest timestamp from project A would be used as the
 changed-since bound for project B, silently skipping B's older changes.
 
+## Exclusions
+
+Work the orchestrator already owns must never be handed out again. It records
+that with exclusions, and the frontier honors them:
+
+```
+dispatch graph exclude add --id <ticket> --kind in-flight|done|failed
+dispatch graph exclude remove --id <ticket>
+```
+
+- `in-flight` — a coordinator is on it now. Off the frontier; still counted as
+  outstanding.
+- `done` — the orchestrator has finished with it. Off the frontier. It does
+  **not** overwrite the ticket's tracker role, so a merged-but-unverified ticket
+  still holds its project open.
+- `failed` — it will not progress. Its dependents become `permanently-blocked`
+  rather than waiting forever.
+
+An exclusion never suppresses a ticket's node updates: an excluded ticket keeps
+being fetched and re-ingested, so the cache cannot go stale on work in flight.
+
 `--full` **replaces the whole graph**, not one project — so a full sync is a
 single payload covering *every* selected project at once. Never run
 `ingest --full` per project in a loop: the second call would wipe the first. On a
@@ -148,7 +169,10 @@ labels are wrong. Configure the label names in the config file
 - **Report an empty frontier honestly.** If nothing is `available`, say why from
   the counts rather than reaching for work anyway. A project whose tickets are all
   `dormant` (in the tracker's backlog) has nothing to dispatch: it needs a human
-  to promote tickets, not an agent to pick one.
+  to promote tickets, not an agent to pick one. An empty frontier is **not**
+  completion — `terminal="false"` still means work remains.
+- **Booleans are booleans.** `"deleted": "true"` is a string and is rejected. A
+  quietly-ignored `deleted` flag would resurrect a ticket you meant to remove.
 
 ## Output
 

@@ -11,7 +11,13 @@ import {
   type MilestoneState,
 } from './milestones.mts';
 import { rankAvailable } from './rank.mts';
-import type { GraphEdge, GraphNode, GraphSnapshot, Project } from './types.mts';
+import type {
+  Exclusion,
+  GraphEdge,
+  GraphNode,
+  GraphSnapshot,
+  Project,
+} from './types.mts';
 
 export const DEFAULT_PARKED_ROLES: readonly Role[] = [
   'awaiting-external',
@@ -109,11 +115,14 @@ export interface DerivedGraph {
  *
  * Classification precedence, highest first:
  *
- *   verified/canceled → exclusion (done/failed/in-flight) → dormant (backlog)
- *   → permanently-blocked → blocked → human-blocked → available → in-flight
+ *   verified/canceled (role) → failed/in-flight exclusion → in-flight (started)
+ *   → dormant (backlog) → permanently-blocked → blocked → human-blocked
+ *   → available
  *
- * Two orderings there carry weight:
+ * Three orderings there carry weight:
  *
+ * - `in-flight` outranks the waiting buckets. Work already underway is not
+ *   "blocked" and does not need a human — someone is on it.
  * - `dormant` outranks everything schedulable. A `backlog` ticket is not
  *   eligible to be picked up whatever else is true of it, so it is never
  *   reported as blocked (which would imply clearing its blockers makes it
@@ -130,33 +139,32 @@ export function derive(
   const parked = new Set<Role>(options.parkedRoles ?? DEFAULT_PARKED_ROLES);
 
   const analysis = analyzeBlocking(snapshot.nodes, snapshot.edges);
+
+  const excludedBy = new Map<string, ExclusionKind>(
+    snapshot.exclusions.map((e) => [e.id, e.kind]),
+  );
+
+  const { permanentIds, deadAncestorOf } = findPermanentlyStuck(
+    snapshot.nodes,
+    snapshot.exclusions,
+    analysis,
+  );
+
+  // Milestone readiness has to know which members are permanently stuck, so it
+  // is computed after them and before classification, which consumes the gates.
   const milestoneStates = computeMilestoneStates(
     snapshot.nodes,
     snapshot.milestones,
     snapshot.reviews,
     analysis,
+    permanentIds,
   );
-
-  const excludedBy = new Map<string, ExclusionKind>(
-    snapshot.exclusions.map((e) => [e.id, e.kind]),
-  );
-  const failedIds = new Set(
-    snapshot.exclusions.filter((e) => e.kind === 'failed').map((e) => e.id),
-  );
-  const roleOf = new Map(snapshot.nodes.map((n) => [n.id, n.role]));
 
   const classified: ClassifiedNode[] = snapshot.nodes.map((node) => {
     const excluded = excludedBy.get(node.id) ?? null;
     const blockedBy = analysis.unresolvedAncestors.get(node.id) ?? [];
     const gatedBy = gatingMilestones(node, milestoneStates);
-
-    // An ancestor the orchestrator marked `failed` will not progress, and a
-    // ticket behind it can never become available. A `canceled` ancestor is a
-    // different thing entirely — cancellation unblocks downstream work, so it
-    // never lands a dependent here.
-    const deadAncestor = [...(analysis.ancestors.get(node.id) ?? [])].find(
-      (id) => failedIds.has(id) && !isResolved(roleOf.get(id) ?? 'available'),
-    );
+    const deadAncestor = deadAncestorOf.get(node.id);
 
     return {
       node,
@@ -218,6 +226,47 @@ export function derive(
   };
 }
 
+/**
+ * Tickets that can never become available: the ones the orchestrator marked
+ * `failed`, and the ones standing behind such a ticket.
+ *
+ * A `canceled` ancestor is a different thing entirely — cancellation unblocks
+ * downstream work, and the blocking walk already stops there, so it never lands
+ * a dependent here.
+ *
+ * Shared with the store, which needs the same set to judge milestone readiness
+ * when it prunes stale review records.
+ */
+export function findPermanentlyStuck(
+  nodes: readonly GraphNode[],
+  exclusions: readonly Exclusion[],
+  analysis: BlockingAnalysis,
+): { permanentIds: Set<string>; deadAncestorOf: Map<string, string> } {
+  const failedIds = new Set(
+    exclusions.filter((e) => e.kind === 'failed').map((e) => e.id),
+  );
+  const roleOf = new Map(nodes.map((n) => [n.id, n.role]));
+
+  const permanentIds = new Set<string>();
+  const deadAncestorOf = new Map<string, string>();
+
+  for (const node of nodes) {
+    if (failedIds.has(node.id) && !isResolved(node.role)) {
+      permanentIds.add(node.id);
+      continue;
+    }
+    const dead = [...(analysis.ancestors.get(node.id) ?? [])].find(
+      (id) => failedIds.has(id) && !isResolved(roleOf.get(id) ?? 'available'),
+    );
+    if (dead !== undefined) {
+      deadAncestorOf.set(node.id, dead);
+      permanentIds.add(node.id);
+    }
+  }
+
+  return { permanentIds, deadAncestorOf };
+}
+
 function classify(
   node: GraphNode,
   context: {
@@ -228,22 +277,29 @@ function classify(
     parked: ReadonlySet<Role>;
   },
 ): Classification {
+  // The tracker's role is authoritative for what a ticket IS. An exclusion says
+  // what the orchestrator is DOING about it, and may keep it off the frontier —
+  // but it never overwrites the role, or a `delivered` ticket the orchestrator
+  // has finished with would be tallied `verified` and its project could report
+  // itself complete with unverified work in it.
   if (node.role === 'verified') return 'verified';
   if (node.role === 'canceled') return 'canceled';
 
-  // The orchestrator already knows about this one; keep it out of the
-  // scheduling sections but keep reporting its current state.
-  if (context.excluded === 'done') return 'verified';
   if (context.excluded === 'failed') return 'permanently-blocked';
   if (context.excluded === 'in-flight') return 'in-flight';
 
+  // Work already underway is in flight, whatever else is true of it. A ticket
+  // someone is actively working is not "blocked" (that would put started work in
+  // a bucket the orchestrator reads as waiting), and not "human-blocked" (a
+  // human-led ticket in progress means a human is already on it).
+  if (GROUP_OF[node.role] === 'started') return 'in-flight';
+
   // A `backlog` ticket is not eligible to be picked up, full stop — whether or
-  // not something also blocks it. Its dormancy outranks every scheduling
-  // signal: calling it `blocked` would imply it becomes workable once its
-  // blockers clear (it does not — a human must promote it first), and calling
-  // it `human-blocked` would alert a human about work nobody has started.
-  // `paused` and `awaiting-external` are NOT this: they are parked mid-flight,
-  // and fall through to `human-blocked` below.
+  // not something also blocks it. Calling it `blocked` would imply it becomes
+  // workable once its blockers clear (it does not — a human must promote it
+  // first), and calling it `human-blocked` would alert a human about work nobody
+  // has started. `paused` and `awaiting-external` are NOT this: they are parked
+  // mid-flight, and fall through to `human-blocked` below.
   if (node.role === 'backlog') return 'dormant';
 
   if (context.deadAncestor !== undefined) return 'permanently-blocked';
@@ -258,17 +314,24 @@ function classify(
     return 'human-blocked';
   }
 
-  if (node.role === 'available') return 'available';
-  if (GROUP_OF[node.role] === 'started') return 'in-flight';
+  if (node.role === 'available') {
+    // The orchestrator has finished with it even though the tracker has not
+    // caught up. Never schedule it again — but do not call it verified either.
+    return context.excluded === 'done' ? 'in-flight' : 'available';
+  }
   return 'dormant';
 }
 
 /**
- * A project is terminal when nothing is left that the orchestrator could act
- * on — now or after some other ticket resolves. `dormant` backlog tickets do
- * not hold a project open: the protocol says a backlog ticket is not eligible
- * to be picked up, so waiting on one would mean ticking forever until a human
- * promotes it.
+ * A project is terminal only when every ticket is `verified`, `canceled`, or
+ * permanently-blocked.
+ *
+ * `dormant` backlog tickets DO hold a project open. They are not eligible to be
+ * picked up, so the frontier can be empty while they sit there — but a backlog
+ * ticket can still be promoted to `available`, so the project is not finished
+ * and must not be reported as such. An orchestrator pointed at a project whose
+ * work has not been promoted yet will find nothing to dispatch and say so; that
+ * is the honest answer, and it is not the same as done.
  */
 function isTerminalProject(
   classified: readonly ClassifiedNode[],
@@ -282,6 +345,7 @@ function isTerminalProject(
         c.classification === 'blocked' ||
         c.classification === 'human-blocked' ||
         c.classification === 'in-flight' ||
+        c.classification === 'dormant' ||
         excludedBy.get(c.node.id) === 'in-flight'),
   );
 }
@@ -369,12 +433,16 @@ function findAnomalies(
   // Legal edge by edge, but together they mean neither project can be finished
   // first, which the orchestrator must surface rather than schedule around.
   const projectOf = new Map(snapshot.nodes.map((n) => [n.id, n.project]));
+  // Keys join two project ids and are separated by NUL, not a space: a project
+  // id is whatever the tracker calls a project ("owner/repo", or a name with a
+  // space in it), and splitting a space-joined key would recover the wrong
+  // halves — so a real reverse-dependency pair would go unreported.
   const pairs = new Map<string, GraphEdge[]>();
   for (const edge of snapshot.edges) {
     const from = projectOf.get(edge.blocker);
     const to = projectOf.get(edge.blocked);
     if (from === undefined || to === undefined || from === to) continue;
-    const key = `${from} ${to}`;
+    const key = `${from}\u0000${to}`;
     const bucket = pairs.get(key);
     if (bucket) bucket.push(edge);
     else pairs.set(key, [edge]);
@@ -382,10 +450,10 @@ function findAnomalies(
 
   const reported = new Set<string>();
   for (const [key, edges] of pairs) {
-    const [from = '', to = ''] = key.split(' ');
-    const reverse = pairs.get(`${to} ${from}`);
+    const [from = '', to = ''] = key.split('\u0000');
+    const reverse = pairs.get(`${to}\u0000${from}`);
     if (reverse === undefined) continue;
-    const pairKey = [from, to].sort().join(' ');
+    const pairKey = [from, to].sort().join('\u0000');
     if (reported.has(pairKey)) continue;
     reported.add(pairKey);
 

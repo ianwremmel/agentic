@@ -63,18 +63,25 @@ export function resolveRole(
   state: string,
   overrides: StateMapping = {},
 ): Role {
+  const key = state.trim().toLowerCase();
+
+  // Team override first, exactly as documented. Checking the tracker before the
+  // override would mean a team that has mapped every one of its states in config
+  // still could not use a tracker this CLI has no built-in table for — the
+  // override is precisely what makes that work.
+  const override = lookup(overrides, key);
+  if (override !== undefined) return override;
+
   const defaults = DEFAULT_MAPPINGS[tracker.toLowerCase()];
   assert(
     defaults !== undefined,
     new DataError(
-      `unknown tracker "${tracker}"`,
-      `pass --tracker with one of: ${knownTrackers().join(', ')}, or supply every node's role directly in the payload.`,
+      `no mapping for the native state "${state}": tracker "${tracker}" has no built-in table`,
+      `either map every one of this tracker's states in the config file's "states" object, ` +
+        `pass --tracker with one of: ${knownTrackers().join(', ')}, ` +
+        `or supply each node's role directly in the payload.`,
     ),
   );
-
-  const key = state.trim().toLowerCase();
-  const override = lookup(overrides, key);
-  if (override !== undefined) return override;
 
   const fallback = defaults[key];
   assert(

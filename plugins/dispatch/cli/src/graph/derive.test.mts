@@ -174,6 +174,47 @@ describe('dormancy', () => {
   });
 });
 
+describe('in-flight', () => {
+  it('outranks blocked and human-blocked — someone is already on it', () => {
+    // Work underway is not waiting on anything the orchestrator can act on.
+    // Reporting it as `blocked` would file started work in the bucket the
+    // orchestrator reads as stalled, and under-report `inFlight` in the counts.
+    const graph = derive(
+      snapshot({
+        nodes: [
+          node('DEP', 'available'),
+          node('W', 'in-progress'),
+          node('H', 'in-review', { humanInteractive: true }),
+        ],
+        edges: [edge('DEP > W')],
+      }),
+    );
+
+    assert.deepEqual(ids(graph.blocked), []);
+    assert.deepEqual(ids(graph.humanBlocked), []);
+    assert.equal(graph.counts[0]?.inFlight, 2);
+  });
+});
+
+describe('exclusions', () => {
+  it("does not let a done exclusion overwrite the tracker's role", () => {
+    // The orchestrator finished with it, but the tracker says it is merged and
+    // not yet verified. Tallying it `verified` would let the project report
+    // itself complete with unverified work in it.
+    const graph = derive(
+      snapshot({
+        nodes: [node('A', 'delivered')],
+        exclusions: [{ id: 'A', kind: 'done' }],
+      }),
+    );
+
+    assert.equal(graph.counts[0]?.verified, 0);
+    assert.equal(graph.counts[0]?.inFlight, 1);
+    assert.equal(graph.counts[0]?.terminal, false);
+    assert.deepEqual(ids(graph.available), []);
+  });
+});
+
 describe('effective-blocked', () => {
   it('is a fact about the graph, not a restatement of the bucket', () => {
     // A verified ticket whose own ancestor is still open is effectively blocked
@@ -233,6 +274,22 @@ describe('completion', () => {
 
     assert.equal(graph.counts[0]?.terminal, true);
     assert.equal(graph.projects[0]?.terminal, true);
+  });
+
+  it('is not terminal while backlog work is still sitting there', () => {
+    // A `dormant` ticket has an empty frontier's worth of nothing to dispatch,
+    // but it can still be promoted to `available` — so the project is not
+    // finished. Calling it terminal would stop the orchestrator while promotable
+    // work remained, and it only resumes on re-invocation.
+    const graph = derive(
+      snapshot({
+        nodes: [node('DONE', 'verified'), node('LATER', 'backlog')],
+      }),
+    );
+
+    assert.deepEqual(ids(graph.available), []);
+    assert.equal(graph.counts[0]?.dormant, 1);
+    assert.equal(graph.counts[0]?.terminal, false);
   });
 
   it('is not terminal while a human still owes an answer', () => {

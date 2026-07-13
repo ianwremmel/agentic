@@ -128,9 +128,10 @@ describe('labels', () => {
 });
 
 describe('edges', () => {
-  it('accepts both directions and drops a self-edge', () => {
-    // A ticket cannot depend on itself. The tracker should never emit one, but
-    // taking it at face value would make the ticket permanently block itself.
+  it('keeps a self-edge rather than quietly normalizing it away', () => {
+    // A ticket cannot depend on itself, so a self-edge means the tracker is
+    // holding illegal data. Dropping it here would destroy the evidence; it is
+    // kept, and the graph reports it as the one-node cycle it is.
     const delta = parsePayload(
       {
         nodes: [
@@ -143,8 +144,43 @@ describe('edges', () => {
       options,
     );
 
-    assert.deepEqual(delta.nodes[0]?.blockedBy, ['CLC-9']);
-    assert.deepEqual(delta.nodes[0]?.blocks, ['CLC-2']);
+    assert.deepEqual(delta.nodes[0]?.blockedBy, ['CLC-9', 'CLC-1']);
+    assert.deepEqual(delta.nodes[0]?.blocks, ['CLC-2', 'CLC-1']);
+  });
+
+  it('rejects a boolean sent as a string instead of silently ignoring it', () => {
+    // The nastiest of these: `"deleted": "true"` is not `true`, and reading it as
+    // `false` turns a deletion into a resurrection — the ticket comes back as a
+    // live, schedulable node.
+    for (const field of ['deleted', 'injected', 'humanInteractive']) {
+      assert.throws(
+        () => parsePayload({ nodes: [minimal({ [field]: 'true' })] }, options),
+        (error: unknown) => {
+          assert.ok(error instanceof UsageError, `${field} should be rejected`);
+          assert.match(error.message, /must be true or false/);
+          return true;
+        },
+        `${field} accepted a string`,
+      );
+    }
+  });
+
+  it('rejects an object where a plain value belongs', () => {
+    // `{"milestone": {"id": "m1"}}` is the shape Linear actually returns. Read as
+    // null, the ticket would silently drop out of its milestone and escape the
+    // milestone gate with nothing to show for it.
+    assert.throws(
+      () =>
+        parsePayload(
+          { nodes: [minimal({ milestone: { id: 'm1' } })] },
+          options,
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof UsageError);
+        assert.match(error.message, /must be a string, but got an object/);
+        return true;
+      },
+    );
   });
 
   it('distinguishes "no edges" from "this fetch says nothing about edges"', () => {

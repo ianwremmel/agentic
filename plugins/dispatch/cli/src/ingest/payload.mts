@@ -55,7 +55,17 @@ function parseNode(
   const id = requireString(node.id, `nodes[${index}].id`);
   const where = `node ${id}`;
 
-  if (node.deleted === true) {
+  // These three decide whether a ticket is removed, jumps the queue, or is
+  // withheld from every agent. A JSON string "true" is not a boolean, and
+  // quietly reading it as `false` would turn a deletion into a resurrection.
+  const deleted = requireBoolean(node.deleted, `${where}.deleted`);
+  const injected = requireBoolean(node.injected, `${where}.injected`);
+  const explicitHuman = requireBoolean(
+    pick(node, 'humanInteractive', 'human_interactive'),
+    `${where}.humanInteractive`,
+  );
+
+  if (deleted === true) {
     // A deletion only needs an id; everything else about the ticket is moot.
     return {
       id,
@@ -86,40 +96,42 @@ function parseNode(
     options.config,
   );
 
-  const explicitHuman = pick(node, 'humanInteractive', 'human_interactive');
   const humanInteractive =
-    typeof explicitHuman === 'boolean'
-      ? explicitHuman
-      : hasAny(labels, options.config.humanInteractiveLabels);
+    explicitHuman ?? hasAny(labels, options.config.humanInteractiveLabels);
 
   const result: IngestNode = {
     id,
     project: requireString(node.project, `${where}.project`),
-    url: optionalString(node.url) ?? '',
-    title: optionalString(node.title) ?? '',
+    url: optionalString(node.url, `${where}.url`) ?? '',
+    title: optionalString(node.title, `${where}.title`) ?? '',
     role,
-    milestone: optionalString(node.milestone),
+    milestone: optionalString(node.milestone, `${where}.milestone`),
     targetKind,
     humanInteractive,
-    injected: node.injected === true,
+    injected: injected ?? false,
     priority: optionalNumber(node.priority, `${where}.priority`),
-    branchHint: optionalString(pick(node, 'branchHint', 'branch_hint')),
+    branchHint: optionalString(
+      pick(node, 'branchHint', 'branch_hint'),
+      `${where}.branchHint`,
+    ),
     labels,
-    updatedAt: optionalString(pick(node, 'updatedAt', 'updated_at')),
+    updatedAt: optionalString(
+      pick(node, 'updatedAt', 'updated_at'),
+      `${where}.updatedAt`,
+    ),
   };
 
+  // A self-edge is kept, not quietly dropped. It is an illegal dependency — a
+  // cycle of length one — and the graph must surface it as an anomaly rather
+  // than normalize away evidence that the tracker holds bad data.
   const blockedBy = pick(node, 'blockedBy', 'blocked_by');
   if (blockedBy !== undefined) {
-    result.blockedBy = stringArray(blockedBy, `${where}.blockedBy`).filter(
-      (blocker) => blocker !== id,
-    );
+    result.blockedBy = stringArray(blockedBy, `${where}.blockedBy`);
   }
 
   const blocks = pick(node, 'blocks');
   if (blocks !== undefined) {
-    result.blocks = stringArray(blocks, `${where}.blocks`).filter(
-      (blocked) => blocked !== id,
-    );
+    result.blocks = stringArray(blocks, `${where}.blocks`);
   }
 
   return result;
@@ -135,7 +147,7 @@ function resolveNodeRole(
   where: string,
   options: ParseOptions,
 ): Role {
-  const role = optionalString(node.role);
+  const role = optionalString(node.role, `${where}.role`);
   if (role !== null) {
     assert(
       isRole(role),
@@ -147,7 +159,7 @@ function resolveNodeRole(
     return role;
   }
 
-  const state = optionalString(node.state);
+  const state = optionalString(node.state, `${where}.state`);
   assert(
     state !== null,
     new UsageError(
@@ -165,7 +177,7 @@ function resolveTargetKind(
   where: string,
   config: GraphConfig,
 ): TargetKind {
-  const kind = optionalString(explicit);
+  const kind = optionalString(explicit, `${where}.targetKind`);
   if (kind !== null) {
     assert(
       isTargetKind(kind),
@@ -195,7 +207,11 @@ function parseProjects(raw: unknown): Project[] {
   return raw.map((entry, index) => {
     const project = asObject(entry, `projects[${index}]`);
     const id = requireString(project.id, `projects[${index}].id`);
-    return { id, name: optionalString(project.name) ?? id, declared: true };
+    return {
+      id,
+      name: optionalString(project.name, `projects[${index}].name`) ?? id,
+      declared: true,
+    };
   });
 }
 
@@ -228,7 +244,7 @@ function parseMilestones(raw: unknown): Milestone[] {
     return {
       id,
       project: requireString(milestone.project, `milestones[${index}].project`),
-      name: optionalString(milestone.name) ?? id,
+      name: optionalString(milestone.name, `milestones[${index}].name`) ?? id,
       sortOrder,
     };
   });
@@ -242,7 +258,7 @@ function parseCursors(
   doc: Record<string, unknown>,
   source: string,
 ): Record<string, string> {
-  const single = optionalString(doc.cursor);
+  const single = optionalString(doc.cursor, 'cursor');
   if (single !== null) return { [source]: single };
 
   if (doc.cursors === undefined || doc.cursors === null) return {};
@@ -250,7 +266,7 @@ function parseCursors(
 
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(cursors)) {
-    const text = optionalString(value);
+    const text = optionalString(value, `cursors.${key}`);
     assert(
       text !== null,
       new UsageError(
@@ -298,16 +314,45 @@ function requireString(raw: unknown, where: string): string {
 }
 
 /**
- * A missing optional field is null. A number is accepted and stringified —
- * some trackers hand back numeric ids. Anything else (an object, an array) is a
- * malformed payload, and coercing it would quietly store "[object Object]" as a
- * ticket's url or milestone.
+ * A missing optional field is null. A number is accepted and stringified — some
+ * trackers hand back numeric ids.
+ *
+ * Anything else (an object, an array, a boolean) is a malformed payload and is
+ * REJECTED, not coerced. Returning null for it would be worse than the old
+ * "[object Object]": `{"milestone": {"id": "m1"}}` — the shape Linear actually
+ * returns — would silently drop the ticket out of its milestone, and it would
+ * escape the milestone gate with nothing to show for it.
  */
-function optionalString(raw: unknown): string | null {
+function optionalString(raw: unknown, where: string): string | null {
   if (raw === undefined || raw === null) return null;
   if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
-  if (typeof raw !== 'string') return null;
+  assert(
+    typeof raw === 'string',
+    new UsageError(
+      `${where} must be a string, but got ${describeType(raw)}`,
+      'pass the plain value — e.g. a milestone id as "m1", not {"id": "m1"}.',
+    ),
+  );
   return raw.trim() === '' ? null : raw.trim();
+}
+
+/** An optional boolean. A string "true" is not a boolean, and never means one. */
+function requireBoolean(raw: unknown, where: string): boolean | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  assert(
+    typeof raw === 'boolean',
+    new UsageError(
+      `${where} must be true or false, but got ${describeType(raw)}`,
+      'emit a JSON boolean, not a string: {"deleted": true}, never {"deleted": "true"}.',
+    ),
+  );
+  return raw;
+}
+
+function describeType(raw: unknown): string {
+  if (Array.isArray(raw)) return 'an array';
+  if (typeof raw === 'object') return 'an object';
+  return `${typeof raw} ${JSON.stringify(raw)}`;
 }
 
 function optionalNumber(raw: unknown, where: string): number | null {

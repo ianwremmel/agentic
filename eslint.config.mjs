@@ -3,7 +3,9 @@ import {defineConfig, globalIgnores} from 'eslint/config';
 import js from '@eslint/js';
 import markdown from '@eslint/markdown';
 import prettier from 'eslint-plugin-prettier/recommended';
+import * as jsonc from 'jsonc-eslint-parser';
 import tseslint from 'typescript-eslint';
+import * as yaml from 'yaml-eslint-parser';
 
 export default defineConfig([
   globalIgnores(['node_modules/', 'coverage/']),
@@ -41,6 +43,18 @@ export default defineConfig([
       // directory trees — content with no language to name.
       'markdown/fenced-code-language': 'warn',
     },
+  },
+
+  // JSON and YAML get a parser purely so Prettier can reach them through
+  // ESLint: with no `format` script, `eslint --fix` is the only formatter, and
+  // it can only fix files it can parse.
+  {
+    files: ['**/*.json'],
+    languageOptions: {parser: jsonc},
+  },
+  {
+    files: ['**/*.{yml,yaml}'],
+    languageOptions: {parser: yaml},
   },
 
   // Prettier last: it turns off every stylistic rule the formatter owns.

@@ -9,9 +9,13 @@ each one and return feedback that makes it shorter and clearer without changing
 what the executing agent does.
 
 A skill file is instructions for an agent. Every sentence costs context-window
-tokens on every invocation, and a vague sentence produces vague behavior. Judge
-each sentence by what the executing agent would do differently if it were
-deleted — if the answer is nothing, recommend deleting it.
+tokens on every invocation, and a vague sentence produces vague behavior. Put
+each sentence through two tests, in order:
+
+1. If it were deleted, would the executing agent do anything differently? If
+   not, recommend deleting it.
+2. If it must stay, can it say the same thing in fewer words? A necessary
+   sentence at half the length is as valuable a finding as a deletable one.
 
 Look for:
 
@@ -31,7 +35,11 @@ Report per file:
    cuttable without behavior change.
 2. Findings, most impactful first. Each: the quoted original, the rewrite (or
    "delete"), and a one-line reason only when it isn't obvious.
-3. If the file is already tight, say so in one line and stop. No praise.
+3. If the file is already tight, say so in one line. No praise.
+
+End the whole report with exactly one line, alone, as the last non-empty line:
+`VERDICT: pass` if no file needs changes, otherwise `VERDICT: findings`.
+Tooling gates on this line; never omit it or append anything after it.
 
 Constraints:
 

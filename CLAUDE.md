@@ -82,9 +82,10 @@ Run `npm install`. Besides the toolchain, it installs the git hooks (husky):
 `pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats),
 `commit-msg` runs commitlint, and `pre-push` runs the `skill-reviewer` agent
 (`.claude/agents/skill-reviewer.md`) over any skill markdown changed in the
-outgoing range — advisory feedback only; the push proceeds either way, and
-`SKILL_REVIEW=0 git push` skips it. Without that install, the hooks are
-silently absent and CI catches the mess instead.
+outgoing range. A review with findings blocks the push — act on the report,
+commit, and push again. `SKILL_REVIEW=0 git push` is the emergency bypass.
+Without that install, the hooks are silently absent and CI catches the mess
+instead.
 
 ## TypeScript
 

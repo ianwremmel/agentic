@@ -1,12 +1,12 @@
 /**
  * Pre-push hook body: run the skill-reviewer agent over skill files changed in
- * the outgoing range and print its feedback. Advisory — the push proceeds
- * regardless, so this always exits 0.
+ * the outgoing range. A review that reports findings exits 1 and blocks the
+ * push until the pusher acts on the report. Infrastructure failures (claude
+ * missing or crashing) fail open with a warning — there is no report to act
+ * on. SKILL_REVIEW=0 is the emergency bypass.
  *
  * Reads the standard pre-push ref lines from stdin:
  *   <local-ref> <local-sha> <remote-ref> <remote-sha>
- *
- * Skip with SKILL_REVIEW=0.
  */
 
 import {execFile, spawn} from 'node:child_process';
@@ -119,8 +119,21 @@ async function claudeAvailable(): Promise<boolean> {
   }
 }
 
-/** Run the reviewer on one file, streaming its output to our stdout. */
-async function review(file: string): Promise<void> {
+/**
+ * Extract the reviewer's verdict from its report. The agent contract requires
+ * `VERDICT: pass` or `VERDICT: findings` as the last non-empty line; a report
+ * that breaks the contract counts as findings so the gate fails closed.
+ */
+export function verdictFrom(report: string): 'pass' | 'findings' {
+  const lines = report.split('\n').filter((line) => line.trim() !== '');
+  return lines.at(-1)?.trim() === 'VERDICT: pass' ? 'pass' : 'findings';
+}
+
+/**
+ * Run the reviewer on one file, streaming its report to stdout while
+ * capturing it. 'error' means the reviewer itself failed — no report exists.
+ */
+async function review(file: string): Promise<'pass' | 'findings' | 'error'> {
   process.stdout.write(`\n=== skill-review: ${file} ===\n`);
   const child = spawn(
     'claude',
@@ -131,17 +144,23 @@ async function review(file: string): Promise<void> {
       `Review ${file} for conciseness, wordiness, and clarity.`,
     ],
     {
-      stdio: ['ignore', 'inherit', 'inherit'],
+      stdio: ['ignore', 'pipe', 'inherit'],
       signal: AbortSignal.timeout(300_000),
     }
   );
-  await new Promise<void>((resolve) => {
+  let report = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => {
+    report += chunk;
+    process.stdout.write(chunk);
+  });
+  return new Promise((resolve) => {
     child.on('error', (error: Error) => {
       process.stderr.write(`skill-review: ${error.message}\n`);
-      resolve();
+      resolve('error');
     });
-    child.on('exit', () => {
-      resolve();
+    child.on('exit', (code) => {
+      resolve(code === 0 ? verdictFrom(report) : 'error');
     });
   });
 }
@@ -155,29 +174,41 @@ async function readStdin(): Promise<string> {
   return input;
 }
 
-async function main(): Promise<void> {
+/** True when the push may proceed. */
+async function main(): Promise<boolean> {
   if (process.env.SKILL_REVIEW === '0') {
-    return;
+    return true;
   }
   const refs = parsePushRefs(await readStdin());
   const files = await changedSkillFiles(refs);
   if (files.length === 0) {
-    return;
+    return true;
   }
   if (!(await claudeAvailable())) {
     process.stderr.write(
       'skill-review: claude unavailable (missing, broken, or hung); ' +
         'skipping skill review\n'
     );
-    return;
+    return true;
   }
   process.stdout.write(
-    `skill-review: reviewing ${String(files.length)} changed skill file(s); ` +
-      'advisory only, the push proceeds either way (SKILL_REVIEW=0 to skip)\n'
+    `skill-review: reviewing ${String(files.length)} changed skill file(s)\n`
   );
+  const failed: string[] = [];
   for (const file of files) {
-    await review(file);
+    if ((await review(file)) === 'findings') {
+      failed.push(file);
+    }
   }
+  if (failed.length > 0) {
+    process.stderr.write(
+      '\nskill-review: findings above block the push. Act on the report ' +
+        `(${failed.join(', ')}), commit, and push again. ` +
+        'Emergency bypass: SKILL_REVIEW=0 git push\n'
+    );
+    return false;
+  }
+  return true;
 }
 
 const invokedDirectly =
@@ -186,9 +217,11 @@ const invokedDirectly =
 
 if (invokedDirectly) {
   try {
-    await main();
+    process.exitCode = (await main()) ? 0 : 1;
   } catch (error) {
+    // A crash in the hook itself is an infrastructure failure, not a review
+    // verdict — fail open rather than strand the push.
     process.stderr.write(`skill-review: ${String(error)}\n`);
+    process.exitCode = 0;
   }
-  process.exitCode = 0;
 }

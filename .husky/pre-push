@@ -1,4 +1,3 @@
 #!/usr/bin/env sh
 
-# Advisory only — never block the push, even if node itself fails to launch.
-node scripts/skill-review.mts || :
+node scripts/skill-review.mts

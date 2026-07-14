@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import {isSkillFile, parsePushRefs, ZERO_SHA} from './skill-review.mts';
+import {
+  isSkillFile,
+  parsePushRefs,
+  verdictFrom,
+  ZERO_SHA,
+} from './skill-review.mts';
 
 describe('parsePushRefs', () => {
   it('parses standard pre-push lines', () => {
@@ -55,5 +60,21 @@ describe('isSkillFile', () => {
     assert.ok(
       !isSkillFile('plugins/dispatch/skills/deliver/scripts/pr-status')
     );
+  });
+});
+
+describe('verdictFrom', () => {
+  it('passes when the last non-empty line is VERDICT: pass', () => {
+    assert.equal(verdictFrom('Already tight.\n\nVERDICT: pass\n\n'), 'pass');
+  });
+
+  it('reports findings on VERDICT: findings', () => {
+    assert.equal(verdictFrom('1. Cut X.\nVERDICT: findings\n'), 'findings');
+  });
+
+  it('fails closed when the verdict line is missing or malformed', () => {
+    assert.equal(verdictFrom('Looks fine to me!'), 'findings');
+    assert.equal(verdictFrom('VERDICT: pass\ntrailing chatter'), 'findings');
+    assert.equal(verdictFrom(''), 'findings');
   });
 });

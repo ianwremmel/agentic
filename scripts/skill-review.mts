@@ -205,7 +205,7 @@ async function main(): Promise<boolean> {
   }
   if (failed.length > 0) {
     process.stderr.write(
-      '\nskill-review: must-fix findings above block the push. Act on the ' +
+      '\nskill-review: blocking verdict(s) above stop the push. Act on the ' +
         `report (${failed.join(', ')}), commit, and push again. ` +
         'Emergency bypass: SKILL_REVIEW=0 git push\n'
     );

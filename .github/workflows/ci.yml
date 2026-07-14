@@ -55,7 +55,7 @@ jobs:
       matrix:
         # The oldest Node the wrapper accepts, and current. Both must run the
         # unbuilt .mts sources.
-        node: ['22.18', '24']
+        node: ['24.18', '24']
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

@@ -29,7 +29,7 @@ dispatch --help                  # list commands
 ```
 
 It is a bash wrapper around `cli/main.mts`. The wrapper checks that Node is
-present and at least 22.18 — the CLI ships as unbuilt TypeScript and relies on
+present and at least 24.18 — the CLI ships as unbuilt TypeScript and relies on
 Node's native type stripping, so there is no build step and no runtime
 dependencies. `DISPATCH_NODE` picks a specific Node binary.
 

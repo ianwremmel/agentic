@@ -22,13 +22,13 @@ describe('bin/dispatch node preflight', () => {
     assert.equal(stdout, '', 'a rejected node must not produce a greeting');
     assert.notEqual(code, 0);
     assert.match(stderr, /^error: node v20\.11\.0 .* is too old/mu);
-    assert.match(stderr, /22\.18\.0/u, 'the message states the minimum');
+    assert.match(stderr, /24\.18\.0/u, 'the message states the minimum');
   });
 
   it('refuses a prerelease of the minimum version', async () => {
-    // 22.18.0-rc.1 predates the 22.18.0 release, so its type stripping is not
+    // 24.18.0-rc.1 predates the 24.18.0 release, so its type stripping is not
     // the release behavior the CLI is built against.
-    const dir = await fakeNodeDir('v22.18.0-rc.1');
+    const dir = await fakeNodeDir('v24.18.0-rc.1');
 
     const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
       env: {PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`},
@@ -36,7 +36,7 @@ describe('bin/dispatch node preflight', () => {
 
     assert.equal(stdout, '');
     assert.notEqual(code, 0);
-    assert.match(stderr, /^error: node v22\.18\.0-rc\.1 .* is too old/mu);
+    assert.match(stderr, /^error: node v24\.18\.0-rc\.1 .* is too old/mu);
   });
 
   it('accepts a prerelease above the minimum version', async () => {
@@ -52,15 +52,15 @@ describe('bin/dispatch node preflight', () => {
 
   it('accepts a node at exactly the minimum version', async () => {
     // The fake echoes its version whatever the arguments, so seeing that echo on
-    // stdout proves the gate let 22.18.0 through and the wrapper exec'd it.
-    const dir = await fakeNodeDir('v22.18.0');
+    // stdout proves the gate let 24.18.0 through and the wrapper exec'd it.
+    const dir = await fakeNodeDir('v24.18.0');
 
     const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
       env: {PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`},
     });
 
     assert.doesNotMatch(stderr, /too old/u);
-    assert.match(stdout, /^v22\.18\.0$/mu);
+    assert.match(stdout, /^v24\.18\.0$/mu);
     assert.equal(code, 0);
   });
 

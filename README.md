@@ -62,7 +62,8 @@ claude plugin validate .
 ```
 
 Plugin code is TypeScript, run unbuilt on Node's native type stripping (Node
-22.18+ required). Install the toolchain with `npm ci`, then:
+24.18+ required). Install the toolchain with `npm install` — which also sets up
+the git hooks — then:
 
 ```shell
 npm test            # node:test suites, colocated with the code they cover

@@ -1,3 +1,0 @@
-{
-  "*.{mts,mjs,md,json,yml,yaml}": "eslint --fix --no-warn-ignored"
-}

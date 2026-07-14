@@ -7,7 +7,8 @@
 # `dispatch <command>` directly. This wrapper exists to fail with a legible
 # message instead of a Node syntax error when the host's Node is missing or too
 # old: the CLI ships as unbuilt .mts and relies on native type stripping, which
-# Node enables by default only from MIN_NODE_VERSION on.
+# older Node does not enable by default. MIN_NODE_VERSION is the floor the repo
+# builds and tests against, not the earliest Node that could run the CLI.
 #
 # Set DISPATCH_NODE to run against a specific Node binary. The wrapper's own
 # records honor DISPATCH_LOG_LEVEL (the CLI's --log-level flag is parsed later,
@@ -15,7 +16,7 @@
 
 set -euo pipefail
 
-readonly MIN_NODE_VERSION='22.18.0'
+readonly MIN_NODE_VERSION='24.18.0'
 readonly LOG_LEVEL="${DISPATCH_LOG_LEVEL:-info}"
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +40,7 @@ die() {
 }
 
 # True iff $1 sorts before $2 as a dotted numeric version. Missing components
-# read as 0, so 22.18 == 22.18.0.
+# read as 0, so 24.18 == 24.18.0.
 version_lt() {
   local IFS='.'
   local -a lhs rhs
@@ -78,7 +79,7 @@ if [[ ! "$node_version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
   die "could not read a version from '${node_path} --version' (got '${node_version_raw}')."
 fi
 
-# A prerelease sorts before its own release (22.18.0-rc.1 < 22.18.0), so it only
+# A prerelease sorts before its own release (24.18.0-rc.1 < 24.18.0), so it only
 # clears the gate when its numbers are strictly above the minimum.
 too_old='false'
 if version_lt "$node_version" "$MIN_NODE_VERSION"; then

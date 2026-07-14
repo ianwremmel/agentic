@@ -18,5 +18,5 @@
     "types": ["node"],
     "verbatimModuleSyntax": true
   },
-  "include": ["plugins/**/*.mts", "*.config.mjs"]
+  "include": ["plugins/**/*.mts", "scripts/**/*.mts", "*.config.mjs"]
 }

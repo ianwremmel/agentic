@@ -13,13 +13,15 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 
 ## Repo layout
 
-```
+```text
 .
 ├── .claude-plugin/marketplace.json   # marketplace catalog
+├── .claude/agents/                   # repo-dev subagents (not shipped)
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
 │       ├── bin/dispatch              # CLI entry point (bash wrapper)
 │       └── cli/                      # CLI sources + colocated tests (.mts)
+├── scripts/                          # repo tooling (git hook bodies)
 └── docs/                             # spec + design docs
 ```
 
@@ -50,7 +52,7 @@ subdirectories exist as scaffolding only.
   so tables are easy to scan in the raw source. New/edited tables should
   look like:
 
-  ```
+  ```text
   | Col A | Col B that is longer |
   | ----- | -------------------- |
   | x     | y                    |
@@ -77,9 +79,13 @@ subdirectories exist as scaffolding only.
 ## Before starting any work
 
 Run `npm install`. Besides the toolchain, it installs the git hooks (husky):
-`pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats), and
-`commit-msg` runs commitlint. Without that install, both hooks are silently
-absent and CI catches the mess instead.
+`pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats),
+`commit-msg` runs commitlint, and `pre-push` runs the `skill-reviewer` agent
+(`.claude/agents/skill-reviewer.md`) over any skill markdown changed in the
+outgoing range. A review with findings blocks the push — act on the report,
+commit, and push again. `SKILL_REVIEW=0 git push` is the emergency bypass.
+Without that install, the hooks are silently absent and CI catches the mess
+instead.
 
 ## TypeScript
 

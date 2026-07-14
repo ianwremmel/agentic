@@ -53,20 +53,21 @@ function movedSince(
 }
 
 /**
- * `permanentIds` are tickets that can never progress — the orchestrator marked
- * them failed, or a failed ancestor stands behind them. They count as settled
- * for readiness: they will never reach `verified`, and treating them as open
- * would leave their milestone permanently un-reviewable, gating every later
- * milestone forever and stopping the orchestrator ever terminating. The
- * milestone review is where a human confronts dead work, so it must be able to
- * run.
+ * Milestone readiness, per §2.3: settled means `verified` or `canceled`, and
+ * nothing else.
+ *
+ * A permanently-blocked ticket is NOT settled. It is still open, so its milestone
+ * is not complete and cannot be reviewed — the gate stays shut, deliberately.
+ * Cancelling the ticket is what resolves it: once a human decides the work will
+ * not be done, `canceled` both settles it and releases everything it blocked. The
+ * decision to give up on work is a human's to make and record, not something the
+ * producer infers by treating dead work as if it were finished.
  */
 export function computeMilestoneStates(
   nodes: readonly GraphNode[],
   milestones: readonly Milestone[],
   reviews: readonly ReviewRecord[],
-  analysis: BlockingAnalysis,
-  permanentIds: ReadonlySet<string> = new Set()
+  analysis: BlockingAnalysis
 ): Map<string, MilestoneState> {
   const membersOf = new Map<string, GraphNode[]>();
   for (const node of nodes) {
@@ -87,23 +88,20 @@ export function computeMilestoneStates(
     const memberIds = members.map((member) => member.id);
     const fingerprint = fingerprintMembers(memberIds);
 
-    const settled = (member: GraphNode): boolean =>
-      isResolved(member.role) || permanentIds.has(member.id);
-
-    const openCount = members.filter((member) => !settled(member)).length;
+    const openCount = members.filter(
+      (member) => !isResolved(member.role)
+    ).length;
 
     // §2.3: ready for review means no remaining blockers — every member is
-    // settled, and no unresolved ticket is a direct or transitive dependency of
-    // a member that could still move. An empty milestone is never ready: there
-    // is nothing to review, and calling it reviewed would let it gate later
-    // milestones forever.
+    // `verified` or `canceled`, and no unresolved ticket is a direct or
+    // transitive dependency of a member. An empty milestone is never ready:
+    // there is nothing to review, and calling it reviewed would let it gate
+    // later milestones forever.
     const membersSettled = members.length > 0 && openCount === 0;
-    const dependenciesResolved = members
-      .filter((member) => !permanentIds.has(member.id))
-      .every(
-        (member) =>
-          (analysis.unresolvedAncestors.get(member.id) ?? []).length === 0
-      );
+    const dependenciesResolved = members.every(
+      (member) =>
+        (analysis.unresolvedAncestors.get(member.id) ?? []).length === 0
+    );
 
     states.set(milestone.id, {
       id: milestone.id,

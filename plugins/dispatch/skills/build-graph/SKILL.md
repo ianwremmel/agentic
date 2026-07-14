@@ -55,7 +55,7 @@ Read the derived sections, not the node and edge lists.
 | `available`           | Startable now, ranked. `rank="1"` is next.                   |
 | `blocked`             | Waiting on `blocked-by` tickets or a `gated-by` milestone.   |
 | `human-blocked`       | A human must act. Never dispatch an agent at these.          |
-| `permanently-blocked` | Can never start — a failed ancestor stands behind it.        |
+| `permanently-blocked` | Can never start. Cancelling the failed ancestor releases it. |
 | `milestones`          | `ready-for-review` / `review-recorded` — the §2.6 gate.      |
 | `counts`              | Per project and milestone; `terminal="true"` means done.     |
 | `anomalies`           | Cycles, dangling edges, unknown milestones. Surface these.   |

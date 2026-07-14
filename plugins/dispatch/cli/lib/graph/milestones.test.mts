@@ -18,15 +18,13 @@ function states(
   nodes: GraphNode[],
   milestones: Milestone[] = [M1, M2],
   reviews: ReviewRecord[] = [],
-  edges: GraphEdge[] = [],
-  permanent = new Set<string>()
+  edges: GraphEdge[] = []
 ): Map<string, MilestoneState> {
   return computeMilestoneStates(
     nodes,
     milestones,
     reviews,
-    analyzeBlocking(nodes, edges),
-    permanent
+    analyzeBlocking(nodes, edges)
   );
 }
 
@@ -86,15 +84,29 @@ describe('ready for review', () => {
     assert.equal(state.readyForReview, false);
   });
 
-  it('counts a permanently-stuck member as settled, so the milestone can still be reviewed', () => {
-    // A failed ticket never reaches `verified`. Treating it as open would leave
-    // the milestone un-reviewable and gate everything behind it forever — but the
-    // review is exactly where a human confronts the dead work.
+  it('is false while a ticket that cannot progress is still open: the milestone is not complete', () => {
+    // A ticket nobody can finish is still an open ticket. The producer must not
+    // infer that dead work is done — deciding to give up is a human's call.
     const nodes = [
       node('A', {milestone: 'm1', role: 'verified'}),
       node('DEAD', {milestone: 'm1', role: 'in-progress'}),
     ];
-    const state = states(nodes, [M1], [], [], new Set(['DEAD'])).get('m1');
+    const state = states(nodes, [M1]).get('m1');
+
+    assert.ok(state);
+
+    assert.equal(state.readyForReview, false);
+    assert.equal(state.openCount, 1);
+  });
+
+  it('is true once that ticket is canceled — how a human resolves work that will not be done', () => {
+    // Cancelling settles the ticket AND releases whatever it blocked, which is
+    // why nothing else in the graph needs a special case for dead work.
+    const nodes = [
+      node('A', {milestone: 'm1', role: 'verified'}),
+      node('DEAD', {milestone: 'm1', role: 'canceled'}),
+    ];
+    const state = states(nodes, [M1]).get('m1');
 
     assert.ok(state);
 

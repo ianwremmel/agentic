@@ -150,20 +150,20 @@ export function derive(
     snapshot.exclusions.map((exclusion) => [exclusion.id, exclusion.kind])
   );
 
-  const {permanentIds, deadAncestorOf} = findPermanentlyStuck(
+  const deadAncestorOf = findDeadAncestors(
     snapshot.nodes,
     snapshot.exclusions,
     analysis
   );
 
-  // Milestone readiness has to know which members are permanently stuck, so it
-  // runs after them and before classification, which consumes the gates.
+  // Runs before classification, which consumes the gates. Readiness does not care
+  // which members are permanently stuck: a stuck ticket is still open, so it holds
+  // its milestone un-ready until a human cancels it (§2.3).
   const milestoneStates = computeMilestoneStates(
     snapshot.nodes,
     snapshot.milestones,
     snapshot.reviews,
-    analysis,
-    permanentIds
+    analysis
   );
 
   const classified: ClassifiedNode[] = snapshot.nodes.map((node) => {
@@ -235,30 +235,25 @@ export function derive(
 }
 
 /**
- * The tickets that can never become available: the ones the orchestrator marked
- * `failed`, and the ones standing behind such a ticket.
+ * For each ticket standing behind a ticket that failed, the failed ancestor
+ * blocking it. Those dependents can never start until the ancestor is resolved.
  *
  * A `canceled` ancestor is a different thing entirely — cancellation unblocks
- * downstream work, and the blocking walk already stops there, so it never lands
- * a dependent here.
- *
- * Shared with the store, which needs the same set to judge milestone readiness
- * when it prunes stale review records.
+ * downstream work, and the blocking walk already stops there, so it never lands a
+ * dependent here. That is also the way out of a failed ticket: cancelling it
+ * settles it and releases everything behind it (§2.3).
  */
-export function findPermanentlyStuck(
+function findDeadAncestors(
   nodes: readonly GraphNode[],
   exclusions: readonly Exclusion[],
   analysis: BlockingAnalysis
-): {permanentIds: Set<string>; deadAncestorOf: Map<string, string>} {
+): Map<string, string> {
   const failedIds = new Set(
     exclusions
       .filter((exclusion) => exclusion.kind === 'failed')
       .map((exclusion) => exclusion.id)
   );
   const roleOf = new Map(nodes.map((node) => [node.id, node.role]));
-
-  const permanentIds = new Set<string>();
-  const deadAncestorOf = new Map<string, string>();
 
   const dead = (id: string): boolean => {
     const role = roleOf.get(id);
@@ -267,22 +262,20 @@ export function findPermanentlyStuck(
     return failedIds.has(id) && (role === undefined || !isResolved(role));
   };
 
+  const deadAncestorOf = new Map<string, string>();
+
   for (const node of nodes) {
-    if (dead(node.id)) {
-      permanentIds.add(node.id);
-      continue;
-    }
+    if (dead(node.id)) continue;
 
     const ancestor = [...(analysis.ancestors.get(node.id) ?? [])]
       .sort()
       .find(dead);
     if (ancestor !== undefined) {
       deadAncestorOf.set(node.id, ancestor);
-      permanentIds.add(node.id);
     }
   }
 
-  return {permanentIds, deadAncestorOf};
+  return deadAncestorOf;
 }
 
 function classify(

@@ -4,7 +4,6 @@ import {DatabaseSync} from 'node:sqlite';
 
 import {describeCause, DispatchError, EnvironmentError} from '../errors.mts';
 import {analyzeBlocking} from './blocking.mts';
-import {findPermanentlyStuck} from './derive.mts';
 import {computeMilestoneStates} from './milestones.mts';
 import {
   isExclusionKind,
@@ -289,19 +288,12 @@ export class GraphStore {
     if (reviews.length === 0) return 0;
 
     const nodes = this.#readNodes();
-    const edges = this.#readEdges();
-    const analysis = analyzeBlocking(nodes, edges);
-    const {permanentIds} = findPermanentlyStuck(
-      nodes,
-      this.#readExclusions(),
-      analysis
-    );
+    const analysis = analyzeBlocking(nodes, this.#readEdges());
     const states = computeMilestoneStates(
       nodes,
       this.#readMilestones(),
       reviews,
-      analysis,
-      permanentIds
+      analysis
     );
 
     let dropped = 0;

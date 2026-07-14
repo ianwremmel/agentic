@@ -1,9 +1,11 @@
 /**
  * Pre-push hook body: run the skill-reviewer agent over skill files changed in
- * the outgoing range. A review that reports findings exits 1 and blocks the
- * push until the pusher acts on the report. Infrastructure failures (claude
- * missing or crashing) fail open with a warning — there is no report to act
- * on. SKILL_REVIEW=0 is the emergency bypass.
+ * the outgoing range. A blocking verdict — a must-fix finding, or a file the
+ * reviewer judges more than ~25% cuttable — exits 1 and blocks the push until
+ * the pusher acts on the report; advisory findings print but never block.
+ * Infrastructure failures (claude missing or crashing) fail open with a
+ * warning — there is no report to act on. SKILL_REVIEW=0 is the emergency
+ * bypass.
  *
  * Reads the standard pre-push ref lines from stdin:
  *   <local-ref> <local-sha> <remote-ref> <remote-sha>
@@ -121,19 +123,20 @@ async function claudeAvailable(): Promise<boolean> {
 
 /**
  * Extract the reviewer's verdict from its report. The agent contract requires
- * `VERDICT: pass` or `VERDICT: findings` as the last non-empty line; a report
- * that breaks the contract counts as findings so the gate fails closed.
+ * `VERDICT: pass` (possibly with advisory findings above it) or
+ * `VERDICT: block` as the last non-empty line; a report that breaks the
+ * contract counts as blocking so the gate fails closed.
  */
-export function verdictFrom(report: string): 'pass' | 'findings' {
+export function verdictFrom(report: string): 'pass' | 'block' {
   const lines = report.split('\n').filter((line) => line.trim() !== '');
-  return lines.at(-1)?.trim() === 'VERDICT: pass' ? 'pass' : 'findings';
+  return lines.at(-1)?.trim() === 'VERDICT: pass' ? 'pass' : 'block';
 }
 
 /**
  * Run the reviewer on one file, streaming its report to stdout while
  * capturing it. 'error' means the reviewer itself failed — no report exists.
  */
-async function review(file: string): Promise<'pass' | 'findings' | 'error'> {
+async function review(file: string): Promise<'pass' | 'block' | 'error'> {
   process.stdout.write(`\n=== skill-review: ${file} ===\n`);
   const child = spawn(
     'claude',
@@ -196,14 +199,14 @@ async function main(): Promise<boolean> {
   );
   const failed: string[] = [];
   for (const file of files) {
-    if ((await review(file)) === 'findings') {
+    if ((await review(file)) === 'block') {
       failed.push(file);
     }
   }
   if (failed.length > 0) {
     process.stderr.write(
-      '\nskill-review: findings above block the push. Act on the report ' +
-        `(${failed.join(', ')}), commit, and push again. ` +
+      '\nskill-review: must-fix findings above block the push. Act on the ' +
+        `report (${failed.join(', ')}), commit, and push again. ` +
         'Emergency bypass: SKILL_REVIEW=0 git push\n'
     );
     return false;

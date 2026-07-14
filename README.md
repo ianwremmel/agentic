@@ -61,9 +61,20 @@ Validate the marketplace and every plugin manifest:
 claude plugin validate .
 ```
 
+Plugin code is TypeScript, run unbuilt on Node's native type stripping (Node
+24.18+ required). Install the toolchain with `npm install` — which also sets up
+the git hooks — then:
+
+```shell
+npm test            # node:test suites, colocated with the code they cover
+npm run lint        # eslint over .mts/.mjs and markdown
+npm run lint:fix    # also formats — Prettier runs as an ESLint rule
+npm run typecheck
+```
+
 Layout:
 
-```
+```text
 .
 ├── .claude-plugin/
 │   └── marketplace.json
@@ -71,6 +82,8 @@ Layout:
 └── plugins/
     └── dispatch/
         ├── .claude-plugin/plugin.json
+        ├── bin/dispatch           # CLI entry point (bash wrapper)
+        ├── cli/                   # CLI sources + colocated tests (.mts)
         ├── skills/  agents/  commands/  hooks/
 ```
 

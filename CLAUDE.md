@@ -13,7 +13,7 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 
 ## Repo layout
 
-```
+```text
 .
 ├── .claude-plugin/marketplace.json   # marketplace catalog
 ├── .claude/agents/                   # repo-dev subagents (not shipped)
@@ -52,7 +52,7 @@ subdirectories exist as scaffolding only.
   so tables are easy to scan in the raw source. New/edited tables should
   look like:
 
-  ```
+  ```text
   | Col A | Col B that is longer |
   | ----- | -------------------- |
   | x     | y                    |

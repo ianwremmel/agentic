@@ -100,9 +100,35 @@ Consequences worth remembering:
 - Anything a skill invokes at run time lives inside the plugin directory.
 - Tests are colocated with the code they cover: `args.mts` → `args.test.mts`.
 - Prefer promise-based APIs over callbacks and sync calls, even where sync
-  would do — retrofitting async later is the painful refactor.
+  would do — retrofitting async later is the painful refactor. Where a builtin
+  is sync-only (`node:sqlite`), wrap it behind an async facade so the call sites
+  never have to change.
 - `npm run lint`, `npm run typecheck`, `npm test` before pushing; CI runs all
   three. `npm run lint:fix` also formats (Prettier runs as an ESLint rule).
+
+### Standard library first
+
+- Arguments: [`node:util` `parseArgs`](https://nodejs.org/api/util.html#utilparseargsconfig).
+- Persistence: [`node:sqlite`](https://nodejs.org/api/sqlite.html).
+- Assertions: `node:assert`. Prefer `assert` over `if (…) throw`, and assert
+  against a real error — `assert(cond, new DataError(msg, {hint}))` — so the
+  failure carries its own remedy.
+
+### Errors are read by an agent
+
+The caller is almost always an agent, not a person at a terminal. Every failure
+it can act on is a `DispatchError` (`cli/lib/errors.mts`): a message saying what
+happened, a `hint` saying what to do, and an exit code it can branch on —
+`2` called wrong, `3` the environment refused (retry), `4` bad data (fix the
+payload). Anything else exits `1` with a stack, which means a bug in the CLI.
+Write the hint for the agent that has to fix it: name the field, name the fix.
+
+### Files and tests
+
+- Keep files to one job. A module that needs a table of contents is two modules.
+- Tests prove behavior, not lines. Each one should fail if a real rule breaks —
+  a canceled blocker unblocking its dependents, a stale review re-closing a
+  milestone gate. Delete a test that can only fail if the code is deleted.
 
 ## Local iteration
 

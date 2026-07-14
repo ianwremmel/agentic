@@ -54,6 +54,14 @@ async function git(...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+async function defaultBranch(): Promise<string> {
+  try {
+    return await git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD');
+  } catch {
+    return 'origin/main';
+  }
+}
+
 /** Resolve the diff base for one pushed ref; null means "nothing to diff". */
 async function diffBase(ref: PushedRef): Promise<string | null> {
   if (ref.localSha === ZERO_SHA) {
@@ -64,7 +72,7 @@ async function diffBase(ref: PushedRef): Promise<string | null> {
   }
   // New branch: diff against the default branch's merge-base.
   try {
-    return await git('merge-base', 'origin/main', ref.localSha);
+    return await git('merge-base', await defaultBranch(), ref.localSha);
   } catch {
     return null;
   }
@@ -73,21 +81,30 @@ async function diffBase(ref: PushedRef): Promise<string | null> {
 async function changedSkillFiles(refs: PushedRef[]): Promise<string[]> {
   const files = new Set<string>();
   for (const ref of refs) {
-    const base = await diffBase(ref);
-    if (base === null || base === ref.localSha) {
-      continue;
-    }
-    const out = await git(
-      'diff',
-      '--name-only',
-      '--diff-filter=d',
-      base,
-      ref.localSha
-    );
-    for (const file of out.split('\n')) {
-      if (isSkillFile(file)) {
-        files.add(file);
+    // A ref that can't be diffed (e.g. the remote sha isn't in the local
+    // object database) skips review for that ref only.
+    try {
+      const base = await diffBase(ref);
+      if (base === null || base === ref.localSha) {
+        continue;
       }
+      // --diff-filter=d: a deleted file has no contents to review.
+      const out = await git(
+        'diff',
+        '--name-only',
+        '--diff-filter=d',
+        base,
+        ref.localSha
+      );
+      for (const file of out.split('\n')) {
+        if (isSkillFile(file)) {
+          files.add(file);
+        }
+      }
+    } catch (error) {
+      process.stderr.write(
+        `skill-review: cannot diff ${ref.localRef}: ${String(error)}\n`
+      );
     }
   }
   return [...files].sort();
@@ -95,7 +112,7 @@ async function changedSkillFiles(refs: PushedRef[]): Promise<string[]> {
 
 async function claudeAvailable(): Promise<boolean> {
   try {
-    await execFileAsync('claude', ['--version']);
+    await execFileAsync('claude', ['--version'], {timeout: 15_000});
     return true;
   } catch {
     return false;
@@ -149,7 +166,8 @@ async function main(): Promise<void> {
   }
   if (!(await claudeAvailable())) {
     process.stderr.write(
-      'skill-review: claude not found on PATH; skipping skill review\n'
+      'skill-review: claude unavailable (missing, broken, or hung); ' +
+        'skipping skill review\n'
     );
     return;
   }

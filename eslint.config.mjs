@@ -8,7 +8,7 @@ import tseslint from 'typescript-eslint';
 import * as yaml from 'yaml-eslint-parser';
 
 export default defineConfig([
-  globalIgnores(['node_modules/', 'coverage/']),
+  globalIgnores(['node_modules/', 'coverage/', 'package-lock.json']),
 
   {
     files: ['**/*.{mjs,mts}'],
@@ -20,7 +20,9 @@ export default defineConfig([
     ],
     languageOptions: {
       parserOptions: {
-        projectService: {allowDefaultProject: ['eslint.config.mjs']},
+        projectService: {
+          allowDefaultProject: ['eslint.config.mjs', 'commitlint.config.mjs'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },

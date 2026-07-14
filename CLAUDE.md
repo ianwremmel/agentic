@@ -74,6 +74,13 @@ subdirectories exist as scaffolding only.
 5. Validate: `claude plugin validate .`
 6. Test locally: `claude --plugin-dir ./plugins/<name>`.
 
+## Before starting any work
+
+Run `npm install`. Besides the toolchain, it installs the git hooks (husky):
+`pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats), and
+`commit-msg` runs commitlint. Without that install, both hooks are silently
+absent and CI catches the mess instead.
+
 ## TypeScript
 
 Plugin code is TypeScript in `.mts` files, run unbuilt on Node's native type

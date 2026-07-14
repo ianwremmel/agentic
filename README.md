@@ -63,7 +63,9 @@ claude plugin validate .
 
 Plugin code is TypeScript, run unbuilt on Node's native type stripping (Node
 24.18+ required). Install the toolchain with `npm install` — which also sets up
-the git hooks — then:
+the git hooks: lint on commit, commitlint on the message, and on push an
+advisory conciseness review (the `skill-reviewer` agent in `.claude/agents/`)
+of any skill markdown in the outgoing range (`SKILL_REVIEW=0` skips it). Then:
 
 ```shell
 npm test            # node:test suites, colocated with the code they cover
@@ -78,13 +80,15 @@ Layout:
 .
 ├── .claude-plugin/
 │   └── marketplace.json
+├── .claude/agents/                # repo-dev subagents (not shipped)
 ├── .github/workflows/
-└── plugins/
-    └── dispatch/
-        ├── .claude-plugin/plugin.json
-        ├── bin/dispatch           # CLI entry point (bash wrapper)
-        ├── cli/                   # CLI sources + colocated tests (.mts)
-        ├── skills/  agents/  commands/  hooks/
+├── plugins/
+│   └── dispatch/
+│       ├── .claude-plugin/plugin.json
+│       ├── bin/dispatch           # CLI entry point (bash wrapper)
+│       ├── cli/                   # CLI sources + colocated tests (.mts)
+│       ├── skills/  agents/  commands/  hooks/
+└── scripts/                       # repo tooling (git hook bodies)
 ```
 
 ## Contributing

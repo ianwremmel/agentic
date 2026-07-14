@@ -10,7 +10,7 @@
     "lint:fix": "eslint . --fix",
     "lint:staged": "eslint --fix --no-warn-ignored",
     "prepare": "husky",
-    "test": "node --test \"plugins/**/*.test.mts\"",
+    "test": "node --test \"plugins/**/*.test.mts\" \"scripts/**/*.test.mts\"",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

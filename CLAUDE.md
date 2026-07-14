@@ -16,10 +16,12 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ```
 .
 ├── .claude-plugin/marketplace.json   # marketplace catalog
+├── .claude/agents/                   # repo-dev subagents (not shipped)
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
 │       ├── bin/dispatch              # CLI entry point (bash wrapper)
 │       └── cli/                      # CLI sources + colocated tests (.mts)
+├── scripts/                          # repo tooling (git hook bodies)
 └── docs/                             # spec + design docs
 ```
 
@@ -77,9 +79,12 @@ subdirectories exist as scaffolding only.
 ## Before starting any work
 
 Run `npm install`. Besides the toolchain, it installs the git hooks (husky):
-`pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats), and
-`commit-msg` runs commitlint. Without that install, both hooks are silently
-absent and CI catches the mess instead.
+`pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats),
+`commit-msg` runs commitlint, and `pre-push` runs the `skill-reviewer` agent
+(`.claude/agents/skill-reviewer.md`) over any skill markdown changed in the
+outgoing range — advisory feedback only; the push proceeds either way, and
+`SKILL_REVIEW=0 git push` skips it. Without that install, the hooks are
+silently absent and CI catches the mess instead.
 
 ## TypeScript
 

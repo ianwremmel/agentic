@@ -74,7 +74,7 @@ npm run typecheck
 
 Layout:
 
-```
+```text
 .
 ├── .claude-plugin/
 │   └── marketplace.json

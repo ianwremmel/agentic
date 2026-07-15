@@ -33,7 +33,7 @@ const set: Command = {
     assertUsage(id !== undefined && id !== '', 'project set needs --id');
 
     await withStore(values, context, async (store) => {
-      await store.upsertProject({id, name: values.name ?? id, declared: true});
+      await store.upsertProject({id, name: values.name ?? id});
       await context.log.info('set project', {project: id});
     });
   },

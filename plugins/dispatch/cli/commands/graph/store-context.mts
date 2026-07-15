@@ -9,8 +9,9 @@ import {
   resolveDbPath,
   type GraphConfig,
 } from '../../lib/graph/config.mts';
-import {derive, type DerivedGraph} from '../../lib/graph/derive.mts';
+import {derive, type DeriveOptions} from '../../lib/graph/derive.mts';
 import {GraphStore} from '../../lib/graph/store.mts';
+import type {DerivedGraph} from '../../lib/graph/types.mts';
 
 /** Flags every graph command accepts: which graph, and how to read the tracker. */
 export const STORE_OPTIONS = {
@@ -72,15 +73,26 @@ export async function withStore<T>(
 }
 
 /** Derive the project-graph document from the store, honoring claim staleness. */
-export async function deriveGraph(
+export function deriveGraph(
   store: GraphStore,
   config: GraphConfig,
   staleAfterMs: number
-): Promise<DerivedGraph> {
-  const snapshot = await store.snapshot();
-  return derive(snapshot, {
+): DerivedGraph {
+  return derive(store.database, {
     parkedRoles: config.parkedRoles,
     nowMs: Date.now(),
     staleAfterMs,
   });
+}
+
+/** The derive options a command's flags and config resolve to. */
+export function deriveOptions(
+  config: GraphConfig,
+  staleAfterMs: number
+): DeriveOptions {
+  return {
+    parkedRoles: config.parkedRoles,
+    nowMs: Date.now(),
+    staleAfterMs,
+  };
 }

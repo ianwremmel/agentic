@@ -4,13 +4,9 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 
 import {DataError, describeCause, EnvironmentError} from '../errors.mts';
-import {parseStateMapping, type StateMapping} from './mapping.mts';
-import {isRole, ROLE_LIST, type Role} from './roles.mts';
-import {DEFAULT_PARKED_ROLES} from './derive.mts';
+import {DEFAULT_PARKED_ROLES, isRole, ROLE_LIST, type Role} from './roles.mts';
 
 export interface GraphConfig {
-  /** Team overrides for native state to protocol role (§2.3 team override). */
-  states: StateMapping;
   /** Labels that mark a ticket as one only a human may work (§2.6). */
   humanInteractiveLabels: readonly string[];
   /** Labels that mark a ticket as a no-PR verification (§2.6 target-kind). */
@@ -25,7 +21,6 @@ export interface GraphConfig {
 export const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
 
 export const DEFAULT_CONFIG: GraphConfig = Object.freeze({
-  states: {},
   humanInteractiveLabels: ['human-only', 'needs-human'],
   verificationLabels: ['verification'],
   parkedRoles: DEFAULT_PARKED_ROLES,
@@ -136,7 +131,6 @@ export function parseConfig(raw: string, source: string): GraphConfig {
   const doc = parsed as Record<string, unknown>;
 
   return {
-    states: parseStateMapping(doc.states, source),
     humanInteractiveLabels:
       labels(doc.humanInteractiveLabels, 'humanInteractiveLabels', source) ??
       DEFAULT_CONFIG.humanInteractiveLabels,

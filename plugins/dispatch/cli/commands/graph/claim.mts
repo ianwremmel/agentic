@@ -4,7 +4,7 @@ import {parseArgsOrUsage} from '../../lib/args.mts';
 import type {Command} from '../../lib/command.mts';
 import {assertUsage, DataError, EnvironmentError} from '../../lib/errors.mts';
 import {
-  deriveGraph,
+  deriveOptions,
   resolveStaleAfterMs,
   STALE_AFTER_USAGE,
   STORE_OPTIONS,
@@ -13,9 +13,9 @@ import {
 } from './store-context.mts';
 
 /**
- * Claim a task for an agent (§2.6). Succeeds if the task is free and available,
- * if the caller already holds it (a heartbeat), or if the current holder's claim
- * is stale (a takeover). Fails if another agent holds it live.
+ * Claim a task for an agent. Succeeds if the task is free and available, if the
+ * caller already holds it (a heartbeat), or if the current holder's claim is
+ * stale (a takeover). Fails if another agent holds it live.
  */
 export const claim: Command = {
   name: 'claim',
@@ -35,22 +35,10 @@ export const claim: Command = {
 
     await withStore(values, context, async (store, config) => {
       const staleAfterMs = resolveStaleAfterMs(staleFlag, config);
-      const graph = await deriveGraph(store, config, staleAfterMs);
-
-      const entry = graph.nodes.find((node) => node.node.id === id);
-      assert(
-        entry !== undefined,
-        new DataError(`no task "${id}" in the graph`, {
-          hint: 'add it with `dispatch graph task set` before claiming it.',
-        })
-      );
-
       const result = await store.claim(
         id,
         agent,
-        Date.now(),
-        staleAfterMs,
-        entry.classification === 'available'
+        deriveOptions(config, staleAfterMs)
       );
 
       switch (result.outcome) {
@@ -72,11 +60,15 @@ export const claim: Command = {
           );
         case 'not-available':
           throw new DataError(
-            `${id} is not available (state=${entry.classification})`,
+            `${id} is not available (state=${result.classification ?? 'unknown'})`,
             {
               hint: 'claim only an available task; `dispatch graph next` returns one.',
             }
           );
+        case 'unknown-task':
+          throw new DataError(`no task "${id}" in the graph`, {
+            hint: 'add it with `dispatch graph task set` before claiming it.',
+          });
         default:
           return;
       }

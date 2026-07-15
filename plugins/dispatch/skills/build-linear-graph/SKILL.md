@@ -32,7 +32,7 @@ Per selected project:
 | -------------------------------- | --------------------------------------------------------- |
 | `task set --id`                  | `id` (the identifier `CLC-945`, not the UUID)             |
 | `task set --project`             | `projectId`                                               |
-| `task set --state`               | `status` (`Backlog`, `Todo`, `In Progress`, `Done`, …)    |
+| `task set --role`                | `status`, mapped by the table below                       |
 | `task set --milestone`           | `projectMilestone.id`                                     |
 | `task set --priority`            | `priority.value` — **omit when `0`** (`0` = no priority)  |
 | `task set --url / --title`       | `url` / `title`                                           |
@@ -44,10 +44,26 @@ Per selected project:
 Passing Linear's `0` priority through would rank an unprioritized task ahead of
 `1` (Urgent), so omit `--priority`.
 
-`status` maps through the built-in Linear table (`Todo` → `available`, `Done` →
-`verified`, `Canceled`/`Duplicate` → `canceled`, …). A custom state the table does
-not cover fails `task set` with an error naming that state; map it in the config's
-`states`, never guess.
+**Status → role.** The CLI accepts only normalized roles; you do the mapping
+(case-insensitively on the status name):
+
+| Linear status | `--role`      |
+| ------------- | ------------- |
+| `Backlog`     | `backlog`     |
+| `Todo`        | `available`   |
+| `In Progress` | `in-progress` |
+| `In Review`   | `in-review`   |
+| `Finished`    | `finished`    |
+| `Delivered`   | `delivered`   |
+| `Done`        | `verified`    |
+| `Canceled`    | `canceled`    |
+| `Duplicate`   | `canceled`    |
+
+A duplicate is abandoned work that will not be done, which is the `canceled`
+role. For a workspace's custom status not in this table, map it yourself only
+when its lifecycle meaning is unambiguous (a "Ready for QA" column is
+`in-review`); otherwise escalate to the operator. Never guess — a wrong role
+silently dispatches, or strands, real work.
 
 **Milestone order.** Linear orders milestones by `sortOrder`; the graph sequences
 them with edges. Sort the milestones by `sortOrder` and chain them:

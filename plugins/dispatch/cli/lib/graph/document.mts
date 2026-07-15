@@ -1,5 +1,5 @@
-import type {ClassifiedNode, DerivedGraph} from './derive.mts';
 import {GROUP_OF} from './roles.mts';
+import type {ClassifiedNode, DerivedGraph} from './types.mts';
 
 /**
  * The §2.6 project-graph document: the orchestrator's whole view of project
@@ -60,7 +60,7 @@ export function toXml(graph: DerivedGraph): string {
   out.push('  <milestones>');
   for (const milestone of graph.milestones) {
     out.push(
-      `    <milestone id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}" open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" in-flight="${String(milestone.inFlight)}" blocked="${String(milestone.blocked)}" fingerprint="${attr(milestone.fingerprint)}"/>`
+      `    <milestone id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}" open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" in-flight="${String(milestone.inFlight)}" blocked="${String(milestone.blocked)}"/>`
     );
   }
   out.push('  </milestones>');

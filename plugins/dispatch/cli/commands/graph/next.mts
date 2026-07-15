@@ -2,9 +2,10 @@ import {parseArgsOrUsage} from '../../lib/args.mts';
 import type {Command} from '../../lib/command.mts';
 import {assertUsage} from '../../lib/errors.mts';
 import {availableTicket} from '../../lib/graph/document.mts';
+import {frontier} from '../../lib/graph/queries.mts';
 import {writeLine} from '../../lib/io.mts';
 import {
-  deriveGraph,
+  deriveOptions,
   resolveStaleAfterMs,
   STALE_AFTER_USAGE,
   STORE_OPTIONS,
@@ -15,8 +16,8 @@ import {
 /**
  * Print the next task to work — the top of the ranked available frontier — so an
  * agent need not read the whole document. With `--claim`, grab it atomically:
- * derive, then claim the first candidate no live agent holds, in one transaction,
- * so two agents calling `next --claim` cannot get the same task.
+ * the store ranks and claims in one transaction, so two agents calling
+ * `next --claim` cannot get the same task.
  *
  * Prints one `<ticket>` element — the same shape the document uses — or nothing
  * when the frontier is empty. Empty output plus exit 0 is the "no work right now"
@@ -61,27 +62,18 @@ export const next: Command = {
 
     await withStore(values, context, async (store, config) => {
       const staleAfterMs = resolveStaleAfterMs(values['stale-after'], config);
-      const graph = await deriveGraph(store, config, staleAfterMs);
-
-      const frontier = graph.available.filter(
-        (entry) =>
-          values.project === undefined || entry.node.project === values.project
-      );
+      const options = deriveOptions(config, staleAfterMs);
+      const candidates = frontier(store.database, options, values.project);
 
       if (agent === undefined) {
-        const top = frontier[0];
+        const top = candidates[0];
         if (top !== undefined)
           await writeLine(context.stdout, availableTicket(top));
         await context.log.info('next task', {task: top?.node.id ?? '-'});
         return;
       }
 
-      const claimed = await store.claimNext(
-        frontier.map((entry) => entry.node.id),
-        agent,
-        Date.now(),
-        staleAfterMs
-      );
+      const claimed = await store.claimNext(agent, options, values.project);
 
       if (claimed === null) {
         // Either the frontier was empty or every candidate is held live. No work
@@ -90,7 +82,7 @@ export const next: Command = {
         return;
       }
 
-      const entry = frontier.find(
+      const entry = candidates.find(
         (candidate) => candidate.node.id === claimed.id
       );
       if (entry !== undefined)

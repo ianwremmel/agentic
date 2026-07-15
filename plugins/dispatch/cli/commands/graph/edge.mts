@@ -8,8 +8,8 @@ import {STORE_OPTIONS, STORE_USAGE, withStore} from './store-context.mts';
 
 /**
  * One dependency edge. `--blocker` blocks `--blocked` — i.e. `--blocked` depends
- * on `--blocker` (§2.3). Endpoints may be tasks or milestones; an edge between a
- * task and a milestone is surfaced as an anomaly by `doc`.
+ * on `--blocker` (§2.3). Endpoints may be tasks or milestones; an edge that
+ * would join a task to a milestone is refused at write time.
  */
 const add: Command = {
   name: 'add',

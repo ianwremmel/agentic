@@ -53,6 +53,12 @@ export function isResolved(role: Role): boolean {
   return RESOLVED_ROLES.has(role);
 }
 
+/** Roles that mean "parked pending a human". Tracker-dependent; configurable. */
+export const DEFAULT_PARKED_ROLES: readonly Role[] = [
+  'awaiting-external',
+  'paused',
+];
+
 export function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value);
 }

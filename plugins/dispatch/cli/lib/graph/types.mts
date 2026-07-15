@@ -10,9 +10,9 @@ export interface GraphNode {
   milestone: string | null;
   targetKind: TargetKind;
   humanInteractive: boolean;
-  /** Injected at run time; ranks to the top of the available frontier (§2.6). */
+  /** Injected at run time; ranks to the top of the available frontier. */
   injected: boolean;
-  /** Lower is more urgent. `null` sorts last — see `rank.mts`. */
+  /** Lower is more urgent. `null` sorts last. */
   priority: number | null;
   branchHint: string | null;
   labels: string[];
@@ -36,46 +36,89 @@ export interface Milestone {
   name: string;
 }
 
-export interface Project {
-  id: string;
-  name: string;
-  /**
-   * False when the project was never declared, only named by a task or milestone
-   * — typically a cross-project ancestor pulled in to complete the dependency
-   * closure. Its set is partial, so its counts describe only what happened to be
-   * fetched and say nothing about whether the project is done.
-   */
-  declared: boolean;
-}
+export type Classification =
+  | 'available'
+  | 'blocked'
+  | 'human-blocked'
+  | 'in-flight'
+  | 'dormant'
+  | 'verified'
+  | 'canceled';
 
-/**
- * An agent's claim on a task. `agent` is its session id; `heartbeatAt` is when it
- * last proved liveness. A claim older than the staleness threshold is dead and
- * may be taken over (§2.6 lock reclamation).
- */
-export interface Claim {
-  id: string;
+/** The live/stale view of a task's claim, if any. */
+export interface ClaimView {
   agent: string;
+  live: boolean;
   heartbeatAt: string;
 }
 
-/**
- * A recorded milestone review, pinned to the member set it reviewed. A review of
- * a different member set is not a review of this one.
- */
-export interface ReviewRecord {
-  milestone: string;
-  fingerprint: string;
-  recordedAt: string;
+export interface ClassifiedNode {
+  node: GraphNode;
+  classification: Classification;
+  /**
+   * The task cannot start: an ancestor is unresolved, or a milestone gating its
+   * own milestone still awaits review. Computed from the graph, not a restatement
+   * of `classification === 'blocked'` — a `verified` task can still carry an open
+   * ancestor, worth seeing.
+   */
+  effectiveBlocked: boolean;
+  /** Every unresolved task ancestor — transitive, not just the direct blockers. */
+  blockedBy: string[];
+  /** Milestones gating this task, unreviewed. Non-empty implies `blocked`. */
+  gatedBy: string[];
+  /** The claim on this task, live or stale, or null if none. */
+  claim: ClaimView | null;
+  /** Transitive descendant count — how much work resolving this would unblock. */
+  fanout: number;
 }
 
-/** Everything the derivation needs, read from the store in one shot. */
-export interface GraphSnapshot {
-  projects: Project[];
-  nodes: GraphNode[];
+export interface Anomaly {
+  kind:
+    'cycle' | 'dangling-edge' | 'cross-project-reverse' | 'unknown-milestone';
+  nodes: string[];
+  detail: string;
+}
+
+export interface MilestoneState {
+  id: string;
+  project: string;
+  name: string;
+  members: string[];
+  memberCount: number;
+  openCount: number;
+  readyForReview: boolean;
+  reviewRecorded: boolean;
+}
+
+export interface ClassificationCounts {
+  available: number;
+  blocked: number;
+  humanBlocked: number;
+  inFlight: number;
+  dormant: number;
+  verified: number;
+  canceled: number;
+}
+
+export interface ProjectCounts extends ClassificationCounts {
+  project: string;
+  partial: boolean;
+  total: number;
+  /** No task the orchestrator can act on, now or later. */
+  terminal: boolean;
+}
+
+export interface MilestoneCounts extends MilestoneState, ClassificationCounts {}
+
+export interface DerivedGraph {
+  projects: {id: string; name: string; partial: boolean; terminal: boolean}[];
+  nodes: ClassifiedNode[];
   edges: GraphEdge[];
-  milestones: Milestone[];
-  claims: Claim[];
-  reviews: ReviewRecord[];
+  available: ClassifiedNode[];
+  blocked: ClassifiedNode[];
+  humanBlocked: ClassifiedNode[];
+  milestones: MilestoneCounts[];
+  counts: ProjectCounts[];
+  anomalies: Anomaly[];
   cursors: Record<string, string>;
 }

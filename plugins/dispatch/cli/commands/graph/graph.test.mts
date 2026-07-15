@@ -30,8 +30,8 @@ async function seed(db: string): Promise<void> {
       'T1',
       '--project',
       'P',
-      '--state',
-      'Done',
+      '--role',
+      'verified',
       '--milestone',
       'M1',
     ],
@@ -42,8 +42,8 @@ async function seed(db: string): Promise<void> {
       'T2',
       '--project',
       'P',
-      '--state',
-      'Todo',
+      '--role',
+      'available',
       '--milestone',
       'M2',
     ],
@@ -128,8 +128,8 @@ describe('next and claim', () => {
       'T',
       '--project',
       'P',
-      '--state',
-      'Todo',
+      '--role',
+      'available',
       '--url',
       'https://x/a b',
     ]);
@@ -153,8 +153,8 @@ describe('next and claim', () => {
         id,
         '--project',
         'P',
-        '--state',
-        'Todo',
+        '--role',
+        'available',
       ]);
     }
     await run(db, ['edge', 'add', '--blocker', 'A', '--blocked', 'B']);
@@ -237,7 +237,7 @@ describe('next and claim', () => {
 });
 
 describe('what a caller sees when it gets the call wrong', () => {
-  it('exits 4 on a native state no mapping covers', async () => {
+  it('exits 4 on a value outside the protocol role vocabulary', async () => {
     const db = await graphDb();
     const {code, stderr} = await run(db, [
       'task',
@@ -246,11 +246,11 @@ describe('what a caller sees when it gets the call wrong', () => {
       'A',
       '--project',
       'P',
-      '--state',
+      '--role',
       'Ready for QA',
     ]);
     assert.equal(code, 4);
-    assert.match(stderr, /no mapping for the native state "Ready for QA"/u);
+    assert.match(stderr, /"Ready for QA" is not a protocol role/u);
   });
 
   it('exits 2 on an unknown flag, and answers with the subcommand usage', async () => {
@@ -276,6 +276,6 @@ describe('what a caller sees when it gets the call wrong', () => {
     ]);
     assert.equal(code, 0);
     assert.match(stdout, /usage: dispatch graph task set/u);
-    assert.match(stdout, /--state/u);
+    assert.match(stdout, /--role/u);
   });
 });

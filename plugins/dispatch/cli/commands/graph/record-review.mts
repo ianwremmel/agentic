@@ -5,19 +5,19 @@ import type {Command} from '../../lib/command.mts';
 import {assertUsage, DataError} from '../../lib/errors.mts';
 import {DEFAULT_STALE_AFTER_MS} from '../../lib/graph/config.mts';
 import {
-  deriveGraph,
+  deriveOptions,
   STORE_OPTIONS,
   STORE_USAGE,
   withStore,
 } from './store-context.mts';
 
 /**
- * Record that a milestone's §2.3 review ran — the write that opens the §2.6
+ * Record that a milestone's review ran — the write that opens the
  * milestone-review gate and unblocks the tasks behind it.
  *
  * The record is pinned to the member set it reviewed, so a review that files
  * follow-up tasks into the milestone does not satisfy the gate for the milestone
- * it changed. The review *outcome* is not stored here — §2.3 puts it on the
+ * it changed. The review *outcome* is not stored here — it belongs on the
  * tracker's review artifact; this only records that it happened.
  */
 export const recordReview: Command = {
@@ -46,40 +46,27 @@ export const recordReview: Command = {
     const id = values.id;
     assertUsage(id !== undefined && id !== '', 'record-review needs --id');
 
-    const recordedAt = values.at ?? new Date().toISOString();
+    const recordedAtMs =
+      values.at === undefined ? Date.now() : Date.parse(values.at);
+    assert(
+      !Number.isNaN(recordedAtMs),
+      new DataError(`--at is not a timestamp: "${values.at ?? ''}"`, {
+        hint: 'pass an RFC 3339 instant (e.g. 2026-07-15T12:00:00Z), or omit --at for now.',
+      })
+    );
 
     await withStore(values, context, async (store, config) => {
       // Staleness does not affect milestone readiness; any value derives the same
       // milestone states.
-      const graph = await deriveGraph(store, config, DEFAULT_STALE_AFTER_MS);
-
-      const milestone = graph.milestones.find((entry) => entry.id === id);
-      assert(
-        milestone !== undefined,
-        new DataError(`no milestone "${id}" in the graph`, {
-          hint:
-            graph.milestones.length === 0
-              ? 'the graph holds no milestones — add them with `dispatch graph milestone set`.'
-              : `known milestones: ${graph.milestones.map((entry) => entry.id).join(', ')}.`,
-        })
+      const {members} = await store.recordReview(
+        id,
+        recordedAtMs,
+        deriveOptions(config, DEFAULT_STALE_AFTER_MS)
       );
-
-      assert(
-        milestone.readyForReview,
-        new DataError(
-          `milestone "${id}" is not ready for review: ${String(milestone.openCount)} of ${String(milestone.memberCount)} tasks are still open`,
-          {
-            hint: 'a milestone is ready only when every task in it is verified or canceled and none of their dependencies is unresolved.',
-          }
-        )
-      );
-
-      await store.recordReview(id, milestone.fingerprint, recordedAt);
       await context.log.info('recorded milestone review', {
         milestone: id,
-        members: milestone.memberCount,
-        fingerprint: milestone.fingerprint,
-        recorded_at: recordedAt,
+        members,
+        recorded_at: new Date(recordedAtMs).toISOString(),
       });
     });
   },

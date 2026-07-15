@@ -8,7 +8,7 @@ import {resolveTask, type TaskInput} from './task-input.mts';
 const BASE: TaskInput = {
   id: 'CLC-1',
   project: 'P',
-  state: 'Todo',
+  role: 'available',
   milestone: undefined,
   priority: undefined,
   url: undefined,
@@ -23,12 +23,12 @@ function resolve(
   overrides: Partial<TaskInput>,
   config: GraphConfig = DEFAULT_CONFIG
 ) {
-  return resolveTask({...BASE, ...overrides}, {tracker: 'linear', config});
+  return resolveTask({...BASE, ...overrides}, {config});
 }
 
-describe('resolving a task from native fields', () => {
-  it('maps the native state to a role', () => {
-    assert.equal(resolve({state: 'In Review'}).role, 'in-review');
+describe('resolving a task from flags', () => {
+  it('accepts a protocol role', () => {
+    assert.equal(resolve({role: 'in-review'}).role, 'in-review');
   });
 
   it('derives target-kind and human-interactive from labels, not flags', () => {
@@ -67,17 +67,14 @@ describe('rejecting bad input', () => {
     );
   }
 
-  it('requires id, project, and state', () => {
+  it('requires id, project, and role', () => {
     rejects({id: undefined}, /needs --id/);
     rejects({project: undefined}, /needs --project/);
-    rejects({state: undefined}, /needs --state/);
+    rejects({role: undefined}, /needs --role/);
   });
 
-  it('rejects an unmapped native state instead of guessing', () => {
-    rejects(
-      {state: 'Ready for QA'},
-      /no mapping for the native state "Ready for QA"/
-    );
+  it('rejects a value outside the protocol vocabulary instead of guessing', () => {
+    rejects({role: 'Ready for QA'}, /"Ready for QA" is not a protocol role/);
   });
 
   it('rejects a non-numeric priority', () => {

@@ -1,24 +1,15 @@
-import {mkdir} from 'node:fs/promises';
-import {dirname} from 'node:path';
-import {DatabaseSync} from 'node:sqlite';
+import assert from 'node:assert';
 
+import {Database} from '../db/database.mts';
+import {DataError} from '../errors.mts';
 import {
-  DataError,
-  describeCause,
-  DispatchError,
-  EnvironmentError,
-} from '../errors.mts';
-import {isRole, isTargetKind} from './roles.mts';
-import {SCHEMA, SCHEMA_VERSION} from './schema.mts';
-import type {
-  Claim,
-  GraphEdge,
-  GraphNode,
-  GraphSnapshot,
-  Milestone,
-  Project,
-  ReviewRecord,
-} from './types.mts';
+  classifiedNodes,
+  frontier,
+  milestoneStates,
+  type DeriveOptions,
+} from './queries.mts';
+import {isRole, isTargetKind, ROLE_LIST, TARGET_KIND_LIST} from './roles.mts';
+import type {Classification, GraphNode, Milestone} from './types.mts';
 
 /** The outcome of a claim attempt, so the command can report it precisely. */
 export type ClaimOutcome =
@@ -26,155 +17,162 @@ export type ClaimOutcome =
   | 'refreshed' // already ours; heartbeat bumped
   | 'reclaimed' // the previous holder's claim was stale; now ours
   | 'held' // a live claim by another agent — we did not take it
-  | 'not-available'; // free, but the task is not eligible to be picked up
+  | 'not-available' // free, but the task is not eligible to be picked up
+  | 'unknown-task'; // no such task in the graph
 
 export interface ClaimResult {
   outcome: ClaimOutcome;
   /** The agent that holds it when the outcome is `held`. */
   heldBy?: string;
+  /** The task's classification when the outcome is `not-available`. */
+  classification?: Classification;
 }
 
-type SqlValue = string | number | null;
+interface NodeRow {
+  id: number;
+  kind: 'task' | 'milestone' | 'unknown';
+}
 
 /* eslint-disable @typescript-eslint/require-await --
- * The async signatures are the point of this class. `node:sqlite` is synchronous
- * today; these methods are async so an async driver later is a change behind this
- * facade, not a rewrite of every call site. */
+ * The async signatures are the point of this class; `node:sqlite` is synchronous
+ * today. See `../db/database.mts`. */
 
 /**
- * The §2.6 durable graph cache: tasks, milestones, their edges, plus the
- * orchestrator's claims and milestone-review records.
+ * The durable graph: tasks, milestones, their edges, plus the orchestrator's
+ * claims and milestone-review records, over the shared dispatch database.
  *
- * Every method is async even though `node:sqlite` is synchronous — see above.
+ * Writes enforce every rule a single write can judge — the schema's CHECK and
+ * FOREIGN KEY constraints, id-kind conflicts, task↔milestone edges, cycles,
+ * malformed timestamps — so those can never enter the graph through this class.
+ * An id named before it is fetched becomes a placeholder node (`kind =
+ * 'unknown'`), which is what lets a delta write edges in any order; the
+ * placeholder is promoted when its task or milestone row arrives.
  */
 export class GraphStore {
-  readonly #db: DatabaseSync;
+  readonly #db: Database;
 
-  private constructor(db: DatabaseSync) {
+  private constructor(db: Database) {
     this.#db = db;
   }
 
   static async open(path: string): Promise<GraphStore> {
-    if (path !== ':memory:') {
-      try {
-        await mkdir(dirname(path), {recursive: true});
-      } catch (cause) {
-        throw new EnvironmentError(
-          `cannot create the directory for the graph database at ${path}: ${describeCause(cause)}`,
-          {hint: 'check the path is writable, or point --db somewhere else.'}
-        );
-      }
-    }
+    return new GraphStore(await Database.open(path));
+  }
 
-    try {
-      const db = new DatabaseSync(path);
-      db.exec('PRAGMA journal_mode = WAL');
-      // Several agents share one graph. Without a busy timeout SQLite fails the
-      // moment it meets a concurrent writer, turning routine contention into a
-      // hard error.
-      db.exec('PRAGMA busy_timeout = 5000');
-      db.exec(SCHEMA);
-
-      const store = new GraphStore(db);
-      store.#run(
-        'INSERT INTO meta (key, value) VALUES (?, ?) ' +
-          'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-        ['schema_version', String(SCHEMA_VERSION)]
-      );
-      return store;
-    } catch (cause) {
-      if (cause instanceof DispatchError) throw cause;
-      throw new EnvironmentError(
-        `cannot open the graph database at ${path}: ${describeCause(cause)}`,
-        {
-          hint: 'check the file is a readable, writable SQLite database and the disk is not full. If it is locked, another dispatch command is mid-write — retry shortly. Deleting the file forces a rebuild.',
-        }
-      );
-    }
+  /** The underlying database, for the read-side derivation (`derive.mts`). */
+  get database(): Database {
+    return this.#db;
   }
 
   async close(): Promise<void> {
-    this.#db.close();
+    await this.#db.close();
   }
 
-  async upsertProject(project: Project): Promise<void> {
-    this.#run(
-      'INSERT INTO project (id, name) VALUES (?, ?) ' +
-        'ON CONFLICT(id) DO UPDATE SET name = excluded.name',
+  async upsertProject(project: {id: string; name: string}): Promise<void> {
+    this.#db.run(
+      `INSERT INTO project (external_id, name, declared) VALUES (?, ?, 1)
+       ON CONFLICT(external_id) DO UPDATE SET name = excluded.name, declared = 1`,
       [project.id, project.name]
     );
   }
 
+  /**
+   * Undeclare a project: it stops counting toward terminal and drops from the
+   * document unless a task or milestone still names it (then it is partial).
+   */
   async removeProject(id: string): Promise<boolean> {
-    return this.#run('DELETE FROM project WHERE id = ?', [id]) > 0;
+    return (
+      this.#db.run(
+        'UPDATE project SET declared = 0 WHERE external_id = ? AND declared = 1',
+        [id]
+      ) > 0
+    );
   }
 
   async upsertTask(task: GraphNode): Promise<void> {
-    this.#requireDistinctKind(task.id, 'task', 'milestone');
-    this.#run(
-      `INSERT INTO task (
-         id, project, url, title, role, milestone, target_kind,
-         human_interactive, injected, priority, branch_hint, labels, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         project = excluded.project, url = excluded.url, title = excluded.title,
-         role = excluded.role, milestone = excluded.milestone,
-         target_kind = excluded.target_kind,
-         human_interactive = excluded.human_interactive,
-         injected = excluded.injected, priority = excluded.priority,
-         branch_hint = excluded.branch_hint, labels = excluded.labels,
-         updated_at = excluded.updated_at`,
-      [
-        task.id,
-        task.project,
-        task.url,
-        task.title,
-        task.role,
-        task.milestone,
-        task.targetKind,
-        task.humanInteractive ? 1 : 0,
-        task.injected ? 1 : 0,
-        task.priority,
-        task.branchHint,
-        JSON.stringify(task.labels),
-        task.updatedAt,
-      ]
+    assert(
+      isRole(task.role),
+      new DataError(`"${task.role}" is not a protocol role`, {
+        hint: `use one of: ${ROLE_LIST}.`,
+      })
     );
+    assert(
+      isTargetKind(task.targetKind),
+      new DataError(`"${task.targetKind}" is not a target kind`, {
+        hint: `use one of: ${TARGET_KIND_LIST}.`,
+      })
+    );
+    const updatedAtMs = parseInstant(task.updatedAt, '--updated-at');
+
+    await this.#db.transaction(() => {
+      const projectId = this.#projectRef(task.project);
+      const nodeId = this.#materialize(task.id, 'task');
+      const milestoneId =
+        task.milestone === null ? null : this.#milestoneRef(task.milestone);
+
+      this.#db.run(
+        `INSERT INTO task (
+           node_id, project_id, url, title, role, milestone_id, target_kind,
+           human_interactive, injected, priority, branch_hint, labels, updated_at_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(node_id) DO UPDATE SET
+           project_id = excluded.project_id, url = excluded.url,
+           title = excluded.title, role = excluded.role,
+           milestone_id = excluded.milestone_id,
+           target_kind = excluded.target_kind,
+           human_interactive = excluded.human_interactive,
+           injected = excluded.injected, priority = excluded.priority,
+           branch_hint = excluded.branch_hint, labels = excluded.labels,
+           updated_at_ms = excluded.updated_at_ms`,
+        [
+          nodeId,
+          projectId,
+          task.url,
+          task.title,
+          task.role,
+          milestoneId,
+          task.targetKind,
+          task.humanInteractive ? 1 : 0,
+          task.injected ? 1 : 0,
+          task.priority,
+          task.branchHint,
+          JSON.stringify(task.labels),
+          updatedAtMs,
+        ]
+      );
+    });
   }
 
   /** Remove a task, every edge that touched it, and any claim on it. */
   async removeTask(id: string): Promise<boolean> {
-    return this.#transaction(() => {
-      const removed = this.#run('DELETE FROM task WHERE id = ?', [id]) > 0;
-      this.#run('DELETE FROM edge WHERE blocker = ? OR blocked = ?', [id, id]);
-      this.#run('DELETE FROM claim WHERE id = ?', [id]);
-      return removed;
-    });
+    return this.#db.transaction(() => this.#removeNode(id, 'task'));
   }
 
   async upsertMilestone(milestone: Milestone): Promise<void> {
-    this.#requireDistinctKind(milestone.id, 'milestone', 'task');
-    this.#run(
-      'INSERT INTO milestone (id, project, name) VALUES (?, ?, ?) ' +
-        'ON CONFLICT(id) DO UPDATE SET project = excluded.project, name = excluded.name',
-      [milestone.id, milestone.project, milestone.name]
-    );
-  }
-
-  async removeMilestone(id: string): Promise<boolean> {
-    return this.#transaction(() => {
-      const removed = this.#run('DELETE FROM milestone WHERE id = ?', [id]) > 0;
-      this.#run('DELETE FROM edge WHERE blocker = ? OR blocked = ?', [id, id]);
-      return removed;
+    await this.#db.transaction(() => {
+      const projectId = this.#projectRef(milestone.project);
+      const nodeId = this.#materialize(milestone.id, 'milestone');
+      this.#db.run(
+        `INSERT INTO milestone (node_id, project_id, name) VALUES (?, ?, ?)
+         ON CONFLICT(node_id) DO UPDATE SET
+           project_id = excluded.project_id, name = excluded.name`,
+        [nodeId, projectId, milestone.name]
+      );
     });
   }
 
+  /** Remove a milestone, its edges, and any review recorded for it. */
+  async removeMilestone(id: string): Promise<boolean> {
+    return this.#db.transaction(() => this.#removeNode(id, 'milestone'));
+  }
+
   /**
-   * Add one dependency edge, refusing it if it would close a cycle (§2.3 requires
-   * this at write time). Returns false if the edge was already present.
+   * Add one dependency edge, refusing it if it would close a cycle or join a
+   * task to a milestone. An endpoint nobody has written yet becomes a
+   * placeholder node. Returns false if the edge was already present.
    */
   async addEdge(blocker: string, blocked: string): Promise<boolean> {
-    return this.#transaction(() => {
+    return this.#db.transaction(() => {
       const added = this.#insertEdge(blocker, blocked);
       if (added) this.#rejectIfCycle(blocked);
       return added;
@@ -183,10 +181,12 @@ export class GraphStore {
 
   async removeEdge(blocker: string, blocked: string): Promise<boolean> {
     return (
-      this.#run('DELETE FROM edge WHERE blocker = ? AND blocked = ?', [
-        blocker,
-        blocked,
-      ]) > 0
+      this.#db.run(
+        `DELETE FROM edge
+         WHERE blocker = (SELECT id FROM node WHERE external_id = ?)
+           AND blocked = (SELECT id FROM node WHERE external_id = ?)`,
+        [blocker, blocked]
+      ) > 0
     );
   }
 
@@ -200,123 +200,114 @@ export class GraphStore {
     direction: 'blockers' | 'blocks',
     others: readonly string[]
   ): Promise<void> {
-    this.#transaction(() => {
-      if (direction === 'blockers') {
-        this.#run('DELETE FROM edge WHERE blocked = ?', [node]);
-        for (const blocker of others) this.#insertEdge(blocker, node);
-      } else {
-        this.#run('DELETE FROM edge WHERE blocker = ?', [node]);
-        for (const blocked of others) this.#insertEdge(node, blocked);
+    await this.#db.transaction(() => {
+      const nodeId = this.#nodeRef(node);
+      const column = direction === 'blockers' ? 'blocked' : 'blocker';
+      this.#db.run(`DELETE FROM edge WHERE ${column} = ?`, [nodeId]);
+      for (const other of others) {
+        if (direction === 'blockers') this.#insertEdge(other, node);
+        else this.#insertEdge(node, other);
       }
       this.#rejectIfCycle(node);
     });
   }
 
-  #insertEdge(blocker: string, blocked: string): boolean {
-    return (
-      this.#run(
-        'INSERT INTO edge (blocker, blocked) VALUES (?, ?) ON CONFLICT DO NOTHING',
-        [blocker, blocked]
-      ) > 0
-    );
-  }
-
   /**
-   * Throw (rolling back the enclosing transaction, so the edge is never created)
-   * if `node` now sits on a dependency cycle. A cycle can only have appeared
-   * because of the edge just written, and every such cycle runs through `node`,
-   * so checking `node` alone is enough. Walked in SQL by a recursive CTE over the
-   * blocker→blocked edges; it also catches a self-edge.
+   * Wipe the graph for a full rebuild. Claims, recorded reviews, and cursors
+   * survive — they are the orchestrator's bookkeeping, not the tracker's to
+   * reset. The node rows a claim or review hangs on are kept (demoted to
+   * placeholders until the re-sync re-declares them); every other node goes.
    */
-  #rejectIfCycle(node: string): void {
-    const onCycle = this.#db
-      .prepare(
-        `WITH RECURSIVE reach(id) AS (
-           SELECT blocked FROM edge WHERE blocker = ?
-           UNION
-           SELECT e.blocked FROM edge e JOIN reach r ON e.blocker = r.id
-         )
-         SELECT 1 FROM reach WHERE id = ? LIMIT 1`
-      )
-      .get(node, node);
-
-    if (onCycle !== undefined) {
-      throw new DataError(
-        `that edge would create a dependency cycle through ${node}`,
-        {
-          hint: 'a dependency cycle is illegal. Remove the opposing edge first, or fix the dependency direction.',
-        }
-      );
-    }
-  }
-
-  /** Wipe the graph. Keeps claims, reviews, and cursors — orchestrator state. */
   async reset(): Promise<void> {
-    this.#transaction(() => {
-      this.#db.exec('DELETE FROM task');
-      this.#db.exec('DELETE FROM edge');
-      this.#db.exec('DELETE FROM milestone');
-      this.#db.exec('DELETE FROM project');
+    await this.#db.transaction(() => {
+      this.#db.run('DELETE FROM edge');
+      this.#db.run('DELETE FROM task');
+      this.#db.run('DELETE FROM milestone');
+      this.#db.run('DELETE FROM project');
+      this.#db.run(
+        `DELETE FROM node
+         WHERE id NOT IN (SELECT node_id FROM claim)
+           AND id NOT IN (SELECT milestone_id FROM review)`
+      );
+      this.#db.run("UPDATE node SET kind = 'unknown'");
     });
   }
 
   /**
-   * Claim a task for an agent, atomically.
-   *
-   * `available` is whether the task is eligible for an *initial* claim — passed
-   * in because eligibility is a derived fact. A reclaim of a stale claim ignores
-   * it: taking over a dead agent's in-progress work is the point.
+   * Claim a task for an agent, atomically. Succeeds when the task is free and
+   * available, already held by the caller (a refresh), or held by a stale
+   * claim (a takeover — eligibility is ignored, because taking over a dead
+   * agent's in-progress work is the point).
    */
   async claim(
     id: string,
     agent: string,
-    nowMs: number,
-    staleAfterMs: number,
-    available: boolean
+    options: DeriveOptions
   ): Promise<ClaimResult> {
-    return this.#transaction(() =>
-      this.#claimLocked(id, agent, nowMs, staleAfterMs, available)
-    );
+    return this.#db.transaction(() => {
+      const node = this.#node(id);
+      if (node?.kind !== 'task') return {outcome: 'unknown-task'};
+      return this.#claimLocked(node.id, id, agent, options);
+    });
   }
 
   /**
-   * Claim the first eligible task from a rank-ordered candidate list, atomically.
-   * A candidate held by a live claim is skipped; the first one taken is returned.
+   * Claim the top eligible task off the ranked frontier, atomically. A
+   * candidate held by a live claim is skipped; the first one taken is
+   * returned, or null when nothing is claimable.
    */
   async claimNext(
-    candidates: readonly string[],
     agent: string,
-    nowMs: number,
-    staleAfterMs: number
+    options: DeriveOptions,
+    project?: string
   ): Promise<{id: string; outcome: ClaimOutcome} | null> {
-    return this.#transaction(() => {
-      for (const id of candidates) {
-        const result = this.#claimLocked(id, agent, nowMs, staleAfterMs, true);
-        if (result.outcome !== 'held') return {id, outcome: result.outcome};
+    return this.#db.transaction(() => {
+      for (const entry of frontier(this.#db, options, project)) {
+        const node = this.#node(entry.node.id);
+        if (node === null) continue;
+        const result = this.#claimLocked(
+          node.id,
+          entry.node.id,
+          agent,
+          options
+        );
+        if (result.outcome !== 'held')
+          return {id: entry.node.id, outcome: result.outcome};
       }
       return null;
     });
   }
 
   #claimLocked(
-    id: string,
+    nodeId: number,
+    externalId: string,
     agent: string,
-    nowMs: number,
-    staleAfterMs: number,
-    available: boolean
+    options: DeriveOptions
   ): ClaimResult {
-    const existing = this.#readClaim(id);
-    const heartbeat = new Date(nowMs).toISOString();
+    const nowMs = options.nowMs ?? Date.now();
+    const staleAfterMs = options.staleAfterMs ?? Number.MAX_SAFE_INTEGER;
+    const existing = this.#db.get(
+      'SELECT agent, heartbeat_at_ms FROM claim WHERE node_id = ?',
+      [nodeId]
+    );
     const write = (): void => {
-      this.#run(
-        'INSERT INTO claim (id, agent, heartbeat_at) VALUES (?, ?, ?) ' +
-          'ON CONFLICT(id) DO UPDATE SET agent = excluded.agent, heartbeat_at = excluded.heartbeat_at',
-        [id, agent, heartbeat]
+      this.#db.run(
+        `INSERT INTO claim (node_id, agent, heartbeat_at_ms) VALUES (?, ?, ?)
+         ON CONFLICT(node_id) DO UPDATE SET
+           agent = excluded.agent, heartbeat_at_ms = excluded.heartbeat_at_ms`,
+        [nodeId, agent, nowMs]
       );
     };
 
-    if (existing === null) {
-      if (!available) return {outcome: 'not-available'};
+    if (existing === undefined) {
+      const entry = classifiedNodes(this.#db, options).find(
+        (candidate) => candidate.node.id === externalId
+      );
+      if (entry?.classification !== 'available') {
+        const result: ClaimResult = {outcome: 'not-available'};
+        if (entry !== undefined) result.classification = entry.classification;
+        return result;
+      }
       write();
       return {outcome: 'claimed'};
     }
@@ -324,21 +315,29 @@ export class GraphStore {
       write();
       return {outcome: 'refreshed'};
     }
-    if (isStale(existing, nowMs, staleAfterMs)) {
+    const heartbeat =
+      typeof existing.heartbeat_at_ms === 'number'
+        ? existing.heartbeat_at_ms
+        : 0;
+    if (nowMs - heartbeat > staleAfterMs) {
       write();
       return {outcome: 'reclaimed'};
     }
-    return {outcome: 'held', heldBy: existing.agent};
+    return {
+      outcome: 'held',
+      heldBy: typeof existing.agent === 'string' ? existing.agent : '?',
+    };
   }
 
   async heartbeat(id: string, agent: string, nowMs: number): Promise<boolean> {
-    return this.#transaction(() => {
-      if (this.#readClaim(id)?.agent !== agent) return false;
-      this.#run('UPDATE claim SET heartbeat_at = ? WHERE id = ?', [
-        new Date(nowMs).toISOString(),
-        id,
-      ]);
-      return true;
+    return this.#db.transaction(() => {
+      const changed = this.#db.run(
+        `UPDATE claim SET heartbeat_at_ms = ?
+         WHERE node_id = (SELECT id FROM node WHERE external_id = ?)
+           AND agent = ?`,
+        [nowMs, id, agent]
+      );
+      return changed > 0;
     });
   }
 
@@ -347,226 +346,324 @@ export class GraphStore {
     id: string,
     agent: string
   ): Promise<'released' | 'absent' | 'not-yours'> {
-    return this.#transaction(() => {
-      const existing = this.#readClaim(id);
-      if (existing === null) return 'absent';
+    return this.#db.transaction(() => {
+      const existing = this.#db.get(
+        `SELECT agent FROM claim
+         WHERE node_id = (SELECT id FROM node WHERE external_id = ?)`,
+        [id]
+      );
+      if (existing === undefined) return 'absent';
       if (existing.agent !== agent) return 'not-yours';
-      this.#run('DELETE FROM claim WHERE id = ?', [id]);
+      this.#db.run(
+        'DELETE FROM claim WHERE node_id = (SELECT id FROM node WHERE external_id = ?)',
+        [id]
+      );
       return 'released';
     });
   }
 
   /**
-   * Tasks and milestones share one id space (edges reference either), so an id
-   * must not name both — otherwise `partitionEdges` misreads its edges and
-   * removing one kind deletes the other's edges. Rejected at write time, where
-   * the fix is obvious: rename one, or remove the other first.
+   * Record that a milestone's review ran — the write that opens the milestone
+   * gate. Refuses a milestone that is not ready: recording a review of a
+   * milestone with open work would open the gate on unfinished work. The
+   * record is pinned to the member set it reviewed, so a review that files
+   * follow-up tasks into the milestone stops satisfying the gate.
    */
-  #requireDistinctKind(
+  async recordReview(
     id: string,
-    kind: 'task' | 'milestone',
-    other: 'task' | 'milestone'
-  ): void {
-    const clash = this.#db
-      .prepare(`SELECT 1 FROM ${other} WHERE id = ?`)
-      .get(id);
-    if (clash !== undefined) {
-      throw new DataError(
-        `id "${id}" is already a ${other}; it cannot also be a ${kind}`,
-        {
-          hint: `tasks and milestones share one id space — give the ${kind} a different id, or remove the ${other} first.`,
-        }
+    recordedAtMs: number,
+    options: DeriveOptions
+  ): Promise<{members: number}> {
+    return this.#db.transaction(() => {
+      const states = milestoneStates(this.#db, options);
+      const state = states.find((candidate) => candidate.id === id);
+      assert(
+        state !== undefined,
+        new DataError(`no milestone "${id}" in the graph`, {
+          hint:
+            states.length === 0
+              ? 'the graph holds no milestones — add them with `dispatch graph milestone set`.'
+              : `known milestones: ${states.map((entry) => entry.id).join(', ')}.`,
+        })
       );
-    }
-  }
+      assert(
+        state.readyForReview,
+        new DataError(
+          `milestone "${id}" is not ready for review: ${String(state.openCount)} of ${String(state.memberCount)} tasks are still open`,
+          {
+            hint: 'a milestone is ready only when every task in it is verified or canceled and none of their dependencies is unresolved.',
+          }
+        )
+      );
 
-  #readClaim(id: string): Claim | null {
-    const row = this.#db
-      .prepare('SELECT id, agent, heartbeat_at FROM claim WHERE id = ?')
-      .get(id);
-    if (row === undefined) return null;
-    return {
-      id: text(row.id) ?? '',
-      agent: text(row.agent) ?? '',
-      heartbeatAt: text(row.heartbeat_at) ?? '',
-    };
-  }
-
-  async getCursor(source: string): Promise<string | null> {
-    return this.#guard(() => {
-      const row = this.#db
-        .prepare('SELECT value FROM cursor WHERE source = ?')
-        .get(source);
-      return row === undefined ? null : (text(row.value) ?? null);
+      const nodeId = this.#nodeRef(id);
+      this.#db.run('DELETE FROM review WHERE milestone_id = ?', [nodeId]);
+      this.#db.run(
+        'INSERT INTO review (milestone_id, recorded_at_ms) VALUES (?, ?)',
+        [nodeId, recordedAtMs]
+      );
+      this.#db.run(
+        `INSERT INTO review_member (milestone_id, member_external_id)
+         SELECT ?, n.external_id
+         FROM task t JOIN node n ON n.id = t.node_id
+         WHERE t.milestone_id = ?`,
+        [nodeId, nodeId]
+      );
+      return {members: state.memberCount};
     });
   }
 
+  async getCursor(source: string): Promise<string | null> {
+    const row = this.#db.get('SELECT value FROM cursor WHERE source = ?', [
+      source,
+    ]);
+    return row === undefined ? null : String(row.value);
+  }
+
   async setCursor(source: string, value: string): Promise<void> {
-    this.#run(
-      'INSERT INTO cursor (source, value) VALUES (?, ?) ' +
-        'ON CONFLICT(source) DO UPDATE SET value = excluded.value',
+    this.#db.run(
+      `INSERT INTO cursor (source, value) VALUES (?, ?)
+       ON CONFLICT(source) DO UPDATE SET value = excluded.value`,
       [source, value]
     );
   }
 
   async clearCursor(source: string): Promise<boolean> {
-    return this.#run('DELETE FROM cursor WHERE source = ?', [source]) > 0;
+    return this.#db.run('DELETE FROM cursor WHERE source = ?', [source]) > 0;
   }
 
-  /**
-   * Record a milestone review against the member set it reviewed. An older record
-   * for the same milestone is replaced: only the current episode matters.
-   */
-  async recordReview(
-    milestone: string,
-    fingerprint: string,
-    recordedAt: string
-  ): Promise<void> {
-    this.#run(
-      'INSERT INTO review (milestone, fingerprint, recorded_at) VALUES (?, ?, ?) ' +
-        'ON CONFLICT(milestone) DO UPDATE SET fingerprint = excluded.fingerprint, ' +
-        'recorded_at = excluded.recorded_at',
-      [milestone, fingerprint, recordedAt]
+  #node(externalId: string): NodeRow | null {
+    const row = this.#db.get(
+      'SELECT id, kind FROM node WHERE external_id = ?',
+      [externalId]
     );
+    if (row === undefined) return null;
+    return {id: Number(row.id), kind: row.kind as NodeRow['kind']};
   }
 
-  async snapshot(): Promise<GraphSnapshot> {
-    return this.#guard(() => {
-      const cursors: Record<string, string> = {};
-      for (const row of this.#all(
-        'SELECT source, value FROM cursor ORDER BY source'
-      )) {
-        cursors[text(row.source) ?? ''] = text(row.value) ?? '';
-      }
-
-      return {
-        projects: this.#all('SELECT id, name FROM project ORDER BY id').map(
-          (row): Project => ({
-            id: text(row.id) ?? '',
-            name: text(row.name) ?? '',
-            declared: true,
-          })
-        ),
-        nodes: this.#all('SELECT * FROM task ORDER BY id').map(toTask),
-        edges: this.#all(
-          'SELECT blocker, blocked FROM edge ORDER BY blocker, blocked'
-        ).map((row): GraphEdge => ({
-          blocker: text(row.blocker) ?? '',
-          blocked: text(row.blocked) ?? '',
-        })),
-        milestones: this.#all(
-          'SELECT id, project, name FROM milestone ORDER BY project, id'
-        ).map((row): Milestone => ({
-          id: text(row.id) ?? '',
-          project: text(row.project) ?? '',
-          name: text(row.name) ?? '',
-        })),
-        claims: this.#all(
-          'SELECT id, agent, heartbeat_at FROM claim ORDER BY id'
-        ).map((row): Claim => ({
-          id: text(row.id) ?? '',
-          agent: text(row.agent) ?? '',
-          heartbeatAt: text(row.heartbeat_at) ?? '',
-        })),
-        reviews: this.#all(
-          'SELECT milestone, fingerprint, recorded_at FROM review ORDER BY milestone'
-        ).map((row): ReviewRecord => ({
-          milestone: text(row.milestone) ?? '',
-          fingerprint: text(row.fingerprint) ?? '',
-          recordedAt: text(row.recorded_at) ?? '',
-        })),
-        cursors,
-      };
-    });
-  }
-
-  #transaction<T>(body: () => T): T {
-    return this.#guard(() => {
-      this.#db.exec('BEGIN');
-      try {
-        const result = body();
-        this.#db.exec('COMMIT');
-        return result;
-      } catch (error) {
-        try {
-          this.#db.exec('ROLLBACK');
-        } catch {
-          // A failing ROLLBACK must not replace the error that caused it.
-        }
-        throw error;
-      }
-    });
+  /** The node for an id, creating a placeholder when nobody has written it. */
+  #nodeRef(externalId: string): number {
+    const existing = this.#node(externalId);
+    if (existing !== null) return existing.id;
+    this.#db.run("INSERT INTO node (external_id, kind) VALUES (?, 'unknown')", [
+      externalId,
+    ]);
+    const created = this.#node(externalId);
+    assert(created !== null, 'a node just inserted must exist');
+    return created.id;
   }
 
   /**
-   * Turn a SQLite failure into an environment error. A locked or unwritable
-   * database is a fact about the machine, not a mistake in how the CLI was
-   * called — left unwrapped it reads as a bug in the CLI.
+   * The node for a task/milestone being written: created with its kind, or
+   * promoted from a placeholder — after checking the promotion keeps every
+   * edge and milestone reference legal. An id already holding the *other* kind
+   * is a conflict: tasks and milestones share one id space.
    */
-  #guard<T>(body: () => T): T {
-    try {
-      return body();
-    } catch (cause) {
-      if (cause instanceof DispatchError) throw cause;
-      throw new EnvironmentError(
-        `the graph database rejected an operation: ${describeCause(cause)}`,
-        {
-          hint: 'if the database is locked, another dispatch command is mid-write — retry shortly. Otherwise check the file is a writable SQLite database and the disk is not full.',
-        }
-      );
+  #materialize(externalId: string, kind: 'task' | 'milestone'): number {
+    const existing = this.#node(externalId);
+    if (existing === null) {
+      this.#db.run('INSERT INTO node (external_id, kind) VALUES (?, ?)', [
+        externalId,
+        kind,
+      ]);
+      const created = this.#node(externalId);
+      assert(created !== null, 'a node just inserted must exist');
+      return created.id;
     }
+    if (existing.kind === kind) return existing.id;
+
+    assert(
+      existing.kind === 'unknown',
+      new DataError(
+        `id "${externalId}" is already a ${existing.kind}; it cannot also be a ${kind}`,
+        {
+          hint: `tasks and milestones share one id space — give the ${kind} a different id, or remove the ${existing.kind} first.`,
+        }
+      )
+    );
+
+    this.#rejectMixedEdges(existing.id, externalId, kind);
+    if (kind === 'task') this.#rejectMilestoneRefs(existing.id, externalId);
+    this.#db.run('UPDATE node SET kind = ? WHERE id = ?', [kind, existing.id]);
+    return existing.id;
   }
 
-  #run(sql: string, params: SqlValue[]): number {
-    return this.#guard(() =>
-      Number(this.#db.prepare(sql).run(...params).changes)
+  /**
+   * The milestone a task names. An id nobody has written stays a placeholder —
+   * the document reports it as an unknown milestone until it is declared — but
+   * an id already known to be a task is a data error, caught here where the
+   * fix is obvious.
+   */
+  #milestoneRef(externalId: string): number {
+    const existing = this.#node(externalId);
+    if (existing === null) return this.#nodeRef(externalId);
+    assert(
+      existing.kind !== 'task',
+      new DataError(
+        `"${externalId}" is a task; a task cannot be another task's milestone`,
+        {
+          hint: 'point --milestone at a milestone id, or declare the milestone first with `dispatch graph milestone set`.',
+        }
+      )
+    );
+    return existing.id;
+  }
+
+  #removeNode(externalId: string, kind: 'task' | 'milestone'): boolean {
+    const existing = this.#node(externalId);
+    if (existing?.kind !== kind) return false;
+    // The FKs cascade: the satellite row, every edge touching the node, its
+    // claim, and (for a milestone) its review all go with it.
+    this.#db.run('DELETE FROM node WHERE id = ?', [existing.id]);
+    return true;
+  }
+
+  #insertEdge(blocker: string, blocked: string): boolean {
+    assert(
+      blocker !== blocked,
+      new DataError(`a node cannot block itself (${blocker})`, {
+        hint: 'a self-edge is an illegal one-node cycle.',
+      })
+    );
+    const blockerId = this.#nodeRef(blocker);
+    const blockedId = this.#nodeRef(blocked);
+    this.#rejectTaskMilestoneEdge(
+      {id: blockerId, externalId: blocker},
+      {id: blockedId, externalId: blocked}
+    );
+    return (
+      this.#db.run(
+        'INSERT INTO edge (blocker, blocked) VALUES (?, ?) ON CONFLICT DO NOTHING',
+        [blockerId, blockedId]
+      ) > 0
     );
   }
 
-  #all(sql: string): Record<string, unknown>[] {
-    return this.#db.prepare(sql).all();
+  #rejectTaskMilestoneEdge(
+    a: {id: number; externalId: string},
+    b: {id: number; externalId: string}
+  ): void {
+    const row = this.#db.get(
+      `SELECT na.kind AS a_kind, nb.kind AS b_kind
+       FROM node na, node nb WHERE na.id = ? AND nb.id = ?`,
+      [a.id, b.id]
+    );
+    const kinds = new Set([row?.a_kind, row?.b_kind]);
+    assert(
+      !(kinds.has('task') && kinds.has('milestone')),
+      new DataError(
+        `an edge cannot join a task and a milestone (${a.externalId} -> ${b.externalId})`,
+        {
+          hint: 'sequence milestones with milestone-to-milestone edges, and attach a task to a milestone with `task set --milestone` instead.',
+        }
+      )
+    );
+  }
+
+  /**
+   * A placeholder being promoted must not turn an existing edge into a
+   * task↔milestone edge — the write that would have created one directly is
+   * refused, so the promotion is held to the same rule.
+   */
+  #rejectMixedEdges(
+    nodeId: number,
+    externalId: string,
+    kind: 'task' | 'milestone'
+  ): void {
+    const opposite = kind === 'task' ? 'milestone' : 'task';
+    const partner = this.#db.get(
+      `SELECT other.external_id AS id
+       FROM edge e
+       JOIN node other
+         ON other.id = CASE WHEN e.blocker = ? THEN e.blocked ELSE e.blocker END
+       WHERE (e.blocker = ? OR e.blocked = ?) AND other.kind = ?
+       LIMIT 1`,
+      [nodeId, nodeId, nodeId, opposite]
+    );
+    assert(
+      partner === undefined,
+      new DataError(
+        `"${externalId}" cannot become a ${kind}: it has an edge with the ${opposite} "${String(partner?.id)}", and an edge cannot join a task and a milestone`,
+        {
+          hint: 'remove the edge first, or fix whichever id is wrong.',
+        }
+      )
+    );
+  }
+
+  /** A node tasks name as their milestone cannot be promoted to a task. */
+  #rejectMilestoneRefs(nodeId: number, externalId: string): void {
+    const referrer = this.#db.get(
+      `SELECT n.external_id AS id
+       FROM task t JOIN node n ON n.id = t.node_id
+       WHERE t.milestone_id = ? LIMIT 1`,
+      [nodeId]
+    );
+    assert(
+      referrer === undefined,
+      new DataError(
+        `"${externalId}" cannot become a task: task "${String(referrer?.id)}" names it as its milestone`,
+        {
+          hint: 'declare it with `dispatch graph milestone set`, or fix the referring task first.',
+        }
+      )
+    );
+  }
+
+  /**
+   * Throw (rolling back the enclosing transaction, so the edge is never
+   * created) if `node` now sits on a dependency cycle. A cycle can only have
+   * appeared because of an edge just written through `node`, so checking it
+   * alone is enough. Walked by a recursive CTE over the blocker→blocked edges.
+   */
+  #rejectIfCycle(externalId: string): void {
+    const onCycle = this.#db.get(
+      `WITH RECURSIVE reach(id) AS (
+         SELECT blocked FROM edge
+         WHERE blocker = (SELECT id FROM node WHERE external_id = ?)
+         UNION
+         SELECT e.blocked FROM edge e JOIN reach r ON e.blocker = r.id
+       )
+       SELECT 1 FROM reach
+       WHERE id = (SELECT id FROM node WHERE external_id = ?) LIMIT 1`,
+      [externalId, externalId]
+    );
+
+    assert(
+      onCycle === undefined,
+      new DataError(
+        `that edge would create a dependency cycle through ${externalId}`,
+        {
+          hint: 'a dependency cycle is illegal. Remove the opposing edge first, or fix the dependency direction.',
+        }
+      )
+    );
+  }
+
+  #projectRef(externalId: string): number {
+    this.#db.run(
+      'INSERT INTO project (external_id, name, declared) VALUES (?, ?, 0) ON CONFLICT DO NOTHING',
+      [externalId, externalId]
+    );
+    const row = this.#db.get('SELECT id FROM project WHERE external_id = ?', [
+      externalId,
+    ]);
+    assert(row !== undefined, 'a project just inserted must exist');
+    return Number(row.id);
   }
 }
 
-/* eslint-enable @typescript-eslint/require-await --
- * End of the async facade; the helpers below are plain synchronous functions. */
+/* eslint-enable @typescript-eslint/require-await */
 
-function isStale(claim: Claim, nowMs: number, staleAfterMs: number): boolean {
-  const heartbeat = Date.parse(claim.heartbeatAt);
-  if (Number.isNaN(heartbeat)) return false;
-  return nowMs - heartbeat > staleAfterMs;
-}
-
-function toTask(row: Record<string, unknown>): GraphNode {
-  const role = text(row.role) ?? '';
-  const targetKind = text(row.target_kind) ?? '';
-  const rawLabels: unknown = JSON.parse(text(row.labels) ?? '[]');
-
-  return {
-    id: text(row.id) ?? '',
-    project: text(row.project) ?? '',
-    url: text(row.url) ?? '',
-    title: text(row.title) ?? '',
-    // Validated on the way in; an invalid value on the way out means a hand-edited
-    // database, and falling back beats crashing the orchestrator's tick.
-    role: isRole(role) ? role : 'backlog',
-    milestone: text(row.milestone),
-    targetKind: isTargetKind(targetKind) ? targetKind : 'pr',
-    humanInteractive: row.human_interactive === 1,
-    injected: row.injected === 1,
-    priority: typeof row.priority === 'number' ? row.priority : null,
-    branchHint: text(row.branch_hint),
-    labels: Array.isArray(rawLabels)
-      ? rawLabels.filter((label): label is string => typeof label === 'string')
-      : [],
-    updatedAt: text(row.updated_at),
-  };
-}
-
-/** SQLite hands values back as `string | number | bigint | null | Uint8Array`. */
-function text(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'bigint')
-    return String(value);
-  return null;
+/** Parse an RFC 3339 instant to epoch ms, or reject it where the fix is easy. */
+function parseInstant(value: string | null, flag: string): number | null {
+  if (value === null) return null;
+  const ms = Date.parse(value);
+  assert(
+    !Number.isNaN(ms),
+    new DataError(`${flag} is not a timestamp: "${value}"`, {
+      hint: `pass an RFC 3339 instant (e.g. 2026-07-15T12:00:00Z), or omit ${flag}.`,
+    })
+  );
+  return ms;
 }

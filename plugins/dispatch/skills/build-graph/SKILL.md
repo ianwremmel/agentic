@@ -26,7 +26,7 @@ hand-edit the graph.
    ```shell
    dispatch graph project set   --id P --name "…"
    dispatch graph milestone set --id M1 --project P --name "M1"
-   dispatch graph task set      --id CLC-945 --project P --state "In Progress" \
+   dispatch graph task set      --id CLC-945 --project P --role in-progress \
        [--milestone M1] [--priority 2] [--url U] [--title T] [--labels a,b]
    dispatch graph edge add      --blocker CLC-944 --blocked CLC-945
    ```
@@ -36,10 +36,13 @@ hand-edit the graph.
 
 ## Writing rules
 
-- **Pass native fields.** Give `task set` the tracker's `--state` and `--labels`.
-  The CLI derives the role, target-kind, and human-interactive flag — you never
-  set those. An unmapped state fails with exit 4 naming the state; add it to the
-  config's `states`, or escalate. Never guess a role.
+- **You map the state; the CLI knows only the protocol.** `--role` takes a
+  normalized role (`backlog`, `paused`, `awaiting-external`, `available`,
+  `in-progress`, `in-review`, `finished`, `delivered`, `verified`, `canceled`).
+  The augmentation skill carries the tracker's state→role table; a state it does
+  not cover is escalated to the operator. Never guess a role. Labels pass
+  through natively — the CLI derives target-kind and human-interactive from
+  `--labels` plus config.
 - **Milestones are sequenced with edges, not an order.** `edge add --blocker M1
   --blocked M2` means M2's work waits on M1; a milestone can have several
   predecessors. A task joins a milestone with `task set --milestone M1`.

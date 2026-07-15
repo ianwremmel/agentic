@@ -11,10 +11,10 @@ Every command takes `--db <path>` (default `$DISPATCH_GRAPH_DB`, else
 | ------------------------------------------------------------- | -------------------------------------------------------- |
 | `graph project set --id P [--name N]`                         | Declare a project (only declared projects go terminal).  |
 | `graph project rm --id P`                                     | Forget a project; its tasks are left alone.              |
-| `graph task set --id T --project P --state S [flags]`         | Upsert a task (see below).                               |
+| `graph task set --id T --project P --role R [flags]`          | Upsert a task (see below).                               |
 | `graph task rm --id T`                                        | Delete a task, its edges, and any claim.                 |
 | `graph milestone set --id M --project P [--name N]`           | Upsert a milestone.                                      |
-| `graph milestone rm --id M`                                   | Delete a milestone and its edges.                        |
+| `graph milestone rm --id M`                                   | Delete a milestone, its edges, and its review.           |
 | `graph edge add --blocker B --blocked D`                      | `B` blocks `D` — `D` depends on `B`.             |
 | `graph edge rm --blocker B --blocked D`                       | Remove one edge.                                         |
 | `graph edge set --blocked D --blockers a,b`                   | Replace all of `D`'s blockers. Empty list clears them.   |
@@ -22,13 +22,16 @@ Every command takes `--db <path>` (default `$DISPATCH_GRAPH_DB`, else
 | `graph reset`                                                 | Wipe the graph (keeps claims, reviews, cursors).         |
 
 `task set` flags: `--milestone <id>`, `--priority <n>` (lower = more urgent; omit
-if none), `--url`, `--title`, `--labels a,b`, `--branch-hint`, `--updated-at <ts>`,
-`--injected` (rank to the top of the frontier), `--tracker <name>` (default
-`linear`, selects the state mapping).
+if none), `--url`, `--title`, `--labels a,b`, `--branch-hint`, `--updated-at <ts>`
+(RFC 3339; anything unparseable fails), `--injected` (rank to the top of the
+frontier). `--role` takes a normalized protocol role — the caller does the
+tracker-state mapping.
 
 Edge endpoints may be tasks or milestones. Two tasks form a dependency; two
-milestones form sequencing; a task-and-milestone edge is surfaced as an anomaly
-(attach a task with `--milestone` instead).
+milestones form sequencing; an edge that would join a task to a milestone is
+refused (attach a task with `--milestone` instead). An edge may name an id that
+has not been written yet — it holds its dependents blocked and is reported as a
+dangling-edge anomaly until the id is written.
 
 ### Reading and coordinating
 
@@ -69,7 +72,6 @@ if it exists. All keys optional:
 
 ```json
 {
-  "states": {"Ready for QA": "in-review"},
   "humanInteractiveLabels": ["human-only", "needs-human"],
   "verificationLabels": ["verification"],
   "parkedRoles": ["awaiting-external", "paused"],
@@ -77,6 +79,4 @@ if it exists. All keys optional:
 }
 ```
 
-`states` maps a native tracker state onto a protocol role, overriding the built-in
-table (a team override). The label lists derive a task's target-kind and
-human-interactive flag.
+The label lists derive a task's target-kind and human-interactive flag.

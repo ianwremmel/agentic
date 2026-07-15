@@ -33,7 +33,7 @@ dependency graph the `build-graph` skill produces — a SQLite-backed store
 (`node:sqlite`) plus the derivation an orchestrator schedules from:
 
 ```shell
-dispatch graph task set --id CLC-945 --project P --state "In Progress"  # typed writes
+dispatch graph task set --id CLC-945 --project P --role in-progress     # typed writes
 dispatch graph doc                                                      # the derived document
 dispatch graph next --claim --agent <session-id>                        # grab the next task
 ```

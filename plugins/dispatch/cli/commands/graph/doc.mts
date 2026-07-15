@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import {parseArgsOrUsage} from '../../lib/args.mts';
 import type {Command} from '../../lib/command.mts';
 import {UsageError} from '../../lib/errors.mts';
-import type {ProjectCounts} from '../../lib/graph/derive.mts';
 import {toJson, toXml} from '../../lib/graph/document.mts';
+import type {ProjectCounts} from '../../lib/graph/types.mts';
 import {writeLine} from '../../lib/io.mts';
 import {
   deriveGraph,
@@ -50,7 +50,7 @@ export const doc: Command = {
 
     await withStore(values, context, async (store, config) => {
       const staleAfterMs = resolveStaleAfterMs(values['stale-after'], config);
-      const graph = await deriveGraph(store, config, staleAfterMs);
+      const graph = deriveGraph(store, config, staleAfterMs);
 
       await writeLine(
         context.stdout,

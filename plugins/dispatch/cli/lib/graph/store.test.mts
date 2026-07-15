@@ -1,63 +1,64 @@
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import {GraphStore} from './store.mts';
-import {node} from './test-support.mts';
-import type {GraphNode} from './types.mts';
-
-async function openStore(): Promise<GraphStore> {
-  return GraphStore.open(':memory:');
-}
-
-function task(id: string, overrides: Partial<GraphNode> = {}): GraphNode {
-  return node(id, overrides);
-}
+import {derive} from './derive.mts';
+import {edges, frontier} from './queries.mts';
+import {node, seededStore} from './test-support.mts';
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.parse('2026-07-14T12:00:00.000Z');
+const OPTS = {nowMs: NOW, staleAfterMs: HOUR};
 
 describe('tasks and edges', () => {
   it('upserts a task and reads it back', async () => {
-    const store = await openStore();
-    await store.upsertTask(task('A', {role: 'in-progress', title: 'Thing'}));
-    await store.upsertTask(task('A', {role: 'in-review', title: 'Renamed'}));
+    const store = await seededStore();
+    await store.upsertTask(node('A', {role: 'in-progress', title: 'Thing'}));
+    await store.upsertTask(node('A', {role: 'in-review', title: 'Renamed'}));
 
-    const {nodes} = await store.snapshot();
+    const {nodes} = derive(store.database);
     const stored = nodes[0];
     assert.ok(stored);
     assert.equal(nodes.length, 1);
-    assert.equal(stored.role, 'in-review');
-    assert.equal(stored.title, 'Renamed');
+    assert.equal(stored.node.role, 'in-review');
+    assert.equal(stored.node.title, 'Renamed');
+    await store.close();
+  });
+
+  it('rejects an --updated-at that is not a timestamp', async () => {
+    const store = await seededStore();
+    await assert.rejects(
+      () => store.upsertTask(node('A', {updatedAt: 'yesterday-ish'})),
+      /--updated-at is not a timestamp/
+    );
     await store.close();
   });
 
   it('removes a task with its edges and claim', async () => {
-    const store = await openStore();
-    await store.upsertTask(task('A'));
-    await store.upsertTask(task('B'));
-    await store.addEdge('A', 'B');
-    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    const store = await seededStore({
+      nodes: [node('A'), node('B')],
+      edges: [['A', 'B']],
+    });
+    assert.equal((await store.claim('A', 'agent-a', OPTS)).outcome, 'claimed');
 
     assert.equal(await store.removeTask('A'), true);
-    const snap = await store.snapshot();
+    const graph = derive(store.database, OPTS);
     assert.deepEqual(
-      snap.nodes.map((n) => n.id),
+      graph.nodes.map((entry) => entry.node.id),
       ['B']
     );
-    assert.deepEqual(snap.edges, []);
-    assert.deepEqual(snap.claims, []);
+    assert.deepEqual(graph.edges, []);
+    assert.equal(graph.nodes[0]?.claim, null);
     await store.close();
   });
 
   it('replaces one direction of a node with edge set, leaving the other alone', async () => {
-    const store = await openStore();
+    const store = await seededStore();
     await store.setEdges('B', 'blockers', ['A']);
     await store.setEdges('B', 'blocks', ['C']);
     // Re-declare B's blockers as exactly {A2}; B->C must survive.
     await store.setEdges('B', 'blockers', ['A2']);
 
-    const {edges} = await store.snapshot();
-    assert.deepEqual(edges, [
+    assert.deepEqual(edges(store.database), [
       {blocker: 'A2', blocked: 'B'},
       {blocker: 'B', blocked: 'C'},
     ]);
@@ -65,22 +66,21 @@ describe('tasks and edges', () => {
   });
 
   it('clears a direction when edge set is given an empty list', async () => {
-    const store = await openStore();
+    const store = await seededStore();
     await store.setEdges('B', 'blockers', ['A']);
     await store.setEdges('B', 'blockers', []);
-    assert.deepEqual((await store.snapshot()).edges, []);
+    assert.deepEqual(edges(store.database), []);
     await store.close();
   });
 
   it('refuses an edge that would close a cycle, leaving the graph unchanged', async () => {
-    const store = await openStore();
+    const store = await seededStore();
     await store.addEdge('A', 'B');
     await store.addEdge('B', 'C');
     await assert.rejects(() => store.addEdge('C', 'A'), /dependency cycle/);
 
     // Rolled back — the offending edge is not present.
-    const {edges} = await store.snapshot();
-    assert.deepEqual(edges, [
+    assert.deepEqual(edges(store.database), [
       {blocker: 'A', blocked: 'B'},
       {blocker: 'B', blocked: 'C'},
     ]);
@@ -88,7 +88,7 @@ describe('tasks and edges', () => {
   });
 
   it('refuses an edge set that would close a cycle', async () => {
-    const store = await openStore();
+    const store = await seededStore();
     await store.addEdge('A', 'B');
     await store.addEdge('B', 'C');
     // C is reachable from A, so making C a blocker of A closes A->B->C->A.
@@ -99,17 +99,26 @@ describe('tasks and edges', () => {
     await store.close();
   });
 
+  it('refuses a self-edge', async () => {
+    const store = await seededStore();
+    await assert.rejects(
+      () => store.setEdges('A', 'blockers', ['A']),
+      /cannot block itself/
+    );
+    await store.close();
+  });
+
   it('refuses an id that already names the other kind', async () => {
-    // Tasks and milestones share the edge id space, so a collision would make
+    // Tasks and milestones share the node id space, so a collision would make
     // an edge ambiguous and a delete wipe the wrong kind's edges.
-    const store = await openStore();
+    const store = await seededStore();
     await store.upsertMilestone({id: 'X', project: 'P', name: 'X'});
     await assert.rejects(
-      () => store.upsertTask(task('X')),
+      () => store.upsertTask(node('X')),
       /already a milestone/
     );
 
-    await store.upsertTask(task('Y'));
+    await store.upsertTask(node('Y'));
     await assert.rejects(
       () => store.upsertMilestone({id: 'Y', project: 'P', name: 'Y'}),
       /already a task/
@@ -117,102 +126,195 @@ describe('tasks and edges', () => {
     await store.close();
   });
 
-  it('reset wipes the graph but keeps claims and reviews', async () => {
-    const store = await openStore();
-    await store.upsertTask(task('A'));
-    await store.upsertMilestone({id: 'm1', project: 'P', name: 'M1'});
-    await store.claim('A', 'agent-a', NOW, HOUR, true);
-    await store.recordReview('m1', 'fp', '2026-07-10T00:00:00.000Z');
+  it('refuses an edge joining a task and a milestone', async () => {
+    const store = await seededStore({
+      milestones: [{id: 'm1', project: 'P', name: 'M1'}],
+      nodes: [node('A')],
+    });
+    await assert.rejects(
+      () => store.addEdge('m1', 'A'),
+      /cannot join a task and a milestone/
+    );
+    await store.close();
+  });
+
+  it('promotes a placeholder named by an edge when its task arrives', async () => {
+    const store = await seededStore({nodes: [node('B')]});
+    await store.addEdge('LATER', 'B');
+    await store.upsertTask(node('LATER'));
+
+    const graph = derive(store.database);
+    assert.deepEqual(
+      graph.anomalies.filter((a) => a.kind === 'dangling-edge'),
+      []
+    );
+    await store.close();
+  });
+
+  it('refuses a promotion that would create a task↔milestone edge', async () => {
+    const store = await seededStore({
+      milestones: [{id: 'm1', project: 'P', name: 'M1'}],
+    });
+    // A sequencing edge to a not-yet-declared id; that id then shows up as a
+    // task, which would silently turn the edge into a task↔milestone edge.
+    await store.addEdge('m1', 'LATER');
+    await assert.rejects(
+      () => store.upsertTask(node('LATER')),
+      /cannot become a task/
+    );
+    await store.close();
+  });
+
+  it('refuses to make a task out of an id tasks use as their milestone', async () => {
+    const store = await seededStore({
+      nodes: [node('A', {milestone: 'M-LATER'})],
+    });
+    await assert.rejects(
+      () => store.upsertTask(node('M-LATER')),
+      /names it as its milestone/
+    );
+    await store.close();
+  });
+
+  it('refuses --milestone pointed at a task', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await assert.rejects(
+      () => store.upsertTask(node('B', {milestone: 'A'})),
+      /a task cannot be another task's milestone/
+    );
+    await store.close();
+  });
+});
+
+describe('reset', () => {
+  it('wipes the graph but keeps claims, reviews, and cursors', async () => {
+    const store = await seededStore({
+      milestones: [{id: 'm1', project: 'P', name: 'M1'}],
+      nodes: [node('A'), node('V', {role: 'verified', milestone: 'm1'})],
+    });
+    assert.equal((await store.claim('A', 'agent-a', OPTS)).outcome, 'claimed');
+    await store.recordReview('m1', NOW, {});
+    await store.setCursor('linear', 'token');
 
     await store.reset();
 
-    const snap = await store.snapshot();
-    assert.deepEqual(snap.nodes, []);
-    assert.deepEqual(snap.milestones, []);
-    assert.equal(snap.claims.length, 1);
-    assert.equal(snap.reviews.length, 1);
+    const graph = derive(store.database, OPTS);
+    assert.deepEqual(graph.nodes, []);
+    assert.deepEqual(graph.milestones, []);
+    assert.equal(await store.getCursor('linear'), 'token');
+
+    // The re-sync brings the same graph back: the claim still holds its task
+    // off the frontier, and the recorded review still covers the milestone.
+    await store.upsertProject({id: 'P', name: 'Project'});
+    await store.upsertMilestone({id: 'm1', project: 'P', name: 'M1'});
+    await store.upsertTask(node('A'));
+    await store.upsertTask(node('V', {role: 'verified', milestone: 'm1'}));
+
+    const resynced = derive(store.database, OPTS);
+    assert.equal(
+      resynced.nodes.find((entry) => entry.node.id === 'A')?.claim?.agent,
+      'agent-a'
+    );
+    assert.equal(resynced.milestones[0]?.reviewRecorded, true);
     await store.close();
   });
 });
 
 describe('claims', () => {
   it('claims a free, available task', async () => {
-    const store = await openStore();
-    const result = await store.claim('A', 'agent-a', NOW, HOUR, true);
-    assert.equal(result.outcome, 'claimed');
+    const store = await seededStore({nodes: [node('A')]});
+    assert.equal((await store.claim('A', 'agent-a', OPTS)).outcome, 'claimed');
     await store.close();
   });
 
-  it('refuses to claim a free task that is not available', async () => {
-    const store = await openStore();
-    const result = await store.claim('A', 'agent-a', NOW, HOUR, false);
+  it('refuses to claim a task that is not available, naming its state', async () => {
+    const store = await seededStore({
+      nodes: [node('A'), node('B')],
+      edges: [['A', 'B']],
+    });
+    const result = await store.claim('B', 'agent-a', OPTS);
     assert.equal(result.outcome, 'not-available');
-    assert.deepEqual((await store.snapshot()).claims, []);
+    assert.equal(result.classification, 'blocked');
     await store.close();
   });
 
-  it('a re-claim by the holder just refreshes the heartbeat', async () => {
-    const store = await openStore();
-    await store.claim('A', 'agent-a', NOW, HOUR, true);
-    const later = NOW + 5 * 60 * 1000;
-    const result = await store.claim('A', 'agent-a', later, HOUR, false);
-    assert.equal(result.outcome, 'refreshed');
+  it('refuses to claim a task the graph does not hold', async () => {
+    const store = await seededStore();
     assert.equal(
-      (await store.snapshot()).claims[0]?.heartbeatAt,
-      new Date(later).toISOString()
+      (await store.claim('A', 'agent-a', OPTS)).outcome,
+      'unknown-task'
     );
     await store.close();
   });
 
+  it('a re-claim by the holder just refreshes the heartbeat', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
+    const result = await store.claim('A', 'agent-a', {
+      nowMs: NOW + 5 * 60 * 1000,
+      staleAfterMs: HOUR,
+    });
+    assert.equal(result.outcome, 'refreshed');
+    await store.close();
+  });
+
   it('refuses a live claim held by another agent', async () => {
-    const store = await openStore();
-    await store.claim('A', 'agent-a', NOW, HOUR, true);
-    const result = await store.claim('A', 'agent-b', NOW + 60_000, HOUR, true);
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
+    const result = await store.claim('A', 'agent-b', {
+      nowMs: NOW + 60_000,
+      staleAfterMs: HOUR,
+    });
     assert.equal(result.outcome, 'held');
     assert.equal(result.heldBy, 'agent-a');
     await store.close();
   });
 
-  it('reclaims a stale claim for a new agent', async () => {
-    const store = await openStore();
-    await store.claim('A', 'agent-a', NOW, HOUR, true);
-    // Two hours later, agent-a's claim is stale.
-    const result = await store.claim(
-      'A',
-      'agent-b',
-      NOW + 2 * HOUR,
-      HOUR,
-      true
-    );
+  it('reclaims a stale claim for a new agent, even off the frontier', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
+    // Two hours later agent-a's claim is stale — and A classifies as
+    // in-flight under it, which must not stop the takeover.
+    const result = await store.claim('A', 'agent-b', {
+      nowMs: NOW + 2 * HOUR,
+      staleAfterMs: HOUR,
+    });
     assert.equal(result.outcome, 'reclaimed');
-    assert.equal((await store.snapshot()).claims[0]?.agent, 'agent-b');
     await store.close();
   });
 
-  it('claimNext takes the first candidate no live agent holds', async () => {
-    const store = await openStore();
-    await store.claim('A', 'agent-a', NOW, HOUR, true); // A held live
-    const taken = await store.claimNext(
-      ['A', 'B', 'C'],
-      'agent-b',
-      NOW + 60_000,
-      HOUR
-    );
+  it('claimNext takes the top candidate no live agent holds', async () => {
+    const store = await seededStore({
+      nodes: [node('A', {priority: 1}), node('B', {priority: 2}), node('C')],
+    });
+    await store.claim('A', 'agent-a', OPTS); // A held live
+    const taken = await store.claimNext('agent-b', {
+      nowMs: NOW + 60_000,
+      staleAfterMs: HOUR,
+    });
     assert.equal(taken?.id, 'B');
+    // B is now claimed too, so the frontier holds only C.
+    assert.deepEqual(
+      frontier(store.database, {
+        nowMs: NOW + 60_000,
+        staleAfterMs: HOUR,
+      }).map((entry) => entry.node.id),
+      ['C']
+    );
     await store.close();
   });
 
   it('heartbeat refreshes only the holder', async () => {
-    const store = await openStore();
-    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
     assert.equal(await store.heartbeat('A', 'agent-b', NOW + 60_000), false);
     assert.equal(await store.heartbeat('A', 'agent-a', NOW + 60_000), true);
     await store.close();
   });
 
   it('release is idempotent and refuses another agent', async () => {
-    const store = await openStore();
-    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
     assert.equal(await store.release('A', 'agent-b'), 'not-yours');
     assert.equal(await store.release('A', 'agent-a'), 'released');
     assert.equal(await store.release('A', 'agent-a'), 'absent');
@@ -220,9 +322,53 @@ describe('claims', () => {
   });
 });
 
+describe('reviews', () => {
+  it('refuses to record a review of a milestone with open work', async () => {
+    const store = await seededStore({
+      milestones: [{id: 'm1', project: 'P', name: 'M1'}],
+      nodes: [node('A', {milestone: 'm1'})],
+    });
+    await assert.rejects(
+      () => store.recordReview('m1', NOW, {}),
+      /not ready for review/
+    );
+    await store.close();
+  });
+
+  it('refuses to record a review of a milestone the graph does not hold', async () => {
+    const store = await seededStore();
+    await assert.rejects(
+      () => store.recordReview('m1', NOW, {}),
+      /no milestone "m1"/
+    );
+    await store.close();
+  });
+});
+
+describe('projects', () => {
+  it('undeclares a project on rm, leaving its tasks alone', async () => {
+    const store = await seededStore({nodes: [node('A', {role: 'verified'})]});
+
+    // Declared and finished: terminal.
+    assert.equal(derive(store.database).counts[0]?.terminal, true);
+
+    assert.equal(await store.removeProject('P'), true);
+    assert.equal(await store.removeProject('P'), false);
+
+    const graph = derive(store.database);
+    // Still surfaced (a task names it) but partial now, so never terminal.
+    const counts = graph.counts[0];
+    assert.ok(counts);
+    assert.equal(counts.partial, true);
+    assert.equal(counts.terminal, false);
+    assert.equal(graph.nodes.length, 1);
+    await store.close();
+  });
+});
+
 describe('cursors', () => {
   it('stores, reads, and clears a cursor', async () => {
-    const store = await openStore();
+    const store = await seededStore();
     await store.setCursor('linear', '2026-07-11T00:00:00.000Z');
     assert.equal(await store.getCursor('linear'), '2026-07-11T00:00:00.000Z');
     assert.equal(await store.clearCursor('linear'), true);

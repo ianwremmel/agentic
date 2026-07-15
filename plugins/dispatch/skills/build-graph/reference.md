@@ -47,8 +47,8 @@ milestones form sequencing; a task-and-milestone edge is surfaced as an anomaly
 `claimStaleAfter`, else 10m. It is read by `doc`, `next`, and `claim` — the
 commands that decide whether a claim still holds.
 
-`next` prints one logfmt line (`id=… target-kind=… url=… branch-hint=…`) or
-nothing when the frontier is empty; empty output with exit 0 is "no work now".
+`next` prints one `<ticket>` element — the same shape the document uses — or
+nothing (exit 0) when the frontier is empty, which is the "no work now" signal.
 
 ## Exit codes
 

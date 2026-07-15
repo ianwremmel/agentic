@@ -140,6 +140,27 @@ DoD artifact and the ticket↔PR mapping.
 PR-venue writes go through the **forge**, the path `deliver` uses — never the
 tracker's API.
 
+## Graph claim
+
+Flags, store resolution, and exit codes are `dispatch graph`'s — see
+[`build-graph/reference.md`](../build-graph/reference.md). `claimed`,
+`refreshed` (already yours — a resume), and `reclaimed` (stale takeover) all
+succeed. `held` is another agent's live claim (exit 3). Exit 4 carries the
+reason: `unknown-task`, or `not-available` with the classification.
+
+**Subgraph fetch (`unknown-task`).** Fetch the ticket and every transitive
+blocker and write them — the ticket-scoped slice of what `build-graph` does per
+project:
+
+- Each ticket: `get_issue(id, includeRelations=true)` →
+  `dispatch graph task set --id … --project … --role <mapped> --url … --title …`
+  (plus `--labels`/`--priority`/`--branch-hint` when present), role mapped by
+  the table above; then `edge set --blocked <id> --blockers <blockedBy ids>`.
+  Repeat for each blocker not yet written, to closure.
+- Omit `--milestone` and never run `project set`: a slice must not make the
+  project look complete or wire milestone gates it cannot see. The next full
+  `build-graph` run fills those in.
+
 ## Communication recap
 
 Full treatment in [`../deliver/reference.md`](../deliver/reference.md). Essentials:
@@ -165,21 +186,24 @@ resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human
 ## Dispatch artifacts
 
 Standalone writes none of this (report to the session and stop). A **dispatched**
-coordinator honors the orchestrator's contract; the orchestrator owns the real
-paths, the shapes below are the stub. Base:
+coordinator honors the `orchestrate` contract. Base:
 `${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-ticket/<key>/`,
 `<key>` = `ticket_id` (ticket) or `<repo>#<pr_number>` (bare PR).
 
-- **`lock.json`** — ticket- or PR-keyed; heartbeated on a fixed interval;
-  staleness judged by age; mirror a "working" label where available.
-  `{ "key":"DEV-123", "agent_id":"…", "kind":"ticket|pr", "heartbeat":"<RFC3339>" }`
+Ticket-backed liveness is the **graph claim** (claim/heartbeat/release per
+SKILL — no lock file); mirror a "working" label where available. A bare PR has
+no graph node, so it keeps a PR-keyed lock file instead:
+
+- **`lock.json`** (bare PR only) — heartbeated on a fixed interval; staleness
+  judged by age.
+  `{ "key":"o/r#7", "agent_id":"…", "kind":"pr", "heartbeat":"<RFC3339>" }`
 - **`outcome.json`** — written as the final action.
   `{ "key":"DEV-123", "outcome":"…", "ticket_url":"…|null", "pr_urls":[…], "retryable":null, "subtasks":[], "detail":"…" }`
   (`retryable` is a boolean only for a `failed` verification; `subtasks` lists filed
   ids on `decomposed`.)
 
-The compute-slot **ledger** (`MAX_PARALLEL`) is the orchestrator's, not written
-here — see Slot seam in `SKILL.md`.
+There is no compute-slot ledger yet — `orchestrate` bounds concurrency at
+dispatch; see Slot seam in `SKILL.md`.
 
 ## Logging
 

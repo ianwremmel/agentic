@@ -116,19 +116,21 @@ Consequences worth remembering:
 
 ### Errors are read by an agent
 
-The caller is almost always an agent, not a person at a terminal. Every failure
-it can act on is a `DispatchError` (`cli/lib/errors.mts`): a message saying what
-happened, a `hint` saying what to do, and an exit code it can branch on —
-`2` called wrong, `3` the environment refused (retry), `4` bad data (fix the
-payload). Anything else exits `1` with a stack, which means a bug in the CLI.
-Write the hint for the agent that has to fix it: name the field, name the fix.
+The caller is usually an agent, so a failure it can act on is a `DispatchError`
+(`cli/lib/errors.mts`) carrying a `hint` and an exit code to branch on. That file
+is the source of truth for the taxonomy and the codes — the classes enforce it,
+so read it there. When you add one, write the hint for the agent that has to fix
+the failure: name the field, name the fix.
 
-### Files and tests
+### Files
 
-- Keep files to one job. A module that needs a table of contents is two modules.
-- Tests prove behavior, not lines. Each one should fail if a real rule breaks —
-  a canceled blocker unblocking its dependents, a stale review re-closing a
-  milestone gate. Delete a test that can only fail if the code is deleted.
+Keep each file to one job; split a module once it has grown a table of contents.
+
+### Tests
+
+A test earns its place by failing when a real rule breaks — a canceled blocker
+unblocking its dependents, a stale review re-opening a milestone gate. One that
+can only fail when the code is deleted proves nothing; delete it.
 
 ## Local iteration
 

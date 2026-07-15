@@ -65,8 +65,9 @@ Plugin code is TypeScript, run unbuilt on Node's native type stripping (Node
 24.18+ required). Install the toolchain with `npm install` — which also sets up
 the git hooks: lint on commit, commitlint on the message, and on push a
 conciseness review (the `skill-reviewer` agent in `.claude/agents/`) of any
-skill markdown in the outgoing range — must-fix findings block the push until
-acted on (`SKILL_REVIEW=0` is the emergency bypass). Then:
+skill markdown in the outgoing range — a blocking verdict (a must-fix finding,
+or a file judged more than ~25% cuttable) stops the push until acted on
+(`SKILL_REVIEW=0` is the emergency bypass). Then:
 
 ```shell
 npm test            # node:test suites, colocated with the code they cover

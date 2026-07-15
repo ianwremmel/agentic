@@ -162,7 +162,9 @@ async function review(file: string): Promise<'pass' | 'block' | 'error'> {
       process.stderr.write(`skill-review: ${error.message}\n`);
       resolve('error');
     });
-    child.on('exit', (code) => {
+    // 'close', not 'exit': 'exit' can fire before stdout is fully consumed,
+    // truncating the report and turning a clean verdict into a false block.
+    child.on('close', (code) => {
       resolve(code === 0 ? verdictFrom(report) : 'error');
     });
   });

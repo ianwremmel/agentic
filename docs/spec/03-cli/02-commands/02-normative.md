@@ -11,7 +11,7 @@ written to stderr; structured output is written to stdout.
 
 Start the daemon process.
 
-```
+```shell
 dispatch daemon start [--foreground]
 ```
 
@@ -26,7 +26,7 @@ by a live process or if a required CLI is missing or unauthenticated.
 
 Stop the daemon process.
 
-```
+```shell
 dispatch daemon stop [--force]
 ```
 
@@ -40,7 +40,7 @@ Behavior per §3.1.2 §Lifecycle §Stop.
 
 Print a summary of the daemon state.
 
-```
+```shell
 dispatch daemon status
 ```
 
@@ -56,7 +56,7 @@ alive, pending follow-ups. Exits non-zero if the daemon is not running.
 
 List all event kinds and show which template wins for each.
 
-```
+```shell
 dispatch prompts list
 ```
 
@@ -67,7 +67,7 @@ of the winning template.
 
 Copy the built-in default for an event to the repo or user override location.
 
-```
+```shell
 dispatch prompts copy <event> (--repo | --home)
 ```
 
@@ -84,7 +84,7 @@ overwrite).
 
 Show the diff between the active override and the built-in default.
 
-```
+```shell
 dispatch prompts diff <event>
 ```
 
@@ -102,7 +102,7 @@ is not running.
 
 List all tasks the daemon is monitoring.
 
-```
+```shell
 dispatch tasks list
 ```
 
@@ -113,7 +113,7 @@ heartbeat timestamp.
 
 Register a single ticket for the daemon to monitor and work on.
 
-```
+```shell
 dispatch add-ticket <url-or-id>
 ```
 
@@ -129,7 +129,7 @@ added. Exits non-zero if the ticket is not recognized or the task already exists
 Register a project for the daemon to monitor. The daemon fetches the project's
 dependency graph and determines which tickets to work on.
 
-```
+```shell
 dispatch add-project <url-or-id>
 ```
 
@@ -144,7 +144,7 @@ added. Exits non-zero if the project is not recognized.
 
 Register an existing pull request for the daemon to monitor.
 
-```
+```shell
 dispatch add-pr <url>
 ```
 
@@ -159,7 +159,7 @@ PR URL is not recognized or the task already exists.
 
 Stop monitoring a task.
 
-```
+```shell
 dispatch tasks remove <url-or-id>
 ```
 
@@ -171,7 +171,7 @@ daemon are left alone. Exits non-zero if the task is not found.
 
 Show the full task record for a single task.
 
-```
+```shell
 dispatch tasks show <url-or-id>
 ```
 

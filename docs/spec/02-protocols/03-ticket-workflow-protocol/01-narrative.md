@@ -42,7 +42,7 @@ simple: anything not in `started` is not currently in flight.
 
 The forward path through a ticket's lifecycle is:
 
-```
+```text
 available → in-progress → in-review → finished → delivered → verified
 ```
 
@@ -119,14 +119,14 @@ readable history of what happened and why.
 
 The session transcript format is a structured one-liner:
 
-```
+```text
 2026-05-09T14:23:01-04:00 TRANSITION ticket=https://linear.app/… pr=https://github.com/… ticket-role=in-review pr-state=open | review requested from Copilot
 ```
 
 The `WAIT` / `RESUME` pair lets anyone grep the session to find how long a
 particular wait lasted:
 
-```
+```text
 2026-05-09T14:31:00-04:00 WAIT   ticket=… pr=… ticket-role=in-review pr-state=open | awaiting human reply on PR comment #2 (scope question)
 2026-05-09T15:10:44-04:00 RESUME ticket=… pr=… ticket-role=in-review pr-state=open | scope question resolved
 ```
@@ -134,7 +134,7 @@ particular wait lasted:
 The state-change comment posted to the tracker echoes the transition in
 structured form so humans can read it at a glance:
 
-```
+```text
 <!-- agent-reply:dispatch -->
 ✨
 

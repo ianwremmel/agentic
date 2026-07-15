@@ -45,8 +45,9 @@ Passing Linear's `0` priority through would rank an unprioritized task ahead of
 `1` (Urgent), so omit `--priority`.
 
 `status` maps through the built-in Linear table (`Todo` → `available`, `Done` →
-`verified`, `Canceled`/`Duplicate` → `canceled`, …). A custom state fails the
-ingest and names itself in the error; map it in the config's `states`, never guess.
+`verified`, `Canceled`/`Duplicate` → `canceled`, …). A custom state the table does
+not cover fails `task set` with an error naming that state; map it in the config's
+`states`, never guess.
 
 **Milestone order.** Linear orders milestones by `sortOrder`; the graph sequences
 them with edges. Sort the milestones by `sortOrder` and chain them:

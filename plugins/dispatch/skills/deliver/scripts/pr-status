@@ -145,6 +145,7 @@ COMMENTS_JSON="$(gh api graphql --paginate \
               reactions(first:100) {
                 nodes { content user { login } }
               }
+              reactionGroups { content viewerHasReacted }
             }
             pageInfo { hasNextPage endCursor }
           }
@@ -355,7 +356,7 @@ has_terminal_signal() {
 # key on $CALLER_LOGIN (guaranteed set — the script exits earlier if it can't be
 # resolved).
 classify_actionable() {
-  local body="$1" author="$2" resolved="$3" reactions="${4:-[]}"
+  local body="$1" author="$2" resolved="$3" reaction_groups="${4:-[]}"
   [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
 
   # Plan or engagement comment by the calling agent. Both are agent artifacts,
@@ -380,11 +381,15 @@ classify_actionable() {
   # calling agent. Top-level comments have no reply threading, so this is the
   # only signal that can ever settle a comment someone else authored — without
   # it an operator note stays actionable forever and Gate 4 never passes.
-  if jq -e --arg login "$CALLER_LOGIN" \
-       'any(.[]; (.user.login // "") == $login
-                 and (.content == "THUMBS_UP" or .content == "THUMBS_DOWN"
-                      or .content == "ROCKET"))' \
-       <<<"$reactions" >/dev/null 2>&1; then
+  # Keys on reactionGroups' viewerHasReacted rather than scanning reaction
+  # nodes: the GraphQL viewer is the same identity as $CALLER_LOGIN (one gh
+  # token), and viewerHasReacted is set regardless of how many reactions the
+  # comment has — a nodes scan is capped at the first page and can miss the
+  # caller's reaction on a heavily-reacted comment.
+  if jq -e 'any(.[]; .viewerHasReacted == true
+                and (.content == "THUMBS_UP" or .content == "THUMBS_DOWN"
+                     or .content == "ROCKET"))' \
+       <<<"$reaction_groups" >/dev/null 2>&1; then
     printf 'false\tagent-terminal-reply\n'; return
   fi
   printf 'true\t\n'
@@ -426,15 +431,16 @@ reactions_xml_for() {
 comments_xml() {
   echo "  <comments>"
   jq -c '.[]' <<<"$COMMENTS_JSON" | while read -r c; do
-    local raw_id id author body reactions
+    local raw_id id author body reactions reaction_groups
     raw_id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
     author="$(jq -r '.author.login // ""' <<<"$c")"
     body="$(jq -r '.body // ""' <<<"$c")"
     reactions="$(jq -c '.reactions.nodes // []' <<<"$c")"
+    reaction_groups="$(jq -c '.reactionGroups // []' <<<"$c")"
     [[ -n "$raw_id" ]] || continue
     id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
-    parse_actionable "$(classify_actionable "$body" "$author" "false" "$reactions")"
+    parse_actionable "$(classify_actionable "$body" "$author" "false" "$reaction_groups")"
     local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"

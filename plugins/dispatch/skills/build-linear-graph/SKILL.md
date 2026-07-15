@@ -23,8 +23,8 @@ Per selected project:
   in parallel batches.
 - Page on `hasNextPage` / `cursor` (that `cursor` is pagination, not the sync
   cursor).
-- Chase a `blockedBy` id outside the selected projects — it is still a real
-  blocker. `get_issue` it, write it, and repeat until every blocker is written.
+- A `blockedBy` id outside the selected projects is still a blocker:
+  `get_issue` it, write it, and repeat until every blocker is written.
 
 ## Map to CLI flags
 
@@ -34,18 +34,14 @@ Per selected project:
 | `task set --project`             | `projectId`                                               |
 | `task set --role`                | `status`, mapped by the table below                       |
 | `task set --milestone`           | `projectMilestone.id`                                     |
-| `task set --priority`            | `priority.value` — **omit when `0`** (`0` = no priority)  |
+| `task set --priority`            | `priority.value`; omit when `0` (`0` = no priority)       |
 | `task set --url / --title`       | `url` / `title`                                           |
 | `task set --branch-hint`         | `gitBranchName`                                           |
 | `task set --labels`              | `labels`, comma-joined                                    |
 | `task set --updated-at`          | `updatedAt`                                               |
-| `edge add --blocker/--blocked`   | `relations.blockedBy[].id` blocks the issue              |
+| `edge set --blocked/--blockers`  | the issue / `relations.blockedBy[].id`, comma-joined      |
 
-Passing Linear's `0` priority through would rank an unprioritized task ahead of
-`1` (Urgent), so omit `--priority`.
-
-**Status → role.** The CLI accepts only normalized roles; you do the mapping
-(case-insensitively on the status name):
+**Status → role.** Map the status name (case-insensitive):
 
 | Linear status | `--role`      |
 | ------------- | ------------- |
@@ -59,15 +55,12 @@ Passing Linear's `0` priority through would rank an unprioritized task ahead of
 | `Canceled`    | `canceled`    |
 | `Duplicate`   | `canceled`    |
 
-A duplicate is abandoned work that will not be done, which is the `canceled`
-role. For a workspace's custom status not in this table, map it yourself only
-when its lifecycle meaning is unambiguous (a "Ready for QA" column is
-`in-review`); otherwise escalate to the operator. Never guess — a wrong role
+A status not in this table is escalated to the operator unless its lifecycle
+meaning is unambiguous (a "Ready for QA" column is `in-review`) — a wrong role
 silently dispatches, or strands, real work.
 
-**Milestone order.** Linear orders milestones by `sortOrder`; the graph sequences
-them with edges. Sort the milestones by `sortOrder` and chain them:
-`edge add --blocker <prev> --blocked <next>` for each adjacent pair.
+**Milestone order.** Sort milestones by `sortOrder` and chain adjacent pairs:
+`edge add --blocker <prev> --blocked <next>`.
 
 ## Cursor
 
@@ -79,5 +72,4 @@ relation change bump `updatedAt`, so one delta sees both.
 ## Archived tasks
 
 Do not `task rm` an archived task — Linear archives completed work, and its
-`Done`/`Canceled` status still counts toward its milestone. A task that truly left
-the tracker is pruned by the next `reset` + full sync.
+`Done`/`Canceled` status still counts toward its milestone.

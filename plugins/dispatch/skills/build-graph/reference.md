@@ -2,24 +2,20 @@
 
 ## Commands
 
-Every command takes `--db <path>` (default `$DISPATCH_GRAPH_DB`, else
-`$XDG_STATE_HOME/dispatch/graph.db`) and `--config <path>`.
-
-### Writing the graph
-
-| Command                                                       | Does                                                     |
-| ------------------------------------------------------------- | -------------------------------------------------------- |
-| `graph project set --id P [--name N]`                         | Declare a project (only declared projects go terminal).  |
-| `graph project rm --id P`                                     | Forget a project; its tasks are left alone.              |
-| `graph task set --id T --project P --role R [flags]`          | Upsert a task (see below).                               |
-| `graph task rm --id T`                                        | Delete a task, its edges, and any claim.                 |
-| `graph milestone set --id M --project P [--name N]`           | Upsert a milestone.                                      |
-| `graph milestone rm --id M`                                   | Delete a milestone, its edges, and its review.           |
-| `graph edge add --blocker B --blocked D`                      | `B` blocks `D` — `D` depends on `B`.             |
-| `graph edge rm --blocker B --blocked D`                       | Remove one edge.                                         |
-| `graph edge set --blocked D --blockers a,b`                   | Replace all of `D`'s blockers. Empty list clears them.   |
-| `graph edge set --blocker B --blocks a,b`                     | Replace all of `B`'s blocked. Empty list clears them.    |
-| `graph reset`                                                 | Wipe the graph (keeps claims, reviews, cursors).         |
+| Command                                               | Does                                                     |
+| ----------------------------------------------------- | -------------------------------------------------------- |
+| `graph project set --id P [--name N]`                 | Declare a project (only declared projects go terminal).  |
+| `graph project rm --id P`                             | Forget a project; its tasks are left alone.              |
+| `graph task set --id T --project P --role R [flags]`  | Upsert a task (see below).                               |
+| `graph task rm --id T`                                | Delete a task, its edges, and any claim.                 |
+| `graph milestone set --id M --project P [--name N]`   | Upsert a milestone.                                      |
+| `graph milestone rm --id M`                           | Delete a milestone, its edges, and its review.           |
+| `graph edge add --blocker B --blocked D`              | `B` blocks `D` — `D` depends on `B`.                     |
+| `graph edge rm --blocker B --blocked D`               | Remove one edge.                                         |
+| `graph edge set --blocked D --blockers a,b`           | Replace all of `D`'s blockers. Empty list clears them.   |
+| `graph edge set --blocker B --blocks a,b`             | Replace all of `B`'s blocked. Empty list clears them.    |
+| `graph cursor [--source S] [--set token \| --clear]`  | Read, set, or clear the sync cursor.                     |
+| `graph reset`                                         | Wipe the graph (keeps claims, reviews, cursors).         |
 
 `task set` flags: `--milestone <id>`, `--priority <n>` (lower = more urgent; omit
 if none), `--url`, `--title`, `--labels a,b`, `--branch-hint`, `--updated-at <ts>`
@@ -30,28 +26,13 @@ tracker-state mapping.
 Edge endpoints may be tasks or milestones. Two tasks form a dependency; two
 milestones form sequencing; an edge that would join a task to a milestone is
 refused (attach a task with `--milestone` instead). An edge may name an id that
-has not been written yet — it holds its dependents blocked and is reported as a
-dangling-edge anomaly until the id is written.
+has not been written yet — it holds its dependents blocked until the id is
+written.
 
-### Reading and coordinating
-
-| Command                                              | Does                                                    |
-| ---------------------------------------------------- | ------------------------------------------------------- |
-| `graph doc [--format xml\|json] [--stale-after D]`   | Emit the derived project-graph document.                |
-| `graph next [--project P] [--stale-after D]`         | Print the top available task, or nothing.               |
-| `graph next --claim --agent A [--stale-after D]`     | Atomically grab and claim the top available task.       |
-| `graph claim --id T --agent A [--stale-after D]`     | Claim `T`, or reclaim it if the holder's claim is stale. |
-| `graph heartbeat --id T --agent A`                   | Refresh your claim so it does not go stale.             |
-| `graph release --id T --agent A`                     | Release your claim (idempotent).                        |
-| `graph record-review --id M [--at ts]`               | Record that milestone `M`'s review ran.            |
-| `graph cursor [--source S] [--set token \| --clear]` | Read, set, or clear the sync cursor.                    |
-
-`--stale-after` takes a duration (`10m`, `30s`, `2h`); default is the config's
-`claimStaleAfter`, else 10m. It is read by `doc`, `next`, and `claim` — the
-commands that decide whether a claim still holds.
-
-`next` prints one `<ticket>` element — the same shape the document uses — or
-nothing (exit 0) when the frontier is empty, which is the "no work now" signal.
+The CLI also serves the graph's readers (`doc`, `next`, `claim`, `heartbeat`,
+`release`, `record-review`); those belong to the higher-level skills that
+interpret the graph and dispatch workers, and their flags live in the CLI's
+`--help`.
 
 ## Exit codes
 

@@ -117,8 +117,8 @@ Idempotent. Graph claim first, then the tracker claim:
 While you hold the claim, `dispatch graph heartbeat --id <ID> --agent
 <agent-id>` at least every few minutes (fold into poll ticks). **Release only
 when the ticket leaves the started group** — `verified`, `canceled`, or a park.
-On `decomposed` or `failed`, leave the claim to go stale so the next pass
-reclaims it.
+On `decomposed` or `failed`, leave the claim in place — the next pass resumes
+it (the same agent id refreshes; a fresh id reclaims once it is stale).
 
 ## Decompose
 

@@ -56,7 +56,8 @@ the same state and continues. Each tick, in order:
    clean up and drop; `delivered` → re-dispatch to verify; `decomposed` → hold
    for finalization; `failed` → retry only a retryable verification, else
    surface to the operator; no outcome and a stale claim → re-dispatch; live
-   claim → leave it alone. Never re-dispatch over a live claim.
+   claim → leave it alone. An outcome artifact supersedes claim liveness (its
+   writer exited); without one, never re-dispatch over a live claim.
 5. **Human-blocked** — for each `<human-blocked>` ticket: ensure it is parked
    (`awaiting-external`, else `paused`), ensure **exactly one** open alert
    (scan the ticket for the `<!-- agent-human-alert:dispatch -->` sentinel
@@ -88,7 +89,9 @@ the same state and continues. Each tick, in order:
    [cadence](./reference.md#cadence) and tick again.
 
 Run the loop yourself with foreground `sleep` between ticks, exactly like
-`deliver`: no detached background poll loops, never end the turn mid-run.
+`deliver`: no detached background poll loops, never end the turn mid-run —
+nothing re-prods a session, so an ended turn is a stopped orchestrator until
+re-invoked (safe at any tick boundary, since nothing lives in memory).
 Subagent completion notices are advisory — the next tick reads disk regardless.
 
 ## Capacity

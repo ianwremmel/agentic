@@ -66,7 +66,7 @@ summarize() {
   claude -p --max-turns 1 \
     "Summarize the following PR item in 1-3 sentences describing its outcome. Plain prose only.
 
-$(cat "$body")" > "$out" 2>/dev/null || echo "(summary unavailable)" > "$out"
+$(cat "$body")" > "$out" 2>/dev/null </dev/null || echo "(summary unavailable)" > "$out"
 }
 
 # Args: <id> <subdir> <body>
@@ -350,11 +350,12 @@ has_terminal_signal() {
 # engagement comment (line-anchored agent-plan/agent-engagement sentinel +
 # author identity, so a human quoting the marker stays actionable), or the body
 # is the calling agent's terminal-tagged reply (any agent-reply marker + author
-# identity + terminal signal on the last non-empty line). The author checks key
-# on $CALLER_LOGIN (guaranteed set — the script exits earlier if it can't be
+# identity + terminal signal on the last non-empty line), or the calling agent
+# reacted to the item with a terminal reaction (+1/-1/rocket). The author checks
+# key on $CALLER_LOGIN (guaranteed set — the script exits earlier if it can't be
 # resolved).
 classify_actionable() {
-  local body="$1" author="$2" resolved="$3"
+  local body="$1" author="$2" resolved="$3" reactions="${4:-[]}"
   [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
 
   # Plan or engagement comment by the calling agent. Both are agent artifacts,
@@ -372,6 +373,18 @@ classify_actionable() {
   if has_terminal_signal "$body" \
       && [[ "$author" == "$CALLER_LOGIN" ]] \
       && grep -qF '<!-- agent-reply:' <<<"$body"; then
+    printf 'false\tagent-terminal-reply\n'; return
+  fi
+
+  # A terminal reaction (+1/-1/rocket, reference.md → Terminal signals) by the
+  # calling agent. Top-level comments have no reply threading, so this is the
+  # only signal that can ever settle a comment someone else authored — without
+  # it an operator note stays actionable forever and Gate 4 never passes.
+  if jq -e --arg login "$CALLER_LOGIN" \
+       'any(.[]; (.user.login // "") == $login
+                 and (.content == "THUMBS_UP" or .content == "THUMBS_DOWN"
+                      or .content == "ROCKET"))' \
+       <<<"$reactions" >/dev/null 2>&1; then
     printf 'false\tagent-terminal-reply\n'; return
   fi
   printf 'true\t\n'
@@ -421,7 +434,7 @@ comments_xml() {
     [[ -n "$raw_id" ]] || continue
     id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
-    parse_actionable "$(classify_actionable "$body" "$author" "false")"
+    parse_actionable "$(classify_actionable "$body" "$author" "false" "$reactions")"
     local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"

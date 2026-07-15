@@ -162,6 +162,9 @@ A comment or thread is **non-actionable** iff any of:
   trailing period, or `✓`/`✅`). The author match keys on the gh-authenticated
   login; `pr-status` exits early if it can't resolve that login (a `gh api user`
   failure is fatal, since it's the only identity source).
+- the calling agent reacted to it with a terminal reaction (`+1`/`-1`/`rocket`;
+  comments only). Top-level comments have no reply threading, so this is the
+  only signal that can settle a comment someone else authored.
 - the platform has explicitly resolved the thread (threads only).
 
 A reviewer reply after the agent's last turn re-actionables the item. An

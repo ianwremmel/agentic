@@ -72,6 +72,33 @@ describe('tasks and edges', () => {
     await store.close();
   });
 
+  it('refuses an edge that would close a cycle, leaving the graph unchanged', async () => {
+    const store = await openStore();
+    await store.addEdge('A', 'B');
+    await store.addEdge('B', 'C');
+    await assert.rejects(() => store.addEdge('C', 'A'), /dependency cycle/);
+
+    // Rolled back — the offending edge is not present.
+    const {edges} = await store.snapshot();
+    assert.deepEqual(edges, [
+      {blocker: 'A', blocked: 'B'},
+      {blocker: 'B', blocked: 'C'},
+    ]);
+    await store.close();
+  });
+
+  it('refuses an edge set that would close a cycle', async () => {
+    const store = await openStore();
+    await store.addEdge('A', 'B');
+    await store.addEdge('B', 'C');
+    // C is reachable from A, so making C a blocker of A closes A->B->C->A.
+    await assert.rejects(
+      () => store.setEdges('A', 'blockers', ['C']),
+      /dependency cycle/
+    );
+    await store.close();
+  });
+
   it('refuses an id that already names the other kind', async () => {
     // Tasks and milestones share the edge id space, so a collision would make
     // an edge ambiguous and a delete wipe the wrong kind's edges.

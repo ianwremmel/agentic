@@ -103,10 +103,10 @@ describe('next and claim', () => {
     await run(db, ['record-review', '--id', 'M1']); // unblock T2
 
     const peek = await run(db, ['next']);
-    assert.match(peek.stdout, /id=T2 target-kind=pr/u);
+    assert.match(peek.stdout, /<ticket id="T2" target-kind="pr"/u);
 
     const claimed = await run(db, ['next', '--claim', '--agent', 'agent-a']);
-    assert.match(claimed.stdout, /id=T2/u);
+    assert.match(claimed.stdout, /<ticket id="T2"/u);
 
     // Now claimed, T2 is in-flight and off the frontier.
     const doc = await run(db, ['doc']);
@@ -118,7 +118,7 @@ describe('next and claim', () => {
     assert.equal(again.stdout.trim(), '');
   });
 
-  it('quotes a next line value that contains a space, so it stays one field', async () => {
+  it('prints the next task as a <ticket> XML element', async () => {
     const db = await graphDb();
     await run(db, ['project', 'set', '--id', 'P']);
     await run(db, [
@@ -135,7 +135,40 @@ describe('next and claim', () => {
     ]);
 
     const {stdout} = await run(db, ['next']);
-    assert.match(stdout, /url="https:\/\/x\/a b"/u);
+    // XML, not logfmt — a space in the url sits safely inside the attribute.
+    assert.match(
+      stdout,
+      /^<ticket id="T" target-kind="pr" url="https:\/\/x\/a b"\/>/u
+    );
+  });
+
+  it('refuses an edge that would close a dependency cycle', async () => {
+    const db = await graphDb();
+    await run(db, ['project', 'set', '--id', 'P']);
+    for (const id of ['A', 'B']) {
+      await run(db, [
+        'task',
+        'set',
+        '--id',
+        id,
+        '--project',
+        'P',
+        '--state',
+        'Todo',
+      ]);
+    }
+    await run(db, ['edge', 'add', '--blocker', 'A', '--blocked', 'B']);
+
+    const {code, stderr} = await run(db, [
+      'edge',
+      'add',
+      '--blocker',
+      'B',
+      '--blocked',
+      'A',
+    ]);
+    assert.equal(code, 4);
+    assert.match(stderr, /would create a dependency cycle/u);
   });
 
   it('a second agent cannot claim a live-held task', async () => {

@@ -69,7 +69,7 @@ export const recordReview: Command = {
         new DataError(
           `milestone "${id}" is not ready for review: ${String(milestone.openCount)} of ${String(milestone.memberCount)} tasks are still open`,
           {
-            hint: 'a milestone is ready only when every task in it is verified or canceled and none of their dependencies is unresolved (§2.3).',
+            hint: 'a milestone is ready only when every task in it is verified or canceled and none of their dependencies is unresolved.',
           }
         )
       );

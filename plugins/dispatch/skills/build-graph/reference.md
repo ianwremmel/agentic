@@ -15,7 +15,7 @@ Every command takes `--db <path>` (default `$DISPATCH_GRAPH_DB`, else
 | `graph task rm --id T`                                        | Delete a task, its edges, and any claim.                 |
 | `graph milestone set --id M --project P [--name N]`           | Upsert a milestone.                                      |
 | `graph milestone rm --id M`                                   | Delete a milestone and its edges.                        |
-| `graph edge add --blocker B --blocked D`                      | `B` blocks `D` — `D` depends on `B` (§2.3).             |
+| `graph edge add --blocker B --blocked D`                      | `B` blocks `D` — `D` depends on `B`.             |
 | `graph edge rm --blocker B --blocked D`                       | Remove one edge.                                         |
 | `graph edge set --blocked D --blockers a,b`                   | Replace all of `D`'s blockers. Empty list clears them.   |
 | `graph edge set --blocker B --blocks a,b`                     | Replace all of `B`'s blocked. Empty list clears them.    |
@@ -23,7 +23,7 @@ Every command takes `--db <path>` (default `$DISPATCH_GRAPH_DB`, else
 
 `task set` flags: `--milestone <id>`, `--priority <n>` (lower = more urgent; omit
 if none), `--url`, `--title`, `--labels a,b`, `--branch-hint`, `--updated-at <ts>`,
-`--injected` (rank to the top of the frontier, §2.6), `--tracker <name>` (default
+`--injected` (rank to the top of the frontier), `--tracker <name>` (default
 `linear`, selects the state mapping).
 
 Edge endpoints may be tasks or milestones. Two tasks form a dependency; two
@@ -40,7 +40,7 @@ milestones form sequencing; a task-and-milestone edge is surfaced as an anomaly
 | `graph claim --id T --agent A [--stale-after D]`     | Claim `T`, or reclaim it if the holder's claim is stale. |
 | `graph heartbeat --id T --agent A`                   | Refresh your claim so it does not go stale.             |
 | `graph release --id T --agent A`                     | Release your claim (idempotent).                        |
-| `graph record-review --id M [--at ts]`               | Record that milestone `M`'s §2.3 review ran.            |
+| `graph record-review --id M [--at ts]`               | Record that milestone `M`'s review ran.            |
 | `graph cursor [--source S] [--set token \| --clear]` | Read, set, or clear the sync cursor.                    |
 
 `--stale-after` takes a duration (`10m`, `30s`, `2h`); default is the config's
@@ -78,5 +78,5 @@ if it exists. All keys optional:
 ```
 
 `states` maps a native tracker state onto a protocol role, overriding the built-in
-table (§2.3 team override). The label lists derive a task's target-kind and
+table (a team override). The label lists derive a task's target-kind and
 human-interactive flag.

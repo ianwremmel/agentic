@@ -37,9 +37,7 @@ export function toXml(graph: DerivedGraph): string {
 
   out.push('  <available>');
   graph.available.forEach((entry, index) => {
-    out.push(
-      `    <ticket id="${attr(entry.node.id)}" rank="${String(index + 1)}" target-kind="${attr(entry.node.targetKind)}" url="${attr(entry.node.url)}"${branchAttr(entry)}/>`
-    );
+    out.push(`    ${availableTicket(entry, index + 1)}`);
   });
   out.push('  </available>');
 
@@ -127,6 +125,20 @@ export function toJson(graph: DerivedGraph): string {
     },
     null,
     2
+  );
+}
+
+/**
+ * One `<ticket>` element for the available frontier. Shared by the document and
+ * by `graph next`, so an agent picking work parses the same XML shape wherever it
+ * comes from. `rank` is omitted when there is nothing to rank against (a lone
+ * `next` result).
+ */
+export function availableTicket(entry: ClassifiedNode, rank?: number): string {
+  const rankAttr = rank === undefined ? '' : ` rank="${String(rank)}"`;
+  return (
+    `<ticket id="${attr(entry.node.id)}"${rankAttr} ` +
+    `target-kind="${attr(entry.node.targetKind)}" url="${attr(entry.node.url)}"${branchAttr(entry)}/>`
   );
 }
 

@@ -5,7 +5,7 @@ description: Build the project dependency graph a tracker holds — write tasks,
 
 # build-graph
 
-Produce the §2.6 **project-graph document**, and coordinate who works each task.
+Produce the **project-graph document**, and coordinate who works each task.
 
 **You fetch. The CLI reasons.** Effective blocking, ranking, cycle detection, and
 milestone gating are `dispatch graph`'s job. Never derive them yourself; never
@@ -21,8 +21,7 @@ hand-edit the graph.
    means first run: `dispatch graph reset`, then a full sync. Otherwise fetch only
    what changed since it.
 3. **Fetch** the selected projects: tasks, milestones, dependencies.
-4. **Write** each item with one command (a bad one fails only itself, never the
-   whole sync):
+4. **Write** each item with one command (a bad one fails only itself):
 
    ```shell
    dispatch graph project set   --id P --name "…"
@@ -33,15 +32,14 @@ hand-edit the graph.
    ```
 
 5. **Store the cursor** — `dispatch graph cursor --source <tracker> --set <token>`.
-6. **Emit** — `dispatch graph doc`. Report any `<anomaly>`; a cycle is illegal
-   (§2.3).
+6. **Emit** — `dispatch graph doc`. Report any `<anomaly>` it carries.
 
 ## Writing rules
 
 - **Pass native fields.** Give `task set` the tracker's `--state` and `--labels`.
   The CLI derives the role, target-kind, and human-interactive flag — you never
-  set those. An unmapped state fails with exit 4 naming the state; add
-  it to the config's `states`, or escalate. Never guess a role.
+  set those. An unmapped state fails with exit 4 naming the state; add it to the
+  config's `states`, or escalate. Never guess a role.
 - **Milestones are sequenced with edges, not an order.** `edge add --blocker M1
   --blocked M2` means M2's work waits on M1; a milestone can have several
   predecessors. A task joins a milestone with `task set --milestone M1`.
@@ -49,30 +47,27 @@ hand-edit the graph.
   `edge set --blocked CLC-945 --blockers a,b` makes them exactly `{a,b}` in one
   call (empty clears them). Use it instead of diffing; `edge add`/`edge rm` are
   for single changes.
+- **An edge that would close a cycle is refused** (exit 4). Fix the direction, or
+  remove the opposing edge first.
 - **A delta writes only what changed.** A task you don't touch keeps its state.
-  Remove one the tracker dropped with `task set`'s absence plus a periodic `reset`
-  + full sync, or `task rm` when you know it is gone.
+  Drop one the tracker removed with `task rm`, or let a periodic `reset` + full
+  sync prune it.
 
-## Reading the result
+## Emitting and grabbing work
 
-`dispatch graph doc` — read the derived sections, not the node and edge lists.
+`dispatch graph doc` emits the full project-graph document — every task and its
+state, the ranked frontier, milestone gates, counts, and anomalies. It is the
+orchestrator's view; report any anomaly, since a cycle or dangling edge is a data
+problem, not a schedule.
 
-| Section         | Means                                                          |
-| --------------- | -------------------------------------------------------------- |
-| `available`     | Startable now, ranked. `rank="1"` is next.                     |
-| `blocked`       | Waiting on `blocked-by` tasks or a `gated-by` milestone.       |
-| `human-blocked` | A human must act. Never dispatch an agent at these.            |
-| `milestones`    | `ready-for-review` / `review-recorded` — the §2.6 gate.        |
-| `counts`        | Per project and milestone; `terminal="true"` means done.       |
-| `anomalies`     | Cycles, dangling edges, unknown milestones. Surface these.     |
-
-To just grab work, skip `doc`: `dispatch graph next` prints the top available
-task.
+An agent that just needs the next thing to work skips `doc`:
+`dispatch graph next` prints the top available task as a `<ticket>` element, or
+nothing when the frontier is empty.
 
 ## Claiming work
 
-An agent that picks up a task claims it, so no two agents take the same one and a
-dead agent's task can be reclaimed (§2.6).
+Picking up a task claims it, so two agents can't take the same one and a dead
+agent's task can be reclaimed.
 
 ```shell
 dispatch graph next --claim --agent <session-id>   # grab + claim the top task atomically

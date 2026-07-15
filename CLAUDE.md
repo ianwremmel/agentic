@@ -41,6 +41,11 @@ subdirectories exist as scaffolding only.
   directories go at the plugin root.
 - **Naming.** Plugin names, skill folder names, and agent file names are
   kebab-case.
+- **No spec references in agent-facing text.** The `docs/spec/` tree is not
+  bundled with the plugin, so a `§2.6`-style citation in a `SKILL.md`, a skill
+  `reference.md`, or a CLI error/output string points at nothing for the invoking
+  agent. State the rule itself instead. Spec citations are fine in code comments
+  and design docs, which are read against this repo.
 - **Manifest authority.** Each plugin owns its own `plugin.json`. The
   marketplace entry is a pointer; don't duplicate component declarations
   across `marketplace.json` and `plugin.json` unless you explicitly need
@@ -128,9 +133,10 @@ Keep each file to one job; split a module once it has grown a table of contents.
 
 ### Tests
 
-A test earns its place by failing when a real rule breaks — a canceled blocker
-unblocking its dependents, a stale review re-opening a milestone gate. One that
-can only fail when the code is deleted proves nothing; delete it.
+Write each test to fail when a specific rule breaks: that a canceled blocker
+unblocks its dependents, that a stale review re-opens a milestone gate. A test
+that can only fail when the code is deleted asserts nothing about behavior —
+delete it.
 
 ## Local iteration
 

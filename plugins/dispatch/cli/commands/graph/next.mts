@@ -1,9 +1,8 @@
 import {parseArgsOrUsage} from '../../lib/args.mts';
 import type {Command} from '../../lib/command.mts';
 import {assertUsage} from '../../lib/errors.mts';
-import type {ClassifiedNode} from '../../lib/graph/derive.mts';
+import {availableTicket} from '../../lib/graph/document.mts';
 import {writeLine} from '../../lib/io.mts';
-import {encodeLine} from '../../lib/log/logfmt.mts';
 import {
   deriveGraph,
   resolveStaleAfterMs,
@@ -19,7 +18,7 @@ import {
  * derive, then claim the first candidate no live agent holds, in one transaction,
  * so two agents calling `next --claim` cannot get the same task.
  *
- * Prints one logfmt line (`id=… target-kind=… url=… branch-hint=…`) or nothing
+ * Prints one `<ticket>` element — the same shape the document uses — or nothing
  * when the frontier is empty. Empty output plus exit 0 is the "no work right now"
  * signal.
  */
@@ -71,7 +70,8 @@ export const next: Command = {
 
       if (agent === undefined) {
         const top = frontier[0];
-        if (top !== undefined) await writeLine(context.stdout, line(top));
+        if (top !== undefined)
+          await writeLine(context.stdout, availableTicket(top));
         await context.log.info('next task', {task: top?.node.id ?? '-'});
         return;
       }
@@ -93,7 +93,8 @@ export const next: Command = {
       const entry = frontier.find(
         (candidate) => candidate.node.id === claimed.id
       );
-      if (entry !== undefined) await writeLine(context.stdout, line(entry));
+      if (entry !== undefined)
+        await writeLine(context.stdout, availableTicket(entry));
       await context.log.info('claimed next task', {
         task: claimed.id,
         agent,
@@ -102,14 +103,3 @@ export const next: Command = {
     });
   },
 };
-
-function line(entry: ClassifiedNode): string {
-  // logfmt-encoded, so a url or branch-hint containing a space stays one field
-  // rather than splitting into stray tokens a parser would mangle.
-  return encodeLine({
-    id: entry.node.id,
-    'target-kind': entry.node.targetKind,
-    url: entry.node.url,
-    'branch-hint': entry.node.branchHint ?? undefined,
-  });
-}

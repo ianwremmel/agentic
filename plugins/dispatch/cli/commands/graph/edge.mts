@@ -143,7 +143,7 @@ function twoEnds(
   assert(
     values.blocker !== values.blocked,
     new UsageError(`${where}: a node cannot block itself`, {
-      hint: 'a self-edge is an illegal one-node cycle (§2.3).',
+      hint: 'a self-edge is an illegal one-node cycle.',
     })
   );
 

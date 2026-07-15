@@ -169,14 +169,16 @@ export class GraphStore {
     });
   }
 
-  /** Add one dependency edge. Returns false if it was already present. */
+  /**
+   * Add one dependency edge, refusing it if it would close a cycle (§2.3 requires
+   * this at write time). Returns false if the edge was already present.
+   */
   async addEdge(blocker: string, blocked: string): Promise<boolean> {
-    return (
-      this.#run(
-        'INSERT INTO edge (blocker, blocked) VALUES (?, ?) ON CONFLICT DO NOTHING',
-        [blocker, blocked]
-      ) > 0
-    );
+    return this.#transaction(() => {
+      const added = this.#insertEdge(blocker, blocked);
+      if (added) this.#rejectIfCycle(blocked);
+      return added;
+    });
   }
 
   async removeEdge(blocker: string, blocked: string): Promise<boolean> {
@@ -206,14 +208,46 @@ export class GraphStore {
         this.#run('DELETE FROM edge WHERE blocker = ?', [node]);
         for (const blocked of others) this.#insertEdge(node, blocked);
       }
+      this.#rejectIfCycle(node);
     });
   }
 
-  #insertEdge(blocker: string, blocked: string): void {
-    this.#run(
-      'INSERT INTO edge (blocker, blocked) VALUES (?, ?) ON CONFLICT DO NOTHING',
-      [blocker, blocked]
+  #insertEdge(blocker: string, blocked: string): boolean {
+    return (
+      this.#run(
+        'INSERT INTO edge (blocker, blocked) VALUES (?, ?) ON CONFLICT DO NOTHING',
+        [blocker, blocked]
+      ) > 0
     );
+  }
+
+  /**
+   * Throw (rolling back the enclosing transaction, so the edge is never created)
+   * if `node` now sits on a dependency cycle. A cycle can only have appeared
+   * because of the edge just written, and every such cycle runs through `node`,
+   * so checking `node` alone is enough. Walked in SQL by a recursive CTE over the
+   * blocker→blocked edges; it also catches a self-edge.
+   */
+  #rejectIfCycle(node: string): void {
+    const onCycle = this.#db
+      .prepare(
+        `WITH RECURSIVE reach(id) AS (
+           SELECT blocked FROM edge WHERE blocker = ?
+           UNION
+           SELECT e.blocked FROM edge e JOIN reach r ON e.blocker = r.id
+         )
+         SELECT 1 FROM reach WHERE id = ? LIMIT 1`
+      )
+      .get(node, node);
+
+    if (onCycle !== undefined) {
+      throw new DataError(
+        `that edge would create a dependency cycle through ${node}`,
+        {
+          hint: 'a dependency cycle is illegal. Remove the opposing edge first, or fix the dependency direction.',
+        }
+      );
+    }
   }
 
   /** Wipe the graph. Keeps claims, reviews, and cursors — orchestrator state. */

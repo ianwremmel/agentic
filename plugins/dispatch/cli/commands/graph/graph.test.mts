@@ -118,6 +118,26 @@ describe('next and claim', () => {
     assert.equal(again.stdout.trim(), '');
   });
 
+  it('quotes a next line value that contains a space, so it stays one field', async () => {
+    const db = await graphDb();
+    await run(db, ['project', 'set', '--id', 'P']);
+    await run(db, [
+      'task',
+      'set',
+      '--id',
+      'T',
+      '--project',
+      'P',
+      '--state',
+      'Todo',
+      '--url',
+      'https://x/a b',
+    ]);
+
+    const {stdout} = await run(db, ['next']);
+    assert.match(stdout, /url="https:\/\/x\/a b"/u);
+  });
+
   it('a second agent cannot claim a live-held task', async () => {
     const db = await graphDb();
     await seed(db);

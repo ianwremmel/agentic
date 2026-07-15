@@ -44,11 +44,18 @@ export function fingerprintMembers(memberIds: readonly string[]): string {
  */
 function movedSince(
   members: readonly GraphNode[],
-  recordedAt: string
+  recordedAtMs: number
 ): boolean {
-  return members.some(
-    (member) => member.updatedAt !== null && member.updatedAt > recordedAt
-  );
+  return members.some((member) => {
+    if (member.updatedAt === null) return false;
+    // Compare parsed instants, not strings: two ISO timestamps in different
+    // offsets (`…04:00Z` vs `…00:30-05:00`) sort wrong lexically but compare
+    // right by time.
+    const movedMs = Date.parse(member.updatedAt);
+    // An unparseable `updatedAt` is no evidence of movement — same as a missing
+    // one — so it does not invalidate the review.
+    return !Number.isNaN(movedMs) && movedMs > recordedAtMs;
+  });
 }
 
 /**
@@ -196,5 +203,9 @@ function isRecorded(
   members: readonly GraphNode[]
 ): boolean {
   if (review?.fingerprint !== fingerprint) return false;
-  return !movedSince(members, review.recordedAt);
+  const recordedAtMs = Date.parse(review.recordedAt);
+  // A record with an unparseable timestamp cannot be shown to precede a member's
+  // last move, so it cannot satisfy the gate — the milestone needs a fresh review.
+  if (Number.isNaN(recordedAtMs)) return false;
+  return !movedSince(members, recordedAtMs);
 }

@@ -6,7 +6,7 @@ description: Linear specifics for build-graph — the MCP tools, field mapping, 
 # build-linear-graph
 
 The Linear adapter for [`build-graph`](../build-graph/SKILL.md), which owns the
-loop and the CLI. This supplies the fetch and the field mapping.
+loop and the CLI.
 
 ## Fetch
 
@@ -41,8 +41,8 @@ Per selected project:
 | `task set --updated-at`          | `updatedAt`                                               |
 | `edge add --blocker/--blocked`   | `relations.blockedBy[].id` blocks the issue              |
 
-Linear's priority `0` means "no priority", not most-urgent; passing it through
-would rank an unprioritized task ahead of `1` (Urgent), so omit `--priority`.
+Passing Linear's `0` priority through would rank an unprioritized task ahead of
+`1` (Urgent), so omit `--priority`.
 
 `status` maps through the built-in Linear table (`Todo` → `available`, `Done` →
 `verified`, `Canceled`/`Duplicate` → `canceled`, …). A custom state fails the

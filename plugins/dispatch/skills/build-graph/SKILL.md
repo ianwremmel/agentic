@@ -24,7 +24,7 @@ hand-edit the graph.
 4. **Write** each item with one command (a bad one fails only itself, never the
    whole sync):
 
-   ```
+   ```shell
    dispatch graph project set   --id P --name "…"
    dispatch graph milestone set --id M1 --project P --name "M1"
    dispatch graph task set      --id CLC-945 --project P --state "In Progress" \
@@ -38,9 +38,9 @@ hand-edit the graph.
 
 ## Writing rules
 
-- **The agent passes native fields.** Give `task set` the tracker's `--state` and
-  `--labels`. The CLI derives the role, target-kind, and human-interactive flag —
-  you never set those. An unmapped state fails with exit 4 naming the state; add
+- **Pass native fields.** Give `task set` the tracker's `--state` and `--labels`.
+  The CLI derives the role, target-kind, and human-interactive flag — you never
+  set those. An unmapped state fails with exit 4 naming the state; add
   it to the config's `states`, or escalate. Never guess a role.
 - **Milestones are sequenced with edges, not an order.** `edge add --blocker M1
   --blocked M2` means M2's work waits on M1; a milestone can have several
@@ -74,7 +74,7 @@ task.
 An agent that picks up a task claims it, so no two agents take the same one and a
 dead agent's task can be reclaimed (§2.6).
 
-```
+```shell
 dispatch graph next --claim --agent <session-id>   # grab + claim the top task atomically
 dispatch graph heartbeat --id CLC-945 --agent <session-id>   # keep it alive while working
 dispatch graph release   --id CLC-945 --agent <session-id>   # give it back when done

@@ -3,6 +3,7 @@ import type {Command} from '../../lib/command.mts';
 import {assertUsage} from '../../lib/errors.mts';
 import type {ClassifiedNode} from '../../lib/graph/derive.mts';
 import {writeLine} from '../../lib/io.mts';
+import {encodeLine} from '../../lib/log/logfmt.mts';
 import {
   deriveGraph,
   resolveStaleAfterMs,
@@ -103,12 +104,12 @@ export const next: Command = {
 };
 
 function line(entry: ClassifiedNode): string {
-  const parts = [
-    `id=${entry.node.id}`,
-    `target-kind=${entry.node.targetKind}`,
-    `url=${entry.node.url}`,
-  ];
-  if (entry.node.branchHint !== null)
-    parts.push(`branch-hint=${entry.node.branchHint}`);
-  return parts.join(' ');
+  // logfmt-encoded, so a url or branch-hint containing a space stays one field
+  // rather than splitting into stray tokens a parser would mangle.
+  return encodeLine({
+    id: entry.node.id,
+    'target-kind': entry.node.targetKind,
+    url: entry.node.url,
+    'branch-hint': entry.node.branchHint ?? undefined,
+  });
 }

@@ -2,7 +2,12 @@ import {mkdir} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 
-import {describeCause, DispatchError, EnvironmentError} from '../errors.mts';
+import {
+  DataError,
+  describeCause,
+  DispatchError,
+  EnvironmentError,
+} from '../errors.mts';
 import {isRole, isTargetKind} from './roles.mts';
 import {SCHEMA, SCHEMA_VERSION} from './schema.mts';
 import type {
@@ -105,6 +110,7 @@ export class GraphStore {
   }
 
   async upsertTask(task: GraphNode): Promise<void> {
+    this.#requireDistinctKind(task.id, 'task', 'milestone');
     this.#run(
       `INSERT INTO task (
          id, project, url, title, role, milestone, target_kind,
@@ -147,6 +153,7 @@ export class GraphStore {
   }
 
   async upsertMilestone(milestone: Milestone): Promise<void> {
+    this.#requireDistinctKind(milestone.id, 'milestone', 'task');
     this.#run(
       'INSERT INTO milestone (id, project, name) VALUES (?, ?, ?) ' +
         'ON CONFLICT(id) DO UPDATE SET project = excluded.project, name = excluded.name',
@@ -313,6 +320,30 @@ export class GraphStore {
       this.#run('DELETE FROM claim WHERE id = ?', [id]);
       return 'released';
     });
+  }
+
+  /**
+   * Tasks and milestones share one id space (edges reference either), so an id
+   * must not name both — otherwise `partitionEdges` misreads its edges and
+   * removing one kind deletes the other's edges. Rejected at write time, where
+   * the fix is obvious: rename one, or remove the other first.
+   */
+  #requireDistinctKind(
+    id: string,
+    kind: 'task' | 'milestone',
+    other: 'task' | 'milestone'
+  ): void {
+    const clash = this.#db
+      .prepare(`SELECT 1 FROM ${other} WHERE id = ?`)
+      .get(id);
+    if (clash !== undefined) {
+      throw new DataError(
+        `id "${id}" is already a ${other}; it cannot also be a ${kind}`,
+        {
+          hint: `tasks and milestones share one id space — give the ${kind} a different id, or remove the ${other} first.`,
+        }
+      );
+    }
   }
 
   #readClaim(id: string): Claim | null {

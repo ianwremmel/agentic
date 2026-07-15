@@ -125,6 +125,27 @@ describe('review records', () => {
 
     assert.equal(state.reviewRecorded, false);
   });
+
+  it('compares timestamps by instant, not lexically, across timezone offsets', () => {
+    // The member moved at 05:30Z, after the 04:00Z review, but "00:30" sorts
+    // before "04:00" as a string. Only a real time comparison catches it.
+    const reviewRec = {
+      milestone: 'm1',
+      fingerprint: fingerprintMembers(['A']),
+      recordedAt: '2026-07-02T04:00:00.000Z',
+    };
+    const nodes = [
+      node('A', {
+        milestone: 'm1',
+        role: 'verified',
+        updatedAt: '2026-07-02T00:30:00.000-05:00',
+      }),
+    ];
+    const state = states(nodes, [M1], [reviewRec]).get('m1');
+    assert.ok(state);
+
+    assert.equal(state.reviewRecorded, false);
+  });
 });
 
 describe('the milestone gate over edges', () => {

@@ -72,6 +72,24 @@ describe('tasks and edges', () => {
     await store.close();
   });
 
+  it('refuses an id that already names the other kind', async () => {
+    // Tasks and milestones share the edge id space, so a collision would make
+    // an edge ambiguous and a delete wipe the wrong kind's edges.
+    const store = await openStore();
+    await store.upsertMilestone({id: 'X', project: 'P', name: 'X'});
+    await assert.rejects(
+      () => store.upsertTask(task('X')),
+      /already a milestone/
+    );
+
+    await store.upsertTask(task('Y'));
+    await assert.rejects(
+      () => store.upsertMilestone({id: 'Y', project: 'P', name: 'Y'}),
+      /already a task/
+    );
+    await store.close();
+  });
+
   it('reset wipes the graph but keeps claims and reviews', async () => {
     const store = await openStore();
     await store.upsertTask(task('A'));

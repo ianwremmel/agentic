@@ -17,14 +17,44 @@ export interface GraphConfig {
   verificationLabels: readonly string[];
   /** Roles that mean "parked pending a human" on this tracker. */
   parkedRoles: readonly Role[];
+  /** Default staleness for a claim (ms). Overridable per call by `--stale-after`. */
+  claimStaleAfterMs: number;
 }
+
+/** Ten minutes: a claim not heartbeated within it is presumed dead (§2.6). */
+export const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
 
 export const DEFAULT_CONFIG: GraphConfig = Object.freeze({
   states: {},
   humanInteractiveLabels: ['human-only', 'needs-human'],
   verificationLabels: ['verification'],
   parkedRoles: DEFAULT_PARKED_ROLES,
+  claimStaleAfterMs: DEFAULT_STALE_AFTER_MS,
 });
+
+/**
+ * Parse a duration like `15m`, `30s`, `2h`, or a bare number of seconds, into ms.
+ * Returns null on anything unrecognizable, so the caller can name the flag.
+ */
+export function parseDuration(value: string): number | null {
+  const match = /^(\d+)(ms|s|m|h)?$/u.exec(value.trim());
+  if (match === null) return null;
+  const n = Number(match[1]);
+  switch (match[2]) {
+    case 'ms':
+      return n;
+    case 'h':
+      return n * 60 * 60 * 1000;
+    case 'm':
+      return n * 60 * 1000;
+    // A bare number is seconds, matching `s`.
+    case 's':
+    case undefined:
+      return n * 1000;
+    default:
+      return null;
+  }
+}
 
 /**
  * Where the durable graph lives. Precedence: the flag, then the environment,
@@ -114,7 +144,30 @@ export function parseConfig(raw: string, source: string): GraphConfig {
       labels(doc.verificationLabels, 'verificationLabels', source) ??
       DEFAULT_CONFIG.verificationLabels,
     parkedRoles: parkedRoles(doc.parkedRoles, source),
+    claimStaleAfterMs: claimStaleAfter(doc.claimStaleAfter, source),
   };
+}
+
+function claimStaleAfter(raw: unknown, source: string): number {
+  if (raw === undefined || raw === null)
+    return DEFAULT_CONFIG.claimStaleAfterMs;
+
+  assert(
+    typeof raw === 'string',
+    new DataError(`${source}: "claimStaleAfter" must be a duration string`, {
+      hint: 'write it as {"claimStaleAfter": "10m"} — number plus ms/s/m/h.',
+    })
+  );
+
+  const ms = parseDuration(raw);
+  assert(
+    ms !== null,
+    new DataError(`${source}: "claimStaleAfter" is not a duration: "${raw}"`, {
+      hint: 'use a number plus ms/s/m/h, e.g. "10m".',
+    })
+  );
+
+  return ms;
 }
 
 function labels(

@@ -64,7 +64,9 @@ export function group({name, summary, path, children}: GroupSpec): Command {
       );
 
       const childArgs = argv.slice(1);
-      if (requestsHelp(childArgs)) {
+      // A child that handles help itself (a nested group) must route `--help`
+      // further — `graph task set --help` wants set's usage, not task's.
+      if (requestsHelp(childArgs) && child.handlesHelp !== true) {
         await writeLine(context.stdout, `usage: ${child.usage}`);
         return;
       }

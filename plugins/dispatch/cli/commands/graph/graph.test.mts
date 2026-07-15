@@ -6,226 +6,223 @@ import {describe, it} from 'node:test';
 
 import {runDispatch, type DispatchResult} from '../../../test-harness.mts';
 
-/** A graph database of its own per test, so nothing leaks between them. */
 async function graphDb(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-graph-'));
   return path.join(dir, 'graph.db');
 }
 
-function run(
-  db: string,
-  args: string[],
-  input?: string
-): Promise<DispatchResult> {
-  return runDispatch(
-    ['graph', ...args, '--db', db],
-    input === undefined ? {} : {input}
-  );
+/** Run one `dispatch graph …` command against a specific database. */
+function run(db: string, args: string[]): Promise<DispatchResult> {
+  return runDispatch(['graph', ...args, '--db', db]);
 }
 
-/** Two tickets in one milestone, the first blocking the second. */
-const PAYLOAD = JSON.stringify({
-  cursor: '2026-07-11T00:00:00.000Z',
-  projects: [{id: 'P', name: 'Project'}],
-  milestones: [{id: 'm1', project: 'P', name: 'One', sortOrder: 1}],
-  nodes: [
-    {id: 'CLC-1', project: 'P', state: 'Todo', milestone: 'm1'},
-    {
-      id: 'CLC-2',
-      project: 'P',
-      state: 'Todo',
-      milestone: 'm1',
-      blockedBy: ['CLC-1'],
-    },
-  ],
-});
+/** A two-milestone graph: T1 done in M1, T2 available in M2, M1 blocks M2. */
+async function seed(db: string): Promise<void> {
+  const steps = [
+    ['project', 'set', '--id', 'P'],
+    ['milestone', 'set', '--id', 'M1', '--project', 'P'],
+    ['milestone', 'set', '--id', 'M2', '--project', 'P'],
+    ['edge', 'add', '--blocker', 'M1', '--blocked', 'M2'],
+    [
+      'task',
+      'set',
+      '--id',
+      'T1',
+      '--project',
+      'P',
+      '--state',
+      'Done',
+      '--milestone',
+      'M1',
+    ],
+    [
+      'task',
+      'set',
+      '--id',
+      'T2',
+      '--project',
+      'P',
+      '--state',
+      'Todo',
+      '--milestone',
+      'M2',
+    ],
+  ];
+  for (const step of steps) {
+    const result = await run(db, step);
+    assert.equal(result.code, 0, `${step.join(' ')}: ${result.stderr}`);
+  }
+}
 
-describe('the producer loop, end to end', () => {
-  it('ingests a payload on stdin and derives the frontier from it', async () => {
+describe('building and reading the graph', () => {
+  it('derives the frontier from typed writes', async () => {
     const db = await graphDb();
-
-    const ingest = await run(db, ['ingest', '--full'], PAYLOAD);
-    assert.equal(ingest.code, 0, ingest.stderr);
+    await seed(db);
 
     const {code, stdout} = await run(db, ['doc']);
-
     assert.equal(code, 0);
-    // CLC-1 is unblocked and rank 1; CLC-2 waits behind it.
-    assert.match(stdout, /<ticket id="CLC-1" rank="1"/u);
-    assert.doesNotMatch(stdout, /<ticket id="CLC-2" rank=/u);
-    assert.match(stdout, /<ticket id="CLC-2" blocked-by="CLC-1"/u);
+    // T2 is gated behind M1, which is ready but unreviewed.
+    assert.match(stdout, /<ticket id="T2" blocked-by="" gated-by="M1"/u);
+    assert.doesNotMatch(stdout, /<ticket id="T2" rank=/u);
   });
 
-  it('carries the cursor back, so the next fetch can be a delta', async () => {
+  it('opens the milestone gate once the review is recorded', async () => {
     const db = await graphDb();
-    await run(db, ['ingest', '--full'], PAYLOAD);
+    await seed(db);
 
-    const {stdout} = await run(db, ['cursor', '--source', 'linear']);
-
-    assert.equal(stdout.trim(), '2026-07-11T00:00:00.000Z');
-  });
-
-  it('prints nothing for an unknown cursor, which is the first-run signal to sync fully', async () => {
-    const db = await graphDb();
-
-    const {code, stdout} = await run(db, ['cursor', '--source', 'linear']);
-
-    assert.equal(code, 0);
-    assert.equal(stdout, '');
-  });
-
-  it('moves the frontier on when a delta resolves the blocker', async () => {
-    const db = await graphDb();
-    await run(db, ['ingest', '--full'], PAYLOAD);
-
-    const delta = JSON.stringify({
-      cursor: '2026-07-12T00:00:00.000Z',
-      nodes: [{id: 'CLC-1', project: 'P', state: 'Done', milestone: 'm1'}],
-    });
-    const ingest = await run(db, ['ingest'], delta);
-    assert.equal(ingest.code, 0, ingest.stderr);
+    const recorded = await run(db, ['record-review', '--id', 'M1']);
+    assert.equal(recorded.code, 0, recorded.stderr);
 
     const {stdout} = await run(db, ['doc']);
-
-    assert.match(stdout, /<ticket id="CLC-2" rank="1"/u);
-    assert.doesNotMatch(stdout, /<ticket id="CLC-1" rank=/u);
+    assert.match(stdout, /<ticket id="T2" rank="1"/u);
   });
 
-  it('withholds an excluded ticket from the frontier while still tracking it', async () => {
+  it('refuses to record a review of a milestone with open work', async () => {
     const db = await graphDb();
-    await run(db, ['ingest', '--full'], PAYLOAD);
+    await seed(db);
 
-    await run(db, ['exclude', 'add', 'CLC-1', '--kind', 'in-flight']);
-    const excluded = await run(db, ['doc']);
-    assert.doesNotMatch(excluded.stdout, /<ticket id="CLC-1" rank=/u);
-    assert.match(excluded.stdout, /id="CLC-1"[^>]*excluded="in-flight"/u);
+    const {code, stderr} = await run(db, ['record-review', '--id', 'M2']);
+    assert.equal(code, 4);
+    assert.match(stderr, /not ready for review/u);
+  });
 
-    await run(db, ['exclude', 'remove', 'CLC-1']);
-    const restored = await run(db, ['doc']);
-    assert.match(restored.stdout, /<ticket id="CLC-1" rank="1"/u);
+  it('reset clears the graph', async () => {
+    const db = await graphDb();
+    await seed(db);
+    assert.equal((await run(db, ['reset'])).code, 0);
+
+    const {stdout} = await run(db, ['doc']);
+    assert.doesNotMatch(stdout, /<node /u);
   });
 });
 
-describe('the milestone gate', () => {
-  const GATED = JSON.stringify({
-    projects: [{id: 'P', name: 'Project'}],
-    milestones: [
-      {id: 'm1', project: 'P', name: 'One', sortOrder: 1},
-      {id: 'm2', project: 'P', name: 'Two', sortOrder: 2},
-    ],
-    nodes: [
-      {id: 'CLC-1', project: 'P', state: 'Done', milestone: 'm1'},
-      {id: 'CLC-2', project: 'P', state: 'Todo', milestone: 'm2'},
-    ],
+describe('next and claim', () => {
+  it('next prints the top available task; --claim grabs it atomically', async () => {
+    const db = await graphDb();
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']); // unblock T2
+
+    const peek = await run(db, ['next']);
+    assert.match(peek.stdout, /id=T2 target-kind=pr/u);
+
+    const claimed = await run(db, ['next', '--claim', '--agent', 'agent-a']);
+    assert.match(claimed.stdout, /id=T2/u);
+
+    // Now claimed, T2 is in-flight and off the frontier.
+    const doc = await run(db, ['doc']);
+    assert.match(
+      doc.stdout,
+      /id="T2"[^>]*state="in-flight"[^>]*claimed-by="agent-a"/u
+    );
+    const again = await run(db, ['next']);
+    assert.equal(again.stdout.trim(), '');
   });
 
-  it('holds the next milestone shut until the review is recorded, then opens it', async () => {
+  it('a second agent cannot claim a live-held task', async () => {
     const db = await graphDb();
-    await run(db, ['ingest', '--full'], GATED);
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+    await run(db, ['claim', '--id', 'T2', '--agent', 'agent-a']);
 
-    const gated = await run(db, ['doc']);
-    assert.match(
-      gated.stdout,
-      /<ticket id="CLC-2" blocked-by="" gated-by="m1"/u
-    );
-    assert.match(
-      gated.stdout,
-      /<milestone id="m1"[^>]*ready-for-review="true" review-recorded="false"/u
-    );
-
-    const recorded = await run(db, ['record-review', 'm1']);
-    assert.equal(recorded.code, 0, recorded.stderr);
-
-    const opened = await run(db, ['doc']);
-    assert.match(opened.stdout, /<ticket id="CLC-2" rank="1"/u);
+    const {code, stderr} = await run(db, [
+      'claim',
+      '--id',
+      'T2',
+      '--agent',
+      'agent-b',
+    ]);
+    assert.equal(code, 3);
+    assert.match(stderr, /held by a live claim from agent agent-a/u);
   });
 
-  it('re-closes the gate when the review files a follow-up ticket into the milestone', async () => {
+  it('reclaims a stale claim with --stale-after 0', async () => {
     const db = await graphDb();
-    await run(db, ['ingest', '--full'], GATED);
-    await run(db, ['record-review', 'm1']);
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+    await run(db, ['claim', '--id', 'T2', '--agent', 'agent-a']);
 
-    const followUp = JSON.stringify({
-      nodes: [{id: 'CLC-3', project: 'P', state: 'Todo', milestone: 'm1'}],
-    });
-    await run(db, ['ingest'], followUp);
+    const reclaim = await run(db, [
+      'claim',
+      '--id',
+      'T2',
+      '--agent',
+      'agent-b',
+      '--stale-after',
+      '0',
+    ]);
+    assert.equal(reclaim.code, 0, reclaim.stderr);
 
-    const {stdout} = await run(db, ['doc']);
-
-    // The milestone has open work again, so the recorded review no longer counts
-    // and CLC-2 is gated once more.
-    assert.match(
-      stdout,
-      /<milestone id="m1"[^>]*ready-for-review="false" review-recorded="false"/u
-    );
-    assert.match(stdout, /<ticket id="CLC-2" blocked-by="" gated-by="m1"/u);
-    assert.match(stdout, /<ticket id="CLC-3" rank="1"/u);
+    const doc = await run(db, ['doc']);
+    assert.match(doc.stdout, /id="T2"[^>]*claimed-by="agent-b"/u);
   });
 
-  it('refuses to record a review of a milestone that still has open work', async () => {
+  it('heartbeat fails once a claim has been reclaimed', async () => {
     const db = await graphDb();
-    await run(db, ['ingest', '--full'], PAYLOAD);
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+    await run(db, ['claim', '--id', 'T2', '--agent', 'agent-a']);
+    await run(db, [
+      'claim',
+      '--id',
+      'T2',
+      '--agent',
+      'agent-b',
+      '--stale-after',
+      '0',
+    ]);
 
-    const {code, stderr} = await run(db, ['record-review', 'm1']);
-
+    const {code, stderr} = await run(db, [
+      'heartbeat',
+      '--id',
+      'T2',
+      '--agent',
+      'agent-a',
+    ]);
     assert.equal(code, 4);
-    assert.match(
-      stderr,
-      /not ready for review: 2 of 2 tickets are still open/u
-    );
-    assert.match(stderr, /hint: .*verified or canceled/u);
+    assert.match(stderr, /holds no claim/u);
   });
 });
 
 describe('what a caller sees when it gets the call wrong', () => {
-  it('exits 4 on a payload that is not JSON, and says how to fix it', async () => {
+  it('exits 4 on a native state no mapping covers', async () => {
     const db = await graphDb();
-
-    const {code, stderr} = await run(db, ['ingest'], 'not json');
-
-    assert.equal(code, 4);
-    assert.match(stderr, /error: the ingest payload is not valid JSON/u);
-    assert.match(stderr, /hint: emit a single JSON object/u);
-  });
-
-  it('exits 4 on a native state no mapping covers, rather than guessing', async () => {
-    const db = await graphDb();
-    const payload = JSON.stringify({
-      nodes: [{id: 'A', project: 'P', state: 'Ready for QA'}],
-    });
-
-    const {code, stderr} = await run(db, ['ingest'], payload);
-
+    const {code, stderr} = await run(db, [
+      'task',
+      'set',
+      '--id',
+      'A',
+      '--project',
+      'P',
+      '--state',
+      'Ready for QA',
+    ]);
     assert.equal(code, 4);
     assert.match(stderr, /no mapping for the native state "Ready for QA"/u);
   });
 
-  it('exits 2 on an unknown flag, and answers with the subcommand usage, not the group listing', async () => {
+  it('exits 2 on an unknown flag, and answers with the subcommand usage', async () => {
     const db = await graphDb();
-
-    const {code, stderr} = await run(db, ['ingest', '--bogus']);
-
+    const {code, stderr} = await run(db, ['task', 'set', '--bogus']);
     assert.equal(code, 2);
-    assert.match(stderr, /usage: dispatch graph ingest/u);
-    assert.match(stderr, /--full/u);
-    // The list of graph subcommands says nothing about the flag that was wrong.
-    assert.doesNotMatch(stderr, /record-review {2,}Record/u);
+    assert.match(stderr, /usage: dispatch graph task set/u);
   });
 
   it('exits 2 and lists the subcommands when the group is named alone', async () => {
     const {code, stderr} = await runDispatch(['graph']);
-
     assert.equal(code, 2);
     assert.match(stderr, /graph needs a subcommand/u);
-    assert.match(stderr, /ingest/u);
     assert.match(stderr, /record-review/u);
   });
 
-  it('answers --help for a subcommand with that subcommand usage', async () => {
-    const {code, stdout} = await runDispatch(['graph', 'ingest', '--help']);
-
+  it('answers --help for a nested subcommand with that subcommand usage', async () => {
+    const {code, stdout} = await runDispatch([
+      'graph',
+      'task',
+      'set',
+      '--help',
+    ]);
     assert.equal(code, 0);
-    assert.match(stdout, /usage: dispatch graph ingest/u);
-    assert.match(stdout, /--full/u);
+    assert.match(stdout, /usage: dispatch graph task set/u);
+    assert.match(stdout, /--state/u);
   });
 });

@@ -3,12 +3,10 @@ import {GROUP_OF} from './roles.mts';
 
 /**
  * The §2.6 project-graph document: the orchestrator's whole view of project
- * state.
- *
- * The derived sections (`available`, `blocked`, `human-blocked`,
- * `permanently-blocked`, `milestones`, `counts`, `anomalies`) are authoritative.
- * A consumer reads them rather than re-deriving blocking or ranking from the
- * node and edge lists, which are carried for context and debugging.
+ * state. The derived sections (`available`, `blocked`, `human-blocked`,
+ * `milestones`, `counts`, `anomalies`) are authoritative — a consumer reads them
+ * rather than re-deriving from the node and edge lists, which are carried for
+ * context.
  */
 export function toXml(graph: DerivedGraph): string {
   const cursor = Object.entries(graph.cursors)
@@ -26,9 +24,7 @@ export function toXml(graph: DerivedGraph): string {
   out.push('  </projects>');
 
   out.push('  <nodes>');
-  for (const entry of graph.nodes) {
-    out.push(nodeXml(entry));
-  }
+  for (const entry of graph.nodes) out.push(nodeXml(entry));
   out.push('  </nodes>');
 
   out.push('  <edges>');
@@ -63,18 +59,10 @@ export function toXml(graph: DerivedGraph): string {
   }
   out.push('  </human-blocked>');
 
-  out.push('  <permanently-blocked>');
-  for (const entry of graph.permanentlyBlocked) {
-    out.push(
-      `    <ticket id="${attr(entry.node.id)}" reason="${attr(entry.permanentReason ?? 'excluded-failed')}"/>`
-    );
-  }
-  out.push('  </permanently-blocked>');
-
   out.push('  <milestones>');
   for (const milestone of graph.milestones) {
     out.push(
-      `    <milestone id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}" open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" available="${String(milestone.available)}" blocked="${String(milestone.blocked)}" human-blocked="${String(milestone.humanBlocked)}" permanently-blocked="${String(milestone.permanentlyBlocked)}" in-flight="${String(milestone.inFlight)}" dormant="${String(milestone.dormant)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" fingerprint="${attr(milestone.fingerprint)}"/>`
+      `    <milestone id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}" open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" in-flight="${String(milestone.inFlight)}" blocked="${String(milestone.blocked)}" fingerprint="${attr(milestone.fingerprint)}"/>`
     );
   }
   out.push('  </milestones>');
@@ -82,7 +70,7 @@ export function toXml(graph: DerivedGraph): string {
   out.push('  <counts>');
   for (const count of graph.counts) {
     out.push(
-      `    <project id="${attr(count.project)}" partial="${String(count.partial)}" total="${String(count.total)}" available="${String(count.available)}" blocked="${String(count.blocked)}" human-blocked="${String(count.humanBlocked)}" permanently-blocked="${String(count.permanentlyBlocked)}" in-flight="${String(count.inFlight)}" dormant="${String(count.dormant)}" verified="${String(count.verified)}" canceled="${String(count.canceled)}" terminal="${String(count.terminal)}"/>`
+      `    <project id="${attr(count.project)}" partial="${String(count.partial)}" total="${String(count.total)}" available="${String(count.available)}" blocked="${String(count.blocked)}" human-blocked="${String(count.humanBlocked)}" in-flight="${String(count.inFlight)}" dormant="${String(count.dormant)}" verified="${String(count.verified)}" canceled="${String(count.canceled)}" terminal="${String(count.terminal)}"/>`
     );
   }
   out.push('  </counts>');
@@ -112,7 +100,7 @@ export function toJson(graph: DerivedGraph): string {
         effectiveBlocked: entry.effectiveBlocked,
         blockedBy: entry.blockedBy,
         gatedBy: entry.gatedBy,
-        excluded: entry.excluded,
+        claim: entry.claim,
       })),
       edges: graph.edges,
       available: graph.available.map((entry, index) => ({
@@ -132,10 +120,6 @@ export function toJson(graph: DerivedGraph): string {
         url: entry.node.url,
         role: entry.node.role,
         reason: humanReason(entry),
-      })),
-      permanentlyBlocked: graph.permanentlyBlocked.map((entry) => ({
-        id: entry.node.id,
-        reason: entry.permanentReason ?? 'excluded-failed',
       })),
       milestones: graph.milestones,
       counts: graph.counts,
@@ -161,18 +145,17 @@ function nodeXml(entry: ClassifiedNode): string {
     `effective-blocked="${String(entry.effectiveBlocked)}"`,
     `state="${attr(entry.classification)}"`,
   ];
-  if (node.branchHint !== null) {
+  if (node.branchHint !== null)
     attrs.push(`branch-hint="${attr(node.branchHint)}"`);
-  }
-  if (entry.excluded !== null) {
-    attrs.push(`excluded="${attr(entry.excluded)}"`);
+  if (entry.claim !== null) {
+    attrs.push(`claimed-by="${attr(entry.claim.agent)}"`);
+    attrs.push(`claim-live="${String(entry.claim.live)}"`);
   }
 
   const labels = node.labels
     .map((label) => `<label>${text(label)}</label>`)
     .join('');
   const open = `    <node ${attrs.join(' ')}`;
-
   return labels === '' ? `${open}/>` : `${open}>${labels}</node>`;
 }
 

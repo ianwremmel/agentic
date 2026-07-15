@@ -2,13 +2,12 @@ import {createHash} from 'node:crypto';
 
 import type {BlockingAnalysis} from './blocking.mts';
 import {isResolved} from './roles.mts';
-import type {GraphNode, Milestone, ReviewRecord} from './types.mts';
+import type {GraphEdge, GraphNode, Milestone, ReviewRecord} from './types.mts';
 
 export interface MilestoneState {
   id: string;
   project: string;
   name: string;
-  sortOrder: number;
   members: string[];
   memberCount: number;
   openCount: number;
@@ -34,14 +33,14 @@ export function fingerprintMembers(memberIds: readonly string[]): string {
 /**
  * Whether a member has moved since the review was recorded.
  *
- * The member set alone cannot see a member that was reopened and re-verified
- * *between two syncs*: the graph never observes the milestone as un-ready, the
- * ids are unchanged, and the old review would go on satisfying the gate — which
- * §2.6 forbids ("a stale review record MUST NOT suppress the re-review"). The
- * tracker's own `updatedAt` does see it, because reopening the ticket moved it.
+ * The member set alone cannot see a member reopened and re-verified *between two
+ * syncs*: the graph never observes the milestone as un-ready, the ids are
+ * unchanged, and the old review would go on satisfying the gate — which §2.6
+ * forbids. The tracker's own `updatedAt` does see it, because reopening the
+ * ticket moved it.
  *
  * A member with no `updatedAt` is no evidence of change: an adapter that does not
- * report one would otherwise invalidate every review it ever records.
+ * report one would otherwise invalidate every review it records.
  */
 function movedSince(
   members: readonly GraphNode[],
@@ -53,15 +52,15 @@ function movedSince(
 }
 
 /**
- * Milestone readiness, per §2.3: settled means `verified` or `canceled`, and
- * nothing else.
+ * Milestone readiness, per §2.3: a milestone is ready for review when every
+ * member is `verified` or `canceled` and no member has an unresolved dependency.
+ * An empty milestone is never ready — there is nothing to review, and calling it
+ * reviewed would let it gate later milestones forever.
  *
- * A permanently-blocked ticket is NOT settled. It is still open, so its milestone
- * is not complete and cannot be reviewed — the gate stays shut, deliberately.
- * Cancelling the ticket is what resolves it: once a human decides the work will
- * not be done, `canceled` both settles it and releases everything it blocked. The
- * decision to give up on work is a human's to make and record, not something the
- * producer infers by treating dead work as if it were finished.
+ * Readiness is computed from members alone (their roles, and their *task*
+ * dependencies via `analysis`), never from milestone sequencing. That is what
+ * keeps milestone gating acyclic: a milestone's readiness cannot depend on a
+ * later milestone being reviewed.
  */
 export function computeMilestoneStates(
   nodes: readonly GraphNode[],
@@ -80,7 +79,6 @@ export function computeMilestoneStates(
   const recordFor = new Map(
     reviews.map((review) => [review.milestone, review])
   );
-
   const states = new Map<string, MilestoneState>();
 
   for (const milestone of milestones) {
@@ -92,11 +90,6 @@ export function computeMilestoneStates(
       (member) => !isResolved(member.role)
     ).length;
 
-    // §2.3: ready for review means no remaining blockers — every member is
-    // `verified` or `canceled`, and no unresolved ticket is a direct or
-    // transitive dependency of a member. An empty milestone is never ready:
-    // there is nothing to review, and calling it reviewed would let it gate
-    // later milestones forever.
     const membersSettled = members.length > 0 && openCount === 0;
     const dependenciesResolved = members.every(
       (member) =>
@@ -107,7 +100,6 @@ export function computeMilestoneStates(
       id: milestone.id,
       project: milestone.project,
       name: milestone.name,
-      sortOrder: milestone.sortOrder,
       members: memberIds,
       memberCount: members.length,
       openCount,
@@ -124,38 +116,78 @@ export function computeMilestoneStates(
   return states;
 }
 
-/**
- * The §2.6 milestone-review gate, expressed as effective blocking rather than a
- * state machine: a ticket cannot start while an earlier milestone in its project
- * is not both ready-for-review and review-recorded.
- *
- * Empty milestones are skipped — they carry no work, so they cannot gate.
- *
- * Returns the ids of the earlier milestones gating this node; empty if none.
- */
-export function gatingMilestones(
-  node: GraphNode,
-  states: ReadonlyMap<string, MilestoneState>
-): string[] {
-  if (node.milestone === null) return [];
-
-  const own = states.get(node.milestone);
-  if (own === undefined) return [];
-
-  return [...states.values()]
-    .filter(
-      (candidate) =>
-        candidate.project === own.project &&
-        candidate.sortOrder < own.sortOrder &&
-        candidate.memberCount > 0 &&
-        !(candidate.readyForReview && candidate.reviewRecorded)
-    )
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((candidate) => candidate.id);
+/** A milestone gates work once it is reviewed: both ready and review-recorded. */
+export function isMilestoneReviewed(
+  state: MilestoneState | undefined
+): boolean {
+  return state !== undefined && state.readyForReview && state.reviewRecorded;
 }
 
 /**
- * Whether the milestone's current episode has been reviewed: a record that covers
+ * Every milestone that transitively blocks each milestone, walked over the
+ * milestone-to-milestone edges. This is what replaces the old `sortOrder` index:
+ * sequencing is a DAG, so a milestone can have several predecessors.
+ *
+ * Cycle-safe (a milestone on a cycle simply includes itself) and iterative, so a
+ * deep chain cannot blow the stack.
+ */
+export function milestoneAncestry(
+  milestones: readonly Milestone[],
+  milestoneEdges: readonly GraphEdge[]
+): Map<string, Set<string>> {
+  const ids = new Set(milestones.map((milestone) => milestone.id));
+  const blockersOf = new Map<string, string[]>();
+  for (const edge of milestoneEdges) {
+    if (!ids.has(edge.blocked)) continue;
+    const bucket = blockersOf.get(edge.blocked);
+    if (bucket === undefined) blockersOf.set(edge.blocked, [edge.blocker]);
+    else if (!bucket.includes(edge.blocker)) bucket.push(edge.blocker);
+  }
+
+  const ancestry = new Map<string, Set<string>>();
+  for (const milestone of milestones) {
+    const seen = new Set<string>();
+    const stack = [...(blockersOf.get(milestone.id) ?? [])];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (id === undefined || seen.has(id)) continue;
+      seen.add(id);
+      stack.push(...(blockersOf.get(id) ?? []));
+    }
+    ancestry.set(milestone.id, seen);
+  }
+
+  return ancestry;
+}
+
+/**
+ * The §2.6 milestone-review gate: a task cannot start while a milestone that
+ * blocks its own milestone is not yet reviewed. Sequencing comes from the
+ * milestone edges (via `ancestry`), membership from the task's `milestone` field.
+ *
+ * Returns the ids of the gating milestones, empty if none.
+ */
+export function gatingMilestones(
+  node: GraphNode,
+  states: ReadonlyMap<string, MilestoneState>,
+  ancestry: ReadonlyMap<string, Set<string>>
+): string[] {
+  if (node.milestone === null) return [];
+
+  return [...(ancestry.get(node.milestone) ?? [])]
+    .filter((id) => {
+      const candidate = states.get(id);
+      return (
+        candidate !== undefined &&
+        candidate.memberCount > 0 &&
+        !isMilestoneReviewed(candidate)
+      );
+    })
+    .sort();
+}
+
+/**
+ * Whether the milestone's current episode has been reviewed: a record covering
  * exactly this member set, taken after the last time any member moved.
  */
 function isRecorded(

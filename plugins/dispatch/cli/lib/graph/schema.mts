@@ -1,9 +1,13 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * `labels` is a JSON array in a TEXT column: labels are read and written whole
- * with their node and are never queried across nodes, so a join table would buy
+ * with their task and are never queried across tasks, so a join table would buy
  * nothing.
+ *
+ * Tasks and milestones are separate tables but share one `edge` table — an edge
+ * endpoint may be either, which is how a milestone participates in the
+ * dependency graph the same way a task does.
  */
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -17,13 +21,12 @@ CREATE TABLE IF NOT EXISTS project (
 );
 
 CREATE TABLE IF NOT EXISTS milestone (
-  id         TEXT PRIMARY KEY,
-  project    TEXT NOT NULL,
-  name       TEXT NOT NULL,
-  sort_order REAL NOT NULL
+  id      TEXT PRIMARY KEY,
+  project TEXT NOT NULL,
+  name    TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS node (
+CREATE TABLE IF NOT EXISTS task (
   id                TEXT PRIMARY KEY,
   project           TEXT NOT NULL,
   url               TEXT NOT NULL,
@@ -45,9 +48,10 @@ CREATE TABLE IF NOT EXISTS edge (
   PRIMARY KEY (blocker, blocked)
 );
 
-CREATE TABLE IF NOT EXISTS exclusion (
-  id   TEXT PRIMARY KEY,
-  kind TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS claim (
+  id           TEXT PRIMARY KEY,
+  agent        TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS review (
@@ -61,7 +65,7 @@ CREATE TABLE IF NOT EXISTS cursor (
   value  TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS node_project ON node (project);
+CREATE INDEX IF NOT EXISTS task_project ON task (project);
 CREATE INDEX IF NOT EXISTS edge_blocked ON edge (blocked);
 CREATE INDEX IF NOT EXISTS edge_blocker ON edge (blocker);
 `;

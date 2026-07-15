@@ -28,18 +28,21 @@ dispatch greet --name World      # -> hello World
 dispatch --help                  # list commands
 ```
 
-`dispatch graph` builds and queries the project dependency graph the
-`build-graph` skill produces — a SQLite-backed store (`node:sqlite`) plus the
-derivation an orchestrator schedules from:
+`dispatch graph` builds, queries, and coordinates work over the project
+dependency graph the `build-graph` skill produces — a SQLite-backed store
+(`node:sqlite`) plus the derivation an orchestrator schedules from:
 
 ```shell
-dispatch graph ingest --full < payload.json   # merge a fetch into the graph
-dispatch graph doc                            # the derived project-graph document
+dispatch graph task set --id CLC-945 --project P --state "In Progress"  # typed writes
+dispatch graph doc                                                      # the derived document
+dispatch graph next --claim --agent <session-id>                        # grab the next task
 ```
 
-Effective blocking, ranking, cycle detection, and milestone gating are computed
-here rather than by the fetching skill, so every consumer gets the same answer
-from the same graph. See
+A skill writes what it fetched through typed `project`/`task`/`edge`/`milestone`
+commands; `doc` derives the document. Effective blocking, ranking, cycle
+detection, and milestone gating are computed here rather than by the fetching
+skill, so every consumer gets the same answer. `next` and the claim lifecycle
+(`claim`/`heartbeat`/`release`) coordinate which agent works which task. See
 [`skills/build-graph/reference.md`](skills/build-graph/reference.md).
 
 It is a bash wrapper around `cli/main.mts`. The wrapper checks that Node is

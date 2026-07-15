@@ -36,7 +36,7 @@ export function snapshot(
     nodes: [],
     edges: [],
     milestones: [],
-    exclusions: [],
+    claims: [],
     reviews: [],
     cursors: {},
     ...overrides,

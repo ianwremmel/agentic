@@ -1,277 +1,187 @@
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import {fingerprintMembers} from './milestones.mts';
-import {GraphStore, type GraphDelta, type IngestNode} from './store.mts';
+import {GraphStore} from './store.mts';
 import {node} from './test-support.mts';
-
-function ingestNode(
-  id: string,
-  overrides: Partial<IngestNode> = {}
-): IngestNode {
-  return {...node(id), ...overrides};
-}
-
-function delta(overrides: Partial<GraphDelta> = {}): GraphDelta {
-  return {
-    projects: [{id: 'P', name: 'Project', declared: true}],
-    milestones: [],
-    nodes: [],
-    cursors: {},
-    ...overrides,
-  };
-}
+import type {GraphNode} from './types.mts';
 
 async function openStore(): Promise<GraphStore> {
   return GraphStore.open(':memory:');
 }
 
-describe('applying a delta', () => {
-  it('merges an update into the ticket already stored', async () => {
-    const store = await openStore();
+function task(id: string, overrides: Partial<GraphNode> = {}): GraphNode {
+  return node(id, overrides);
+}
 
-    await store.applyDelta(
-      delta({nodes: [ingestNode('A', {role: 'available'})]})
-    );
-    await store.applyDelta(
-      delta({nodes: [ingestNode('A', {role: 'in-progress', title: 'Renamed'})]})
-    );
+const HOUR = 60 * 60 * 1000;
+const NOW = Date.parse('2026-07-14T12:00:00.000Z');
+
+describe('tasks and edges', () => {
+  it('upserts a task and reads it back', async () => {
+    const store = await openStore();
+    await store.upsertTask(task('A', {role: 'in-progress', title: 'Thing'}));
+    await store.upsertTask(task('A', {role: 'in-review', title: 'Renamed'}));
 
     const {nodes} = await store.snapshot();
     const stored = nodes[0];
     assert.ok(stored);
     assert.equal(nodes.length, 1);
-    assert.equal(stored.role, 'in-progress');
+    assert.equal(stored.role, 'in-review');
     assert.equal(stored.title, 'Renamed');
-
     await store.close();
   });
 
-  it('leaves a ticket the delta says nothing about alone', async () => {
+  it('removes a task with its edges and claim', async () => {
     const store = await openStore();
+    await store.upsertTask(task('A'));
+    await store.upsertTask(task('B'));
+    await store.addEdge('A', 'B');
+    await store.claim('A', 'agent-a', NOW, HOUR, true);
 
-    await store.applyDelta(
-      delta({nodes: [ingestNode('A'), ingestNode('B', {role: 'verified'})]})
-    );
-    await store.applyDelta(
-      delta({nodes: [ingestNode('A', {role: 'delivered'})]})
-    );
-
-    const {nodes} = await store.snapshot();
-    assert.equal(nodes.find((entry) => entry.id === 'B')?.role, 'verified');
-
-    await store.close();
-  });
-
-  it('records an edge once even when both of its tickets declare it', async () => {
-    const store = await openStore();
-
-    const result = await store.applyDelta(
-      delta({
-        nodes: [
-          ingestNode('A', {blocks: ['B']}),
-          ingestNode('B', {blockedBy: ['A']}),
-        ],
-      })
-    );
-
-    assert.equal(result.edgesWritten, 1);
-    const {edges} = await store.snapshot();
-    assert.deepEqual(edges, [{blocker: 'A', blocked: 'B'}]);
-
-    await store.close();
-  });
-
-  it('drops a dependency the tracker dropped, because a declared direction is authoritative', async () => {
-    const store = await openStore();
-
-    await store.applyDelta(
-      delta({nodes: [ingestNode('B', {blockedBy: ['A']})]})
-    );
-    await store.applyDelta(delta({nodes: [ingestNode('B', {blockedBy: []})]}));
-
-    const {edges} = await store.snapshot();
-    assert.deepEqual(edges, []);
-
-    await store.close();
-  });
-
-  it('leaves the undeclared direction alone when a delta declares only one', async () => {
-    // B says who blocks it. It says nothing about what it blocks, so the edge
-    // B -> C must survive — otherwise a partial fetch silently unblocks C.
-    const store = await openStore();
-
-    await store.applyDelta(
-      delta({nodes: [ingestNode('B', {blockedBy: ['A'], blocks: ['C']})]})
-    );
-    await store.applyDelta(delta({nodes: [ingestNode('B', {blockedBy: []})]}));
-
-    const {edges} = await store.snapshot();
-    assert.deepEqual(edges, [{blocker: 'B', blocked: 'C'}]);
-
-    await store.close();
-  });
-
-  it('removes a deleted ticket and every edge that touched it', async () => {
-    const store = await openStore();
-
-    await store.applyDelta(
-      delta({
-        nodes: [
-          ingestNode('A', {blocks: ['B']}),
-          ingestNode('B', {blocks: ['C']}),
-          ingestNode('C'),
-        ],
-      })
-    );
-    await store.applyDelta(
-      delta({nodes: [{...ingestNode('B'), deleted: true}]})
-    );
-
-    const {nodes, edges} = await store.snapshot();
+    assert.equal(await store.removeTask('A'), true);
+    const snap = await store.snapshot();
     assert.deepEqual(
-      nodes.map((entry) => entry.id),
-      ['A', 'C']
-    );
-    assert.deepEqual(edges, []);
-
-    await store.close();
-  });
-
-  it('does not let a neighbour resurrect an edge to a ticket the same delta deleted', async () => {
-    // B's fetch saw A before A was deleted, so B still declares `blockedBy: [A]`.
-    // Re-inserting that edge would leave the graph depending on a ticket it does
-    // not hold — which reads as an unresolved blocker and strands B forever.
-    const store = await openStore();
-
-    await store.applyDelta(
-      delta({nodes: [ingestNode('A'), ingestNode('B', {blockedBy: ['A']})]})
-    );
-    await store.applyDelta(
-      delta({
-        nodes: [
-          {...ingestNode('A'), deleted: true},
-          ingestNode('B', {blockedBy: ['A']}),
-        ],
-      })
-    );
-
-    const {nodes, edges} = await store.snapshot();
-    assert.deepEqual(
-      nodes.map((entry) => entry.id),
+      snap.nodes.map((n) => n.id),
       ['B']
     );
-    assert.deepEqual(edges, []);
-
+    assert.deepEqual(snap.edges, []);
+    assert.deepEqual(snap.claims, []);
     await store.close();
   });
 
-  it('stores the cursor the payload carried', async () => {
+  it('replaces one direction of a node with edge set, leaving the other alone', async () => {
     const store = await openStore();
+    await store.setEdges('B', 'blockers', ['A']);
+    await store.setEdges('B', 'blocks', ['C']);
+    // Re-declare B's blockers as exactly {A2}; B->C must survive.
+    await store.setEdges('B', 'blockers', ['A2']);
 
-    await store.applyDelta(
-      delta({cursors: {linear: '2026-07-11T00:00:00.000Z'}})
-    );
-
-    assert.equal(await store.getCursor('linear'), '2026-07-11T00:00:00.000Z');
-    assert.equal(await store.getCursor('jira'), null);
-
-    await store.close();
-  });
-});
-
-describe('a full sync', () => {
-  it('drops the tickets that have left the tracker', async () => {
-    const store = await openStore();
-
-    await store.applyDelta(
-      delta({nodes: [ingestNode('A'), ingestNode('GONE')]})
-    );
-    await store.applyDelta(delta({nodes: [ingestNode('A')]}), {full: true});
-
-    const {nodes} = await store.snapshot();
-    assert.deepEqual(
-      nodes.map((entry) => entry.id),
-      ['A']
-    );
-
-    await store.close();
-  });
-
-  it('keeps the exclusions, which are the orchestrator bookkeeping a producer must not overwrite', async () => {
-    const store = await openStore();
-
-    await store.applyDelta(delta({nodes: [ingestNode('A')]}));
-    await store.addExclusion('A', 'in-flight');
-
-    await store.applyDelta(delta({nodes: [ingestNode('A')]}), {full: true});
-
-    assert.deepEqual(await store.listExclusions(), [
-      {id: 'A', kind: 'in-flight'},
+    const {edges} = await store.snapshot();
+    assert.deepEqual(edges, [
+      {blocker: 'A2', blocked: 'B'},
+      {blocker: 'B', blocked: 'C'},
     ]);
+    await store.close();
+  });
 
+  it('clears a direction when edge set is given an empty list', async () => {
+    const store = await openStore();
+    await store.setEdges('B', 'blockers', ['A']);
+    await store.setEdges('B', 'blockers', []);
+    assert.deepEqual((await store.snapshot()).edges, []);
+    await store.close();
+  });
+
+  it('reset wipes the graph but keeps claims and reviews', async () => {
+    const store = await openStore();
+    await store.upsertTask(task('A'));
+    await store.upsertMilestone({id: 'm1', project: 'P', name: 'M1'});
+    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    await store.recordReview('m1', 'fp', '2026-07-10T00:00:00.000Z');
+
+    await store.reset();
+
+    const snap = await store.snapshot();
+    assert.deepEqual(snap.nodes, []);
+    assert.deepEqual(snap.milestones, []);
+    assert.equal(snap.claims.length, 1);
+    assert.equal(snap.reviews.length, 1);
     await store.close();
   });
 });
 
-describe('review records', () => {
-  it('survives an ingest that leaves the milestone ready', async () => {
+describe('claims', () => {
+  it('claims a free, available task', async () => {
     const store = await openStore();
-    const milestones = [{id: 'm1', project: 'P', name: 'One', sortOrder: 1}];
-
-    await store.applyDelta(
-      delta({
-        milestones,
-        nodes: [ingestNode('A', {role: 'verified', milestone: 'm1'})],
-      })
-    );
-    await store.recordReview(
-      'm1',
-      fingerprintMembers(['A']),
-      '2026-07-11T00:00:00.000Z'
-    );
-
-    const result = await store.applyDelta(
-      delta({
-        milestones,
-        nodes: [ingestNode('A', {role: 'verified', milestone: 'm1'})],
-      })
-    );
-
-    assert.equal(result.reviewsDropped, 0);
-    assert.equal((await store.snapshot()).reviews.length, 1);
-
+    const result = await store.claim('A', 'agent-a', NOW, HOUR, true);
+    assert.equal(result.outcome, 'claimed');
     await store.close();
   });
 
-  it('is dropped when a member is reopened, so the re-completed milestone is reviewed again', async () => {
-    // The member set is unchanged, so a fingerprint alone would still match. §2.6
-    // requires a fresh review of the new episode, so the record has to go.
+  it('refuses to claim a free task that is not available', async () => {
     const store = await openStore();
-    const milestones = [{id: 'm1', project: 'P', name: 'One', sortOrder: 1}];
+    const result = await store.claim('A', 'agent-a', NOW, HOUR, false);
+    assert.equal(result.outcome, 'not-available');
+    assert.deepEqual((await store.snapshot()).claims, []);
+    await store.close();
+  });
 
-    await store.applyDelta(
-      delta({
-        milestones,
-        nodes: [ingestNode('A', {role: 'verified', milestone: 'm1'})],
-      })
+  it('a re-claim by the holder just refreshes the heartbeat', async () => {
+    const store = await openStore();
+    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    const later = NOW + 5 * 60 * 1000;
+    const result = await store.claim('A', 'agent-a', later, HOUR, false);
+    assert.equal(result.outcome, 'refreshed');
+    assert.equal(
+      (await store.snapshot()).claims[0]?.heartbeatAt,
+      new Date(later).toISOString()
     );
-    await store.recordReview(
-      'm1',
-      fingerprintMembers(['A']),
-      '2026-07-11T00:00:00.000Z'
+    await store.close();
+  });
+
+  it('refuses a live claim held by another agent', async () => {
+    const store = await openStore();
+    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    const result = await store.claim('A', 'agent-b', NOW + 60_000, HOUR, true);
+    assert.equal(result.outcome, 'held');
+    assert.equal(result.heldBy, 'agent-a');
+    await store.close();
+  });
+
+  it('reclaims a stale claim for a new agent', async () => {
+    const store = await openStore();
+    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    // Two hours later, agent-a's claim is stale.
+    const result = await store.claim(
+      'A',
+      'agent-b',
+      NOW + 2 * HOUR,
+      HOUR,
+      true
     );
+    assert.equal(result.outcome, 'reclaimed');
+    assert.equal((await store.snapshot()).claims[0]?.agent, 'agent-b');
+    await store.close();
+  });
 
-    const result = await store.applyDelta(
-      delta({
-        milestones,
-        nodes: [ingestNode('A', {role: 'in-progress', milestone: 'm1'})],
-      })
+  it('claimNext takes the first candidate no live agent holds', async () => {
+    const store = await openStore();
+    await store.claim('A', 'agent-a', NOW, HOUR, true); // A held live
+    const taken = await store.claimNext(
+      ['A', 'B', 'C'],
+      'agent-b',
+      NOW + 60_000,
+      HOUR
     );
+    assert.equal(taken?.id, 'B');
+    await store.close();
+  });
 
-    assert.equal(result.reviewsDropped, 1);
-    assert.deepEqual((await store.snapshot()).reviews, []);
+  it('heartbeat refreshes only the holder', async () => {
+    const store = await openStore();
+    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    assert.equal(await store.heartbeat('A', 'agent-b', NOW + 60_000), false);
+    assert.equal(await store.heartbeat('A', 'agent-a', NOW + 60_000), true);
+    await store.close();
+  });
 
+  it('release is idempotent and refuses another agent', async () => {
+    const store = await openStore();
+    await store.claim('A', 'agent-a', NOW, HOUR, true);
+    assert.equal(await store.release('A', 'agent-b'), 'not-yours');
+    assert.equal(await store.release('A', 'agent-a'), 'released');
+    assert.equal(await store.release('A', 'agent-a'), 'absent');
+    await store.close();
+  });
+});
+
+describe('cursors', () => {
+  it('stores, reads, and clears a cursor', async () => {
+    const store = await openStore();
+    await store.setCursor('linear', '2026-07-11T00:00:00.000Z');
+    assert.equal(await store.getCursor('linear'), '2026-07-11T00:00:00.000Z');
+    assert.equal(await store.clearCursor('linear'), true);
+    assert.equal(await store.getCursor('linear'), null);
     await store.close();
   });
 });

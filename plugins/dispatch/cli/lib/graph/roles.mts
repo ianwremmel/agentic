@@ -65,19 +65,6 @@ export function isTargetKind(value: string): value is TargetKind {
   return (TARGET_KINDS as readonly string[]).includes(value);
 }
 
-/**
- * Why the orchestrator is holding a ticket off the frontier (§2.6): it is in
- * flight, it is done, or it failed. An exclusion never overwrites the tracker's
- * role — it records what the orchestrator is doing, not what the ticket is.
- */
-export const EXCLUSION_KINDS = ['in-flight', 'done', 'failed'] as const;
-export type ExclusionKind = (typeof EXCLUSION_KINDS)[number];
-
-export function isExclusionKind(value: string): value is ExclusionKind {
-  return (EXCLUSION_KINDS as readonly string[]).includes(value);
-}
-
 /** The roles, listed for an error message that has to say what is allowed. */
 export const ROLE_LIST = ROLES.join(', ');
 export const TARGET_KIND_LIST = TARGET_KINDS.join(', ');
-export const EXCLUSION_KIND_LIST = EXCLUSION_KINDS.join(', ');

@@ -1,6 +1,6 @@
-import type {ExclusionKind, Role, TargetKind} from './roles.mts';
+import type {Role, TargetKind} from './roles.mts';
 
-/** A ticket. `id` is the tracker's human identifier (e.g. `CLC-945`). */
+/** A task. `id` is the tracker's human identifier (e.g. `CLC-945`). */
 export interface GraphNode {
   id: string;
   project: string;
@@ -25,29 +25,38 @@ export interface GraphEdge {
   blocked: string;
 }
 
+/**
+ * A milestone. It carries no order: sequencing is expressed as edges between
+ * milestones (`M1 blocks M2`), so a milestone can have several predecessors, the
+ * same way a task can.
+ */
 export interface Milestone {
   id: string;
   project: string;
   name: string;
-  /** Ascending order within its project. Decides which milestone gates which. */
-  sortOrder: number;
 }
 
 export interface Project {
   id: string;
   name: string;
   /**
-   * False when the project was never fetched, only named by a ticket — typically
-   * a cross-project ancestor pulled in to complete the dependency closure. Its
-   * ticket set is partial, so its counts describe only what happened to be
+   * False when the project was never declared, only named by a task or milestone
+   * — typically a cross-project ancestor pulled in to complete the dependency
+   * closure. Its set is partial, so its counts describe only what happened to be
    * fetched and say nothing about whether the project is done.
    */
   declared: boolean;
 }
 
-export interface Exclusion {
+/**
+ * An agent's claim on a task. `agent` is its session id; `heartbeatAt` is when it
+ * last proved liveness. A claim older than the staleness threshold is dead and
+ * may be taken over (§2.6 lock reclamation).
+ */
+export interface Claim {
   id: string;
-  kind: ExclusionKind;
+  agent: string;
+  heartbeatAt: string;
 }
 
 /**
@@ -66,7 +75,7 @@ export interface GraphSnapshot {
   nodes: GraphNode[];
   edges: GraphEdge[];
   milestones: Milestone[];
-  exclusions: Exclusion[];
+  claims: Claim[];
   reviews: ReviewRecord[];
   cursors: Record<string, string>;
 }

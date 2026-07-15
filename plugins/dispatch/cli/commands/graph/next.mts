@@ -63,10 +63,9 @@ export const next: Command = {
     await withStore(values, context, async (store, config) => {
       const staleAfterMs = resolveStaleAfterMs(values['stale-after'], config);
       const options = deriveOptions(config, staleAfterMs);
-      const candidates = frontier(store.database, options, values.project);
 
       if (agent === undefined) {
-        const top = candidates[0];
+        const top = frontier(store.database, options, values.project)[0];
         if (top !== undefined)
           await writeLine(context.stdout, availableTicket(top));
         await context.log.info('next task', {task: top?.node.id ?? '-'});
@@ -82,13 +81,9 @@ export const next: Command = {
         return;
       }
 
-      const entry = candidates.find(
-        (candidate) => candidate.node.id === claimed.id
-      );
-      if (entry !== undefined)
-        await writeLine(context.stdout, availableTicket(entry));
+      await writeLine(context.stdout, availableTicket(claimed.entry));
       await context.log.info('claimed next task', {
-        task: claimed.id,
+        task: claimed.entry.node.id,
         agent,
         outcome: claimed.outcome,
       });

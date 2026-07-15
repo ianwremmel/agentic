@@ -9,7 +9,12 @@ import {
   type DeriveOptions,
 } from './queries.mts';
 import {isRole, isTargetKind, ROLE_LIST, TARGET_KIND_LIST} from './roles.mts';
-import type {Classification, GraphNode, Milestone} from './types.mts';
+import type {
+  Classification,
+  ClassifiedNode,
+  GraphNode,
+  Milestone,
+} from './types.mts';
 
 /** The outcome of a claim attempt, so the command can report it precisely. */
 export type ClaimOutcome =
@@ -260,7 +265,7 @@ export class GraphStore {
     agent: string,
     options: DeriveOptions,
     project?: string
-  ): Promise<{id: string; outcome: ClaimOutcome} | null> {
+  ): Promise<{entry: ClassifiedNode; outcome: ClaimOutcome} | null> {
     return this.#db.transaction(() => {
       for (const entry of frontier(this.#db, options, project)) {
         const node = this.#node(entry.node.id);
@@ -271,8 +276,10 @@ export class GraphStore {
           agent,
           options
         );
-        if (result.outcome !== 'held')
-          return {id: entry.node.id, outcome: result.outcome};
+        // The claimed entry itself is returned — the caller must print the row
+        // this transaction claimed, not whatever an earlier read happened to
+        // rank first.
+        if (result.outcome !== 'held') return {entry, outcome: result.outcome};
       }
       return null;
     });
@@ -512,8 +519,34 @@ export class GraphStore {
   #removeNode(externalId: string, kind: 'task' | 'milestone'): boolean {
     const existing = this.#node(externalId);
     if (existing?.kind !== kind) return false;
-    // The FKs cascade: the satellite row, every edge touching the node, its
-    // claim, and (for a milestone) its review all go with it.
+
+    if (kind === 'milestone') {
+      // Tasks may still name this milestone, and task.milestone_id has no
+      // cascade (membership is the tracker's fact, not this delete's). Remove
+      // the milestone's own rows, then either drop the node or demote it to a
+      // placeholder so the members surface as an unknown-milestone anomaly.
+      this.#db.run('DELETE FROM edge WHERE blocker = ? OR blocked = ?', [
+        existing.id,
+        existing.id,
+      ]);
+      this.#db.run('DELETE FROM review WHERE milestone_id = ?', [existing.id]);
+      this.#db.run('DELETE FROM milestone WHERE node_id = ?', [existing.id]);
+      const referenced = this.#db.get(
+        'SELECT 1 FROM task WHERE milestone_id = ? LIMIT 1',
+        [existing.id]
+      );
+      if (referenced === undefined) {
+        this.#db.run('DELETE FROM node WHERE id = ?', [existing.id]);
+      } else {
+        this.#db.run("UPDATE node SET kind = 'unknown' WHERE id = ?", [
+          existing.id,
+        ]);
+      }
+      return true;
+    }
+
+    // A task node: the FKs cascade its satellite row, every edge touching it,
+    // and its claim.
     this.#db.run('DELETE FROM node WHERE id = ?', [existing.id]);
     return true;
   }
@@ -655,10 +688,20 @@ export class GraphStore {
 
 /* eslint-enable @typescript-eslint/require-await */
 
+/**
+ * RFC 3339 shape, checked before Date.parse: V8 also accepts local formats
+ * like "07/15/2026", which would record a timestamp the caller never meant.
+ */
+const RFC3339_RE =
+  /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:\d{2})$/u;
+
 /** Parse an RFC 3339 instant to epoch ms, or reject it where the fix is easy. */
-function parseInstant(value: string | null, flag: string): number | null {
+export function parseInstant(
+  value: string | null,
+  flag: string
+): number | null {
   if (value === null) return null;
-  const ms = Date.parse(value);
+  const ms = RFC3339_RE.test(value) ? Date.parse(value) : Number.NaN;
   assert(
     !Number.isNaN(ms),
     new DataError(`${flag} is not a timestamp: "${value}"`, {

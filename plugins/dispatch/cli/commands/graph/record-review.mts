@@ -1,9 +1,8 @@
-import assert from 'node:assert';
-
 import {parseArgsOrUsage} from '../../lib/args.mts';
 import type {Command} from '../../lib/command.mts';
-import {assertUsage, DataError} from '../../lib/errors.mts';
+import {assertUsage} from '../../lib/errors.mts';
 import {DEFAULT_STALE_AFTER_MS} from '../../lib/graph/config.mts';
+import {parseInstant} from '../../lib/graph/store.mts';
 import {
   deriveOptions,
   STORE_OPTIONS,
@@ -47,13 +46,9 @@ export const recordReview: Command = {
     assertUsage(id !== undefined && id !== '', 'record-review needs --id');
 
     const recordedAtMs =
-      values.at === undefined ? Date.now() : Date.parse(values.at);
-    assert(
-      !Number.isNaN(recordedAtMs),
-      new DataError(`--at is not a timestamp: "${values.at ?? ''}"`, {
-        hint: 'pass an RFC 3339 instant (e.g. 2026-07-15T12:00:00Z), or omit --at for now.',
-      })
-    );
+      values.at === undefined
+        ? Date.now()
+        : (parseInstant(values.at, '--at') ?? Date.now());
 
     await withStore(values, context, async (store, config) => {
       // Staleness does not affect milestone readiness; any value derives the same

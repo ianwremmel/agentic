@@ -24,12 +24,41 @@ describe('tasks and edges', () => {
     await store.close();
   });
 
-  it('rejects an --updated-at that is not a timestamp', async () => {
+  it('rejects an --updated-at that is not an RFC 3339 instant', async () => {
     const store = await seededStore();
     await assert.rejects(
       () => store.upsertTask(node('A', {updatedAt: 'yesterday-ish'})),
       /--updated-at is not a timestamp/
     );
+    // Date.parse would happily read this US-local format; the store must not.
+    await assert.rejects(
+      () => store.upsertTask(node('A', {updatedAt: '07/15/2026'})),
+      /--updated-at is not a timestamp/
+    );
+    await store.close();
+  });
+
+  it('removes a milestone that tasks still name, surfacing them as an anomaly', async () => {
+    const store = await seededStore({
+      milestones: [
+        {id: 'm1', project: 'P', name: 'M1'},
+        {id: 'm2', project: 'P', name: 'M2'},
+      ],
+      nodes: [node('A', {milestone: 'm1'})],
+      edges: [['m1', 'm2']],
+    });
+
+    assert.equal(await store.removeMilestone('m1'), true);
+
+    const graph = derive(store.database);
+    assert.deepEqual(
+      graph.milestones.map((entry) => entry.id),
+      ['m2']
+    );
+    assert.deepEqual(graph.edges, []);
+    // A's membership is the tracker's fact, not the delete's: it survives and
+    // reads as an unknown milestone until a re-sync clears or re-declares it.
+    assert.equal(graph.anomalies[0]?.kind, 'unknown-milestone');
     await store.close();
   });
 
@@ -292,7 +321,7 @@ describe('claims', () => {
       nowMs: NOW + 60_000,
       staleAfterMs: HOUR,
     });
-    assert.equal(taken?.id, 'B');
+    assert.equal(taken?.entry.node.id, 'B');
     // B is now claimed too, so the frontier holds only C.
     assert.deepEqual(
       frontier(store.database, {

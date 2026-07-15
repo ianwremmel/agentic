@@ -82,8 +82,10 @@ Run `npm install`. Besides the toolchain, it installs the git hooks (husky):
 `pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats),
 `commit-msg` runs commitlint, and `pre-push` runs the `skill-reviewer` agent
 (`.claude/agents/skill-reviewer.md`) over any skill markdown changed in the
-outgoing range. A review with findings blocks the push — act on the report,
-commit, and push again. `SKILL_REVIEW=0 git push` is the emergency bypass.
+outgoing range. Only a blocking verdict — a must-fix finding, or a file the
+reviewer judges more than ~25% cuttable — blocks the push; act on the report,
+commit, and push again. Advisory findings print but never block.
+`SKILL_REVIEW=0 git push` is the emergency bypass.
 Without that install, the hooks are silently absent and CI catches the mess
 instead.
 

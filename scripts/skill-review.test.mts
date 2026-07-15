@@ -68,13 +68,21 @@ describe('verdictFrom', () => {
     assert.equal(verdictFrom('Already tight.\n\nVERDICT: pass\n\n'), 'pass');
   });
 
-  it('reports findings on VERDICT: findings', () => {
-    assert.equal(verdictFrom('1. Cut X.\nVERDICT: findings\n'), 'findings');
+  it('passes when advisory findings precede VERDICT: pass', () => {
+    assert.equal(verdictFrom('1. [advisory] Cut X.\nVERDICT: pass\n'), 'pass');
+  });
+
+  it('blocks on VERDICT: block', () => {
+    assert.equal(
+      verdictFrom('1. [must-fix] Fix X.\nVERDICT: block\n'),
+      'block'
+    );
   });
 
   it('fails closed when the verdict line is missing or malformed', () => {
-    assert.equal(verdictFrom('Looks fine to me!'), 'findings');
-    assert.equal(verdictFrom('VERDICT: pass\ntrailing chatter'), 'findings');
-    assert.equal(verdictFrom(''), 'findings');
+    assert.equal(verdictFrom('Looks fine to me!'), 'block');
+    assert.equal(verdictFrom('VERDICT: pass\ntrailing chatter'), 'block');
+    assert.equal(verdictFrom('1. Cut X.\nVERDICT: findings\n'), 'block');
+    assert.equal(verdictFrom(''), 'block');
   });
 });

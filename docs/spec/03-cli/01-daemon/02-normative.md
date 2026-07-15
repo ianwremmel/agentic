@@ -24,7 +24,7 @@ Concurrent live daemons are forbidden. Stale lockfiles MUST NOT block startup.
 
 Layout:
 
-```
+```text
 daemon.pid
 daemon.log
 tasks/<encoded-id>.json
@@ -89,7 +89,7 @@ satisfying the spawn contract MUST be accepted.
 
 ### Invocation shape
 
-```
+```shell
 <runner.binary> <runner.extra_args>
     [<runner.resume_flag> <session-id>]   # only on resume
     --cwd <task-worktree>

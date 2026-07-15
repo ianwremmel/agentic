@@ -128,13 +128,13 @@ trackers, skills MUST collapse to `in-review → delivered` and MUST NOT emit a
 
 The recommended forward path is:
 
-```
+```text
 available → in-progress → in-review → finished → delivered → verified
 ```
 
 Trackers without `finished` use:
 
-```
+```text
 available → in-progress → in-review → delivered → verified
 ```
 
@@ -359,7 +359,7 @@ follow-up comment summarizing the action taken if the response was substantive.
 
 Every log entry MUST be a single line in this format:
 
-```
+```text
 <timestamp> <kind> ticket=<ticket-link> pr=<pr-link> ticket-role=<role> pr-state=<pr-state> | <message>
 ```
 
@@ -397,7 +397,7 @@ When the agent transitions a ticket's role, it MUST post a comment to the primar
 venue (PR if one exists, else ticket) with a body containing exactly these two
 lines:
 
-```
+```text
 State: <prev-role> → <new-role>
 Rationale: <one-line rationale; required for corrective and cancel transitions>
 ```

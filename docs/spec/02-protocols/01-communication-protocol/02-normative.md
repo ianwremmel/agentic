@@ -41,7 +41,7 @@ An account is Mode A if **either** of the following holds:
    local-part — whichever the platform surfaces) matches at least one of the
    following glob patterns, evaluated case-insensitively:
 
-   ```
+   ```text
    *copilot*
    *codex*
    *claude*
@@ -93,7 +93,7 @@ backwards compatibility and means "some agent wrote this, identity unknown."
 In Mode B, the post body MUST be wrapped in a sparkle block **after** the
 machine marker:
 
-```
+```text
 {machine-marker}
 ✨
 
@@ -114,7 +114,7 @@ machine marker:
 
 **Complete Mode B example:**
 
-```
+```text
 <!-- agent-reply:dispatch -->
 ✨
 
@@ -126,7 +126,7 @@ token-expiry edge case in the follow-up commit.
 
 **Complete Mode A example:**
 
-```
+```text
 <!-- agent-reply:dispatch -->
 The implementation looks correct. I've added a test for the
 token-expiry edge case in the follow-up commit.

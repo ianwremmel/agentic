@@ -29,14 +29,14 @@ Determined by the credentials held at write time.
 Every agent-authored post (new post or thread reply — not reactions) carries one
 machine marker as its **first line**, alone, no leading whitespace:
 
-```
+```text
 <!-- agent-reply:<agent-id> -->
 ```
 
 In **Mode B**, the body is additionally wrapped in a sparkle block after the
 marker:
 
-```
+```text
 <!-- agent-reply:dispatch -->
 ✨
 
@@ -174,7 +174,7 @@ annotation is actionable unless `<cache>/<id>.ack` exists.
 
 One line per entry:
 
-```
+```text
 <timestamp> <kind> ticket=<ticket-url> pr=<pr-url> ticket-role=<role> pr-state=<state> | <message>
 ```
 
@@ -197,7 +197,7 @@ Kinds `deliver` emits:
 When a linked ticket's role changes, also post a state-change comment to the PR
 (or ticket) in wire format, body exactly:
 
-```
+```text
 State: <prev-role> → <new-role>
 Rationale: <one line; required for corrective and cancel transitions>
 ```

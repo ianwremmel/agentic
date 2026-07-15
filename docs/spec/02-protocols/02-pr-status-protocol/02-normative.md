@@ -38,7 +38,7 @@ and bypass the actionability classification, summaries, and on-disk cache that
 
 The per-PR cache root is:
 
-```
+```text
 <base>/<skill>/<repo-slug>/<pr-number>/
   comments/
     <comment-id>.md

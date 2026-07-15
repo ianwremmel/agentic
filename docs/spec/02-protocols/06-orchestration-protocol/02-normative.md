@@ -151,7 +151,7 @@ The orchestrator runs as a series of **stateless ticks**. Each tick is a fresh
 context that reads all state from disk and the tracker, acts, and exits. The
 following MUST occur each tick, in order:
 
-```
+```text
 1. Refresh graph:
      delta = producer.delta(cursor, exclude=in_flight ∪ done ∪ failed)
        (or producer.sync(...) on first run / recovery / cursor gap / no delta support)
@@ -357,7 +357,7 @@ For any human-interactive node the orchestrator MUST:
    displacing the leading marker), mirroring how §2.4 places its plan and
    engagement sentinels:
 
-   ```
+   ```text
    <!-- agent-human-alert:<orchestrator-id> -->
    ```
 

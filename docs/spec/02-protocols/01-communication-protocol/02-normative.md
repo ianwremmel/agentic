@@ -144,6 +144,11 @@ A thread is **non-actionable** when **any** of the following holds:
 
 - The newest comment in the thread was written by this agent AND carries a
   terminal signal (see §Terminal signals below).
+- This agent has applied a terminal reaction to a **top-level comment**
+  (any author). Top-level comments have no reply threading, so the agent's
+  reaction is the only signal that can settle a comment another participant
+  wrote. Review threads are settled by reply, not reaction: a terminal
+  reaction on a thread comment carries no filtering meaning in this revision.
 - The platform has explicitly resolved the thread (e.g. GitHub's "Resolved"
   state on a review thread).
 

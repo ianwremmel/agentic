@@ -284,6 +284,12 @@ platform-defined and not significant. Reactions are surfaced for top-level
 comments only; `<thread>` and `<annotation>` elements do NOT carry
 `<reactions>` children in this revision.
 
+Implementations MAY bound the surfaced list at the platform's page limit
+(e.g. GitHub's first 100 reactions per comment). Classification of the calling
+agent's own terminal reaction (§Actionability rules) MUST NOT depend on that
+bound — on GitHub, `reactionGroups.viewerHasReacted` reports the authenticated
+viewer's reaction regardless of how many reactions the comment has.
+
 | Attribute | Type   | Requirement | Meaning                                                                                                          |
 | --------- | ------ | ----------- | ---------------------------------------------------------------------------------------------------------------- |
 | `author`  | string | REQUIRED    | Platform login of the reactor                                                                                    |
@@ -313,8 +319,14 @@ Actionability follows §2.1.2 §"Thread-aware filtering" verbatim. An item is
 **non-actionable** iff any of the following holds:
 
 - The newest comment was written by the calling agent AND carries a terminal
-  signal (a terminal reaction on platforms with reaction support, or a terminal
-  text token on platforms without).
+  signal (an `agent-reply` marker with a terminal text token as its last
+  non-empty line).
+- The calling agent has applied a terminal reaction (`+1`, `-1`, `rocket`) to
+  the item (top-level comments only, any comment author). Top-level comments
+  have no reply threading, so the agent's reaction is the only signal that can
+  settle a comment another participant wrote; review threads are settled by
+  reply or platform resolution, and a reaction on a thread comment carries no
+  filtering meaning in this revision.
 - The platform has explicitly resolved the thread (review threads only; top-level
   comments have no platform resolution mechanism).
 - The comment is an **agent artifact** authored by the calling agent — one
@@ -349,12 +361,12 @@ rather than re-deriving it from the human-facing `<summary>` prose (which
 describes the item's *content* and can read as if an addressed point still
 stands). The vocabulary is a closed set of stable tokens:
 
-| Token                  | Applies to        | Meaning                                                                                  |
-| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------- |
-| `resolved`             | threads           | The platform has explicitly resolved the thread.                                         |
-| `agent-artifact`       | comments, threads | The calling agent's own plan/engagement comment (line-anchored sentinel + author match). |
-| `agent-terminal-reply` | comments, threads | The calling agent's terminal-tagged reply.                                               |
-| `acked`                | annotations       | An `<id>.ack` marker exists in the cache directory.                                      |
+| Token                  | Applies to        | Meaning                                                                                                    |
+| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `resolved`             | threads           | The platform has explicitly resolved the thread.                                                           |
+| `agent-artifact`       | comments, threads | The calling agent's own plan/engagement comment (line-anchored sentinel + author match).                   |
+| `agent-terminal-reply` | comments, threads | The calling agent's terminal signal: a terminal-tagged reply, or a terminal reaction (top-level comments). |
+| `acked`                | annotations       | An `<id>.ack` marker exists in the cache directory.                                                        |
 
 An `actionable="true"` element MUST NOT carry a `reason`.
 

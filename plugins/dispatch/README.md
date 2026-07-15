@@ -28,6 +28,23 @@ dispatch greet --name World      # -> hello World
 dispatch --help                  # list commands
 ```
 
+`dispatch graph` builds, queries, and coordinates work over the project
+dependency graph the `build-graph` skill produces — a SQLite-backed store
+(`node:sqlite`) plus the derivation an orchestrator schedules from:
+
+```shell
+dispatch graph task set --id CLC-945 --project P --role in-progress     # typed writes
+dispatch graph doc                                                      # the derived document
+dispatch graph next --claim --agent <session-id>                        # grab the next task
+```
+
+A skill writes what it fetched through typed `project`/`task`/`edge`/`milestone`
+commands; `doc` derives the document. Effective blocking, ranking, cycle
+detection, and milestone gating are computed here rather than by the fetching
+skill, so every consumer gets the same answer. `next` and the claim lifecycle
+(`claim`/`heartbeat`/`release`) coordinate which agent works which task. See
+[`skills/build-graph/reference.md`](skills/build-graph/reference.md).
+
 It is a bash wrapper around `cli/main.mts`. The wrapper checks that Node is
 present and at least 24.18 — the CLI ships as unbuilt TypeScript and relies on
 Node's native type stripping, so there is no build step and no runtime
@@ -35,11 +52,15 @@ dependencies. `DISPATCH_NODE` picks a specific Node binary.
 
 Structured output goes to stdout; logfmt records and error messages go to
 stderr. `--log-level debug|info|warn|error` (or `DISPATCH_LOG_LEVEL`) sets
-verbosity; the default is `info`. Exit codes: `0` success, `2` bad usage, `1`
-everything else.
+verbosity; the default is `info`.
+
+A failure prints an `error:` line and a `hint:` line saying what to do about it,
+and exits with a code the caller can branch on: `2` called wrong, `3` the
+environment refused (retry), `4` bad data (fix the payload), `1` a bug in the
+CLI.
 
 Add a command by writing it in `cli/commands/` and listing it in
-`cli/registry.mts`.
+`cli/lib/registry.mts`.
 
 ## Contributing
 

@@ -1,4 +1,4 @@
-import type {Writable} from 'node:stream';
+import {Readable, type Writable} from 'node:stream';
 
 import {
   GLOBAL_OPTIONS,
@@ -15,6 +15,12 @@ import {findCommand, helpText} from './lib/registry.mts';
 export interface RunOptions {
   readonly stdout: Writable;
   readonly stderr: Writable;
+  /**
+   * Payload input for the commands that read one. Defaults to an empty stream:
+   * most commands take none, and a test that drives one should not have to
+   * fabricate a stdin it never uses.
+   */
+  readonly stdin?: NodeJS.ReadableStream;
   readonly env: NodeJS.ProcessEnv;
   readonly now?: () => Date;
 }
@@ -25,7 +31,7 @@ export interface RunOptions {
  */
 export async function run(
   argv: readonly string[],
-  {stdout, stderr, env, now}: RunOptions
+  {stdout, stderr, stdin, env, now}: RunOptions
 ): Promise<number> {
   const {globalArgs, command, commandArgs} = splitArgv(argv);
 
@@ -57,7 +63,7 @@ export async function run(
     `unknown command "${command}"\n\n${helpText()}`
   );
 
-  if (requestsHelp(commandArgs)) {
+  if (requestsHelp(commandArgs) && target.handlesHelp !== true) {
     await writeLine(stdout, `usage: ${target.usage}`);
     return EXIT_OK;
   }
@@ -66,13 +72,21 @@ export async function run(
   const started = Date.now();
 
   try {
-    await target.run(commandArgs, {stdout, stderr, log, env});
+    await target.run(commandArgs, {
+      stdout,
+      stderr,
+      stdin: stdin ?? Readable.from([]),
+      log,
+      env,
+    });
   } catch (error) {
     if (!(error instanceof UsageError)) {
       throw error;
     }
 
-    // A command's own usage error prints that command's usage, not the CLI's.
+    // A command's own usage error prints that command's usage, not the CLI's —
+    // and for a subcommand, the group has already tagged the error with the
+    // subcommand's usage, which is the one the caller actually needs.
     // A global option written after the command reaches the command as an
     // unknown flag, so name the real problem rather than let it read as a typo.
     const misplaced = misplacedGlobalOptions(commandArgs);
@@ -81,8 +95,12 @@ export async function run(
         ? ''
         : `\n\nnote: ${misplaced.join(', ')} — a global option must come before the command: dispatch ${misplaced.join(' ')} ... ${target.name} ...`;
 
-    throw new UsageError(`${error.message}\n\nusage: ${target.usage}${hint}`, {
+    const usage = error.usage ?? target.usage;
+
+    throw new UsageError(`${error.message}\n\nusage: ${usage}${hint}`, {
       cause: error,
+      usage,
+      ...(error.hint === undefined ? {} : {hint: error.hint}),
     });
   }
 

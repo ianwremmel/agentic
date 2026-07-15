@@ -113,10 +113,8 @@ THREADS_JSON="$(gh api graphql \
             nodes {
               id
               isResolved
-              isOutdated
-              path
               comments(last:50) {
-                nodes { id databaseId body author { login } createdAt }
+                nodes { body author { login } }
               }
             }
           }

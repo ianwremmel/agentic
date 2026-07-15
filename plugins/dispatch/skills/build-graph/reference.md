@@ -29,11 +29,6 @@ refused (attach a task with `--milestone` instead). An edge may name an id that
 has not been written yet — it holds its dependents blocked until the id is
 written.
 
-The CLI also serves the graph's readers (`doc`, `next`, `claim`, `heartbeat`,
-`release`, `record-review`); those belong to the higher-level skills that
-interpret the graph and dispatch workers, and their flags live in the CLI's
-`--help`.
-
 ## Exit codes
 
 | Code | Means                   | Do                                          |

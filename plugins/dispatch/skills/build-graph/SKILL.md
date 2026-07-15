@@ -9,8 +9,7 @@ Produce the **project-graph**.
 
 **You fetch. The CLI reasons.** Effective blocking, ranking, cycle detection, and
 milestone gating are `dispatch graph`'s job. Never derive them yourself; never
-hand-edit the graph. Reading the graph and dispatching workers belong to
-higher-level skills, not this one.
+hand-edit the graph.
 
 ## The loop
 

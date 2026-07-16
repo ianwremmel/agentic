@@ -308,8 +308,10 @@ One wait tick of **≤ ~10 min**, after which control returns to the agent:
   until-loop on the clock, never on the awaited outcome); treat the wake
   exactly like `sleep` returning.
 
-Schedule entries past 10 min split into ticks (a 30-min wait ≈ 5×6-min ticks,
-each followed by a cheap `pr-status` check). Re-checking more often than the
+Tick-splitting is an **inline-loop rule**: schedule entries past 10 min split
+into ticks (a 30-min wait ≈ 5×6-min ticks, each followed by a cheap `pr-status`
+check). An event-driven check-in is not a bounded wait — arm `send_later` at
+the full adaptive-schedule interval, unsplit. Re-checking more often than the
 schedule is fine; the table is an upper bound.
 
 A bounded wait is **not a yield**. *Yield* = ending the turn. The rule:

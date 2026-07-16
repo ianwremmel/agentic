@@ -28,8 +28,10 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 Plugins currently published:
 
 - `plugins/dispatch/` — dispatch engineering work across pull requests and
-  Linear.app projects (PR lifecycle plus Linear triage, planning, status, and
-  cross-team sync)
+  tracked work items (PR lifecycle plus ticket triage, planning, status, and
+  cross-team sync). Trackers are pluggable: `work-ticket` and `build-graph`
+  load a per-tracker adapter skill (`tracker-adapter-<id>`) rather than
+  hardcoding one; `tracker-adapter-linear` ships bundled.
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.

@@ -43,20 +43,31 @@ Skills resolve mappings in this order: **team override → default mapping → e
 If neither a team override nor a default mapping covers a native state, the skill
 MUST surface an error rather than guess.
 
+A tracker's mappings are carried by its adapter. A tracker with no adapter MAY
+be worked best-effort: the skill maps native states whose lifecycle meaning is
+unambiguous itself and MUST escalate to the operator — never guess — where it
+is not.
+
 ## Per-tracker default mappings
 
 ### Linear
 
 | Native substate | Group       | Role                |
 | --------------- | ----------- | ------------------- |
+| Triage          | `backlog`   | `backlog`           |
 | Backlog         | `backlog`   | `backlog`           |
-| TODO            | `unstarted` | `available`         |
+| Todo            | `unstarted` | `available`         |
 | In Progress     | `started`   | `in-progress`       |
 | In Review       | `started`   | `in-review`         |
 | Finished        | `started`   | `finished`          |
 | Delivered       | `started`   | `delivered`         |
 | Done            | `completed` | `verified`          |
 | Canceled        | `canceled`  | `canceled`          |
+| Duplicate       | `canceled`  | `canceled`          |
+
+`Finished` and `Delivered` are custom substates a team adds; `Triage` exists only
+where Linear's triage feature is enabled. A team lacking one of them collapses
+the forward path over the missing role.
 
 Linear's top-level groups (`Backlog`, `Unstarted`, `Started`, `Completed`,
 `Canceled`) cannot be customized and map directly to the protocol's groups.

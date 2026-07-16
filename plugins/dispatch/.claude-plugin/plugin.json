@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
-  "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
-  "version": "0.10.0",
+  "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
+  "version": "0.11.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -46,7 +46,7 @@
     "tracker": {
       "type": "string",
       "title": "Work-item tracker",
-      "description": "Default work-item tracker for `work-ticket`. For ticket-backed work the tracker is resolved from the ticket's URL, so a Linear-by-default install still handles a project whose tickets live on another tracker; this value is the fallback when the ticket URL is ambiguous. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) The tracker-specific role mapping lives in the skill's reference.md. Only `linear` is implemented today \u2014 a ticket on any other tracker errors.",
+      "description": "Default work-item tracker for `work-ticket`, named by the id of its adapter skill: `tracker-adapter-<id>` (`tracker-adapter-linear` ships with the plugin). For ticket-backed work the tracker is resolved from the ticket's URL; this value is the fallback when the URL is ambiguous or the input is a bare id. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) A tracker with no adapter skill is worked best-effort through its native MCP server; an installed adapter is authoritative.",
       "default": "linear"
     }
   }

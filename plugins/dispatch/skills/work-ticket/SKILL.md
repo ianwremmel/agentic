@@ -203,9 +203,9 @@ A slot is the right to use **local compute** (write code, install, build, test).
 The delivery worker — and this coordinator while it runs a verification suite —
 must hold a ledger entry while computing and release it for any wait. **No
 install ships a ledger yet** — `orchestrate` bounds concurrency at dispatch — so
-acquire/release are no-op seams at the mandated points: acquire before a worker builds or a suite runs (one
-entry per concurrent build, else sequence), release on any wait
-(CI/review/merge/handoff/idle) or exit.
+acquire/release are no-op seams at the mandated points: acquire before a worker
+builds or a suite runs (one entry per concurrent build, else sequence), release
+on any wait (CI/review/merge/handoff/idle) or exit.
 
 ## Report
 

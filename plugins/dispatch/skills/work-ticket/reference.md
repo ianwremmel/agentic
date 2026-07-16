@@ -150,11 +150,12 @@ reason: `unknown-task`, or `not-available` with the classification.
 **Subgraph fetch (`unknown-task`).** Fetch the ticket and every transitive
 blocker and write them:
 
-- Each ticket: `get_issue(id, includeRelations=true)` →
+- Each ticket: read it through the adapter (`fetch brief` + `one-edge
+  neighbors`; its Graph fetch section has the field mapping) →
   `dispatch graph task set --id … --project … --role <mapped> --url … --title …`
   (plus `--labels`/`--priority`/`--branch-hint` when present), role mapped by
-  the table above; then `edge set --blocked <id> --blockers <blockedBy ids>`.
-  Repeat for each blocker not yet written, to closure.
+  the adapter's role map; then `edge set --blocked <id> --blockers <its
+  blockers' ids>`. Repeat for each blocker not yet written, to closure.
 - Omit `--milestone` and never run `project set`: a slice must not make the
   project look complete or wire milestone gates it cannot see. The next full
   `build-graph` run fills those in.

@@ -43,6 +43,11 @@ Skills resolve mappings in this order: **team override → default mapping → e
 If neither a team override nor a default mapping covers a native state, the skill
 MUST surface an error rather than guess.
 
+A tracker's mappings are carried by its adapter. A tracker with no adapter MAY
+be worked best-effort: the skill maps native states whose lifecycle meaning is
+unambiguous itself and MUST escalate to the operator — never guess — where it
+is not.
+
 ## Per-tracker default mappings
 
 ### Linear

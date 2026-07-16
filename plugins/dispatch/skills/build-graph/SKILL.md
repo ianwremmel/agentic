@@ -13,10 +13,11 @@ hand-edit the graph.
 
 ## The loop
 
-1. **Load the adapter.** Read the `tracker-adapter-<tracker>` skill
-   (`tracker-adapter-linear` for Linear) — its Graph fetch section supplies the
-   tools, the field mapping, and the cursor. Without one, drive the tracker's
-   MCP server directly and map its fields onto the flags below yourself.
+1. **Load the adapter.** Read the `tracker-adapter-${user_config.tracker}`
+   skill — its Graph fetch section supplies the tools, the field mapping, and
+   the cursor. A project on a different tracker loads `tracker-adapter-<id>`
+   for that tracker instead. Without one, drive the tracker's MCP server
+   directly and map its fields onto the flags below yourself.
 2. **Read the cursor** — `dispatch graph cursor --source <tracker>`. Empty output
    means first run: `dispatch graph reset`, then a full sync. Otherwise fetch only
    what changed since it.

@@ -6,9 +6,8 @@ description: Linear tracker adapter for dispatch — binds work-ticket's roles a
 # tracker-adapter-linear
 
 [`work-ticket`](../work-ticket/SKILL.md) reads Identity, Role map, Operations,
-and Quirks; [`build-graph`](../build-graph/SKILL.md) reads Role map and Graph
-fetch. Contract: [work-ticket's
-reference.md](../work-ticket/reference.md#tracker-adapters).
+and Quirks; [`build-graph`](../build-graph/SKILL.md) reads Role map, Quirks,
+and Graph fetch.
 
 ## Identity
 
@@ -42,8 +41,8 @@ case-insensitively; each substate carries the Linear group shown here.
 the forward path (`in-review → delivered`, or `in-review → verified` where
 neither exists). `paused` and `awaiting-external` are unmapped by default: a
 team that needs them adds Backlog substates and maps them in its own copy of
-this adapter. With neither mapped a park is an `ERROR` — bare `backlog` is not
-a park.
+this adapter. Until then a park has no substate to land on and is an `ERROR` —
+moving a ticket to plain `Backlog` is not a park.
 
 A substate this table doesn't name is handled per consumer:
 
@@ -52,8 +51,8 @@ A substate this table doesn't name is handled per consumer:
   `Blocked` substate sits in `Unstarted` and is not `available`).
   Map it in your own copy.
 - **build-graph** (sweeping whole projects, foreign teams included): map it
-  only when its lifecycle meaning is unambiguous (a "Ready for QA" column is
-  `in-review`); otherwise escalate to the operator — a wrong role silently
+  only when its lifecycle meaning is unambiguous (a `Merged` substate is
+  `delivered`); otherwise escalate to the operator — a wrong role silently
   dispatches, or strands, real work.
 
 ## Operations
@@ -78,8 +77,8 @@ A substate this table doesn't name is handled per consumer:
 
 - Linear tickets are per-team: read the acting ticket's team before writing a
   state or filing into it, and don't reuse another team's substate names.
-- PR-venue writes go through the forge (GitHub), not Linear MCP — a state-change
-  comment whose primary venue is the PR is a `deliver` wire-format post.
+- Linear archives completed work; an archived task's `Done`/`Canceled` status
+  still counts toward its milestone, so `build-graph` must not `task rm` it.
 
 ## Graph fetch (build-graph)
 
@@ -125,8 +124,3 @@ The sync cursor is the latest `updatedAt` you fetched. Pass it back as
 `list_issues`' `updatedAt` (which filters to "updated after"), and store it with
 `dispatch graph cursor --source linear --set <ts>`. Both a status change and a
 relation change bump `updatedAt`, so one delta sees both.
-
-### Archived tasks
-
-Do not `task rm` an archived task — Linear archives completed work, and its
-`Done`/`Canceled` status still counts toward its milestone.

@@ -51,16 +51,20 @@ tool calls. Load it before the first ticket read:
    one's Identity section (don't assume the bundled set), then: the adapter
    whose *ticket URLs* shape matches the ticket's URL; failing that (a bare id,
    no URL) the adapter whose *ticket ids* shape matches; failing that
-   `${user_config.tracker}`. A ticket URL that matches no adapter is an
-   `ERROR` — it is a tracker you have no adapter for, not a default-tracker
-   ticket.
-2. **Adapter skill** — read `tracker-adapter-<id>`
-   (`tracker-adapter-linear` ships with this plugin). When several skills carry
+   `${user_config.tracker}`. A ticket URL no installed adapter claims names its
+   own tracker — take the id from the URL, not from the default; it heads to
+   step 3, not to the default adapter.
+2. **Adapter skill** — read `tracker-adapter-<id>`. When several skills carry
    the same id — a repo or personal skill shadowing a bundled one — the most
    specific wins (repo, then personal, then plugin), wholesale: adapters
    replace, never merge.
-3. **No adapter, or one missing a section the contract requires** → `ERROR` and
-   stop. Never infer a state name or a tool call.
+3. **No adapter** — best effort: take the tracker from step 1 (the ticket
+   URL, or `${user_config.tracker}` for a bare id), drive its native MCP
+   server (or CLI) directly, and map its states and operations onto the
+   protocol's roles and operation vocabulary yourself.
+   Escalate to the operator rather than guess when a state's lifecycle meaning
+   is ambiguous. An adapter, when present, always wins — it records the
+   decisions best effort would have to make from scratch.
 
 Every ticket read and write below is one of the adapter's **operations**: name
 the operation, run its binding, and speak roles, never native states. Contract,

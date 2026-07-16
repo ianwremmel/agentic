@@ -51,21 +51,14 @@ is forbidden — regressed work goes back through `verified → in-progress`.
 
 ## Tracker adapters
 
-An adapter binds the roles and operations above to one platform, and is the
-**only** place a tracker's own vocabulary and tool calls appear. It is a skill
-named `tracker-adapter-<id>`, so supporting a new tracker means adding a skill
-(in a repo's `.claude/skills/`, personally, or via a plugin), never editing
-this one: the bundled `tracker-adapter-linear` is the worked example — start
-from a copy of it.
-
-Resolution — tracker id and the `ERROR` on a missing or contract-incomplete
-adapter — is in [`SKILL.md`](./SKILL.md). The rest of the contract is here.
+An adapter is a skill named `tracker-adapter-<id>` that binds the roles and
+operations above to one platform. Resolution — tracker id, and the best-effort
+fallback when no adapter is installed — is in [`SKILL.md`](./SKILL.md);
+authoring guidance is in the plugin README. This section is how to read one.
 
 A more specific adapter skill **replaces** a same-id one wholesale: there is no
-per-row merge. To adjust one row of the bundled mapping (say, adding the
-substates that carry `paused` and `awaiting-external`), copy the whole adapter
-skill and edit the copy. Every ticket read and write this skill makes goes
-through the resolved adapter.
+per-row merge — read only the winning adapter. Every ticket read and write this
+skill makes goes through it.
 
 The tracker's access mechanism (MCP, CLI, REST) is an adapter's business and is
 **orthogonal** to the Mode A/B communication rules, which follow the credentials
@@ -76,7 +69,7 @@ in use.
 | Section     | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Identity    | The tracker id, the URL and id shapes it owns (the skill matches a ticket to an adapter on these), the MCP server or CLI its operations use, how to read the acting account.                                                                                                                                                                                                                                                                                                             |
-| Role map    | Every native state the skill can encounter → one group, and a role wherever the skill must read or write that state. The required roles must be mapped. Rules are read **first-match, in order**, so a tracker whose roles are *computed* from metadata (a linked PR's state, a close reason, an assignee) writes predicates instead of state names, and one whose states come from two layers (a board field over a bare issue's own state) writes the precedence out as ordered rules. |
+| Role map    | Every native state the skill can encounter → one group, and a role wherever the skill must read or write that state. Rules are read **first-match, in order**: a rule may be a predicate over metadata (a linked PR's state, a close reason, an assignee) rather than a state name, and layered state (a board field over the item's own state) appears as ordered rows — apply the first row that matches.                                                                              |
 | Operations  | One binding per operation below.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Quirks      | Constraints to respect: writes the tracker refuses, transitions it performs atomically as a side effect, roles it cannot express.                                                                                                                                                                                                                                                                                                                                                        |
 | Graph fetch | What `build-graph` needs to sweep the tracker's projects: fetch calls, field → CLI-flag mapping, and the sync cursor. Read only by `build-graph`; required only for a tracker whose projects are graphed.                                                                                                                                                                                                                                                                                |
@@ -106,10 +99,10 @@ The PR half of each of these is `deliver`'s, through the forge: when the primary
 venue is the PR, the comment, the alert scan, and the terminal signal all go
 there and the adapter is not involved.
 
-A `transition` binding MAY differ per target role — a tracker that stores some
+A `transition` binding may differ per target role — a tracker that stores some
 roles and computes others (an issue whose review roles follow its linked PR, but
-which is closed with a reason to reach `verified` / `canceled`) gives a binding
-for each stored role and `computed` for the rest. `unsupported` is otherwise a
+which is closed with a reason to reach `verified` / `canceled`) carries a binding
+per stored role and `computed` for the rest. `unsupported` is otherwise a
 legal binding only for the operations below; a tracker that cannot resolve a
 role, comment, or file a ticket cannot be worked. Dropping the work an operation
 stands for is never legal.

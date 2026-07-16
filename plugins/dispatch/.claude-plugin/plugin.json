@@ -46,7 +46,7 @@
     "tracker": {
       "type": "string",
       "title": "Work-item tracker",
-      "description": "Default work-item tracker for `work-ticket`, named by the id of its adapter skill: `tracker-adapter-<id>` (`tracker-adapter-linear` ships with the plugin). For ticket-backed work the tracker is resolved from the ticket's URL; this value is the fallback for a bare id whose shape matches no adapter (a URL that matches no adapter is an error, not a default-tracker ticket). (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) A tracker with no adapter skill errors rather than guessing.",
+      "description": "Default work-item tracker for `work-ticket`, named by the id of its adapter skill: `tracker-adapter-<id>` (`tracker-adapter-linear` ships with the plugin). For ticket-backed work the tracker is resolved from the ticket's URL; this value is the fallback when the URL is ambiguous or the input is a bare id. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) A tracker with no adapter skill is worked best-effort through its native MCP server; an installed adapter is authoritative.",
       "default": "linear"
     }
   }

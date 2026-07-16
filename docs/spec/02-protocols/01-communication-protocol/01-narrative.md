@@ -41,7 +41,7 @@ so other agents can parse it programmatically.
 byline tips off readers. The sparkle wrapper makes the distinction unmistakable
 at a glance:
 
-```
+```text
 <!-- agent-reply:dispatch -->
 ✨
 

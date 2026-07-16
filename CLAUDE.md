@@ -13,19 +13,25 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 
 ## Repo layout
 
-```
+```text
 .
 ├── .claude-plugin/marketplace.json   # marketplace catalog
+├── .claude/agents/                   # repo-dev subagents (not shipped)
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
+│       ├── bin/dispatch              # CLI entry point (bash wrapper)
+│       └── cli/                      # CLI sources + colocated tests (.mts)
+├── scripts/                          # repo tooling (git hook bodies)
 └── docs/                             # spec + design docs
 ```
 
 Plugins currently published:
 
 - `plugins/dispatch/` — dispatch engineering work across pull requests and
-  Linear.app projects (PR lifecycle plus Linear triage, planning, status, and
-  cross-team sync)
+  tracked work items (PR lifecycle plus ticket triage, planning, status, and
+  cross-team sync). Trackers are pluggable: `work-ticket` and `build-graph`
+  load a per-tracker adapter skill (`tracker-adapter-<id>`) rather than
+  hardcoding one; `tracker-adapter-linear` ships bundled.
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.
@@ -37,6 +43,11 @@ subdirectories exist as scaffolding only.
   directories go at the plugin root.
 - **Naming.** Plugin names, skill folder names, and agent file names are
   kebab-case.
+- **No spec references in agent-facing text.** The `docs/spec/` tree is not
+  bundled with the plugin, so a `§2.6`-style citation in a `SKILL.md`, a skill
+  `reference.md`, or a CLI error/output string points at nothing for the invoking
+  agent. State the rule itself instead. Spec citations are fine in code comments
+  and design docs, which are read against this repo.
 - **Manifest authority.** Each plugin owns its own `plugin.json`. The
   marketplace entry is a pointer; don't duplicate component declarations
   across `marketplace.json` and `plugin.json` unless you explicitly need
@@ -48,7 +59,7 @@ subdirectories exist as scaffolding only.
   so tables are easy to scan in the raw source. New/edited tables should
   look like:
 
-  ```
+  ```text
   | Col A | Col B that is longer |
   | ----- | -------------------- |
   | x     | y                    |
@@ -72,11 +83,69 @@ subdirectories exist as scaffolding only.
 5. Validate: `claude plugin validate .`
 6. Test locally: `claude --plugin-dir ./plugins/<name>`.
 
+## Before starting any work
+
+Run `npm install`. Besides the toolchain, it installs the git hooks (husky):
+`pre-commit` runs `lint-staged` (ESLint with `--fix`, which also formats),
+`commit-msg` runs commitlint, and `pre-push` runs the `skill-reviewer` agent
+(`.claude/agents/skill-reviewer.md`) over any skill markdown changed in the
+outgoing range. Only a blocking verdict — a must-fix finding, or a file the
+reviewer judges more than ~25% cuttable — blocks the push; act on the report,
+commit, and push again. Advisory findings print but never block.
+`SKILL_REVIEW=0 git push` is the emergency bypass.
+Without that install, the hooks are silently absent and CI catches the mess
+instead.
+
+## TypeScript
+
+Plugin code is TypeScript in `.mts` files, run unbuilt on Node's native type
+stripping — there is no build step and the CLI has no runtime dependencies.
+Consequences worth remembering:
+
+- Import sibling modules by their real path, extension included
+  (`./log/logger.mts`).
+- Anything a skill invokes at run time lives inside the plugin directory.
+- Tests are colocated with the code they cover: `args.mts` → `args.test.mts`.
+- Prefer promise-based APIs over callbacks and sync calls, even where sync
+  would do — retrofitting async later is the painful refactor. Where a builtin
+  is sync-only (`node:sqlite`), wrap it behind an async facade so the call sites
+  never have to change.
+- `npm run lint`, `npm run typecheck`, `npm test` before pushing; CI runs all
+  three. `npm run lint:fix` also formats (Prettier runs as an ESLint rule).
+
+### Standard library first
+
+- Arguments: [`node:util` `parseArgs`](https://nodejs.org/api/util.html#utilparseargsconfig).
+- Persistence: [`node:sqlite`](https://nodejs.org/api/sqlite.html).
+- Assertions: `node:assert`. Prefer `assert` over `if (…) throw`, and assert
+  against a real error — `assert(cond, new DataError(msg, {hint}))` — so the
+  failure carries its own remedy.
+
+### Errors are read by an agent
+
+The caller is usually an agent, so a failure it can act on is a `DispatchError`
+(`cli/lib/errors.mts`) carrying a `hint` and an exit code to branch on. That file
+is the source of truth for the taxonomy and the codes — the classes enforce it,
+so read it there. When you add one, write the hint for the agent that has to fix
+the failure: name the field, name the fix.
+
+### Files
+
+Keep each file to one job; split a module once it has grown a table of contents.
+
+### Tests
+
+Write each test to fail when a specific rule breaks: that a canceled blocker
+unblocks its dependents, that a stale review re-opens a milestone gate. A test
+that can only fail when the code is deleted asserts nothing about behavior —
+delete it.
+
 ## Local iteration
 
 - Load a single plugin: `claude --plugin-dir ./plugins/dispatch`
 - Reload after edits: `/reload-plugins` (from inside Claude Code)
 - Validate the whole marketplace: `claude plugin validate .`
+- Run the CLI directly: `./plugins/dispatch/bin/dispatch greet --name World`
 
 ## Do not
 

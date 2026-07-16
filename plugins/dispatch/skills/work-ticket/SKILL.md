@@ -1,18 +1,24 @@
 ---
 name: work-ticket
-description: Coordinate one tracked work item to a terminal §2.3 role — claim it, fetch its own brief, decompose if needed, drive its PR(s) to merge via deliver, keep its ticket role synced, and verify its aims. Use whenever the unit of work is a ticket (or a single injected PR), standalone (/work-ticket DEV-123) or dispatched by an orchestrator.
+description: Coordinate one tracked work item to a terminal role — claim it, fetch its own brief, decompose if needed, drive its PR(s) to merge via deliver, keep its ticket role synced, and verify its aims. Use whenever the unit of work is a ticket (or a single injected PR), standalone (/work-ticket DEV-123) or dispatched by an orchestrator.
 ---
 
 # work-ticket
 
-Drive one **tracked work item** to a terminal §2.3 role. The coordinator owns the
-*ticket*: it delegates each code change to [`deliver`](../deliver/SKILL.md) (§2.4),
-applies the §2.3 role transitions, decomposes when needed, and decides when the
-aims are **verified** — not merely merged. It does **not** own the PR lifecycle
-(`deliver` does), the dependency graph, ranking, or dispatch (§2.6 orchestrator).
+Drive one **tracked work item** to a terminal role. The coordinator owns the
+*ticket*: it delegates each code change to [`deliver`](../deliver/SKILL.md),
+applies the role transitions, decomposes when needed, and decides when the
+aims are **verified**. It does **not** own the PR lifecycle
+(`deliver` does), the dependency graph, ranking, or dispatch (the orchestrator
+does).
 
 **Operator** = the human directing this run. **Delivery worker** = a `deliver`
 instance, one per PR. Glossary and lookup tables: [`reference.md`](./reference.md).
+
+Nothing below names a tracker. The roles, transitions, and ticket operations are
+the protocol's; a **tracker adapter** binds them to whichever platform the ticket
+lives on (next section). Your default tracker is `${user_config.tracker}`; the
+operator is `${user_config.operator_login}`.
 
 ## Target kind & inputs
 
@@ -37,86 +43,141 @@ successors) read-only when it shapes delivery; never walk or reason over the gra
 
 ## Tracker
 
-For **ticket-backed** work the ticket's URL selects its tracker (a `linear.app`
-ticket → Linear; a `github.com` issue → GitHub Issues); the `tracker` config
-(default `linear`) is the fallback when the input is ambiguous — so a
-Linear-by-default install still handles a project whose tickets live elsewhere.
-**Only `linear` is implemented today**; a ticket on an unimplemented tracker →
-`ERROR` and stop. A **bare PR** has no ticket and no tracker to resolve — it is
-driven on the forge (GitHub) via `deliver` regardless. The body speaks §2.3 roles;
-the per-tracker mapping is in `reference.md`.
+Ticket-backed work runs through a **tracker adapter** — a skill named
+`tracker-adapter-<id>`, the one place that knows a platform's state names and
+tool calls. Load it before the first ticket read:
+
+1. **Tracker id** — list the installed `tracker-adapter-*` skills and read each
+   one's Identity section (don't assume the bundled set), then: the adapter
+   whose *ticket URLs* shape matches the ticket's URL; failing that (a bare id,
+   no URL) the adapter whose *ticket ids* shape matches; failing that
+   `${user_config.tracker}`. A ticket URL no installed adapter claims names its
+   own tracker — take the id from the URL, not from the default; it heads to
+   step 3, not to the default adapter.
+2. **Adapter skill** — read `tracker-adapter-<id>`. When several skills carry
+   the same id — a repo or personal skill shadowing a bundled one — the most
+   specific wins (repo, then personal, then plugin), wholesale: adapters
+   replace, never merge.
+3. **No adapter** — best effort: take the tracker from step 1 (the ticket
+   URL, or `${user_config.tracker}` for a bare id), drive its native MCP
+   server (or CLI) directly, and map its states and operations onto the
+   protocol's roles and operation vocabulary yourself.
+   Escalate to the operator rather than guess when a state's lifecycle meaning
+   is ambiguous. An adapter, when present, always wins — it records the
+   decisions best effort would have to make from scratch.
+
+Every ticket read and write below is one of the adapter's **operations**: name
+the operation, run its binding, and speak roles, never native states. Contract,
+operation vocabulary, and the fallbacks for an operation an adapter marks
+`unsupported`: [`reference.md`](./reference.md#tracker-adapters).
+
+A **bare PR** has no ticket, hence no adapter — driven on the forge regardless
+of the `tracker` config (see **Injected bare PR**).
 
 ## Standalone vs dispatched
 
 Same rules; only the reporting surface differs. **Standalone** — a human runs
-`/work-ticket <ID>`; report the outcome to the session. **Dispatched** — the §2.6
-orchestrator hands over the item and expects an outcome artifact + heartbeated lock
-([`reference.md`](./reference.md#dispatch-artifacts)), and passes identity/mode +
-operator login + `agent_context` (absent → assume `subagent`), which you forward
-to every `deliver`. Staleness note: an event-mode `deliver` (remote main agent)
-is silent between wakes by design — judge its liveness by the `next_wakeup_at`
-in its wait-state file, never by fixed heartbeat age.
+`/work-ticket <ID>`; also report the outcome to the session. **Dispatched** —
+the orchestrator hands over the item with the claim agent id, any `pass`
+(verify · finalize · retry — a re-dispatch scoped to that step;
+[`reference.md`](./reference.md#dispatch-bookkeeping)), identity/mode, and
+`agent_context` (absent → assume `subagent`), which you forward to every
+`deliver`. (Operator login is not forwarded — each `deliver` reads it from the
+shared plugin config.) Staleness note: an event-mode `deliver` (remote main
+agent) is silent between wakes by design — judge its liveness by the
+`next_wakeup_at` in its wait-state file, never by fixed heartbeat age.
 
-Assigned for the run, you are bound by the §2.3 **communication restriction**:
+In both modes you are bound by the **communication restriction**:
 never solicit a session response or block on session input for progress; route
-human input PR → ticket → new ticket, tagging a human (§Human handoff). Progress,
-status, and summaries to the session are fine — but if proactive session input
-substantively changes the work, echo its substance onto the ticket or PR.
+human input PR → ticket → new ticket, tagging a human (see **Human handoff**).
+Progress, status, and summaries to the session are fine — but if proactive
+session input substantively changes the work, echo its substance onto the ticket
+or PR.
 
 ## Claim (ticket-backed only)
 
-Idempotent. (1) Resolve the role. (2) If a `started` role is held by a *different*
-identity, stop. (3) Assign to self. (4) If not already `in-progress`, emit
-`available → in-progress` (state-change comment + `TRANSITION` log); if already
-`in-progress` as self (resume / re-dispatch after a stale lock), don't re-emit.
-Parked (`paused`/`awaiting-external`) → resume via `available` first, never
-straight to `in-progress`.
+Idempotent, in order:
 
-## Decompose (§2.3)
+1. **Graph claim** — `dispatch graph claim --id <ID> --agent <agent-id>` (the
+   dispatched claim id, or mint `wt-<epoch>` standalone). On `claimed` /
+   `refreshed` / `reclaimed`, proceed. Otherwise
+   ([details](./reference.md#graph-claim)):
+   - `unknown-task` — the graph hasn't seen this ticket. Fetch its subgraph
+     (the ticket + transitive blockers, per the reference), then retry once.
+   - blocked — unresolved blockers. Standalone: work them first — apply this
+     skill to each unresolved id in the ticket's `blocked-by` (from
+     `dispatch graph doc`), depth-first, then re-claim. Dispatched: the graph
+     moved under the dispatch; write `failed` (retryable) and stop.
+   - `held` — another agent's live claim; stop.
+   - any other classification (backlog, parked, terminal) — not claimable;
+     report and stop (parked resumes only via **Human handoff**).
+
+   `reclaimed` is a sanctioned takeover of a dead run — proceed even though the
+   ticket is already `in-progress`, re-deriving its state from the ticket and
+   PRs (a `pass=resume` dispatch is exactly this).
+2. **Tracker claim** — (a) resolve the role; (b) if a `started` role is held by
+   a *different* platform identity, stop — a reclaim covers a dead run under
+   your own platform account, not someone else's work; (c) assign to self; (d)
+   if not already
+   `in-progress`, emit `available → in-progress` (state-change comment +
+   `TRANSITION` log); if already `in-progress` as self (resume / re-dispatch
+   after a stale claim), don't re-emit. Parked (`paused`/`awaiting-external`) →
+   resume via `available` first, never straight to `in-progress`.
+
+While you hold the claim, run `dispatch graph heartbeat` (same `--id`/`--agent`)
+at least every few minutes (fold into poll ticks). The claim ends with your
+outcome — `dispatch graph outcome set` releases it (see **Report**). Never run
+a bare `release`: a released claim with no outcome reads as a crash and gets
+re-dispatched.
+
+## Decompose
 
 - **Too large** → file native subtasks; parent stays `in-progress`; record each
-  subtask as a `blocks` edge to the parent; log `INFO`; emit `decomposed`;
+  subtask as a `blocks` edge to the parent — on the tracker **and** in the
+  graph (`dispatch graph task set` each subtask, then
+  `dispatch graph edge add --blocker <subtask> --blocked <ID>`), so the
+  finalize gate holds before the next refresh; log `INFO`; record `decomposed`;
   **stop**. You don't drive the subtasks' PRs or finalize the parent — both are a
   later, separate pass.
 - **Out-of-scope blocker** → file a `blocks`-linked ticket; log `BLOCK`; then park
   the ticket (`awaiting-external`, or `paused` if unavailable) if all remaining work
   is blocked, else continue the in-scope work.
 
-## Produce PRs (§2.4 via `deliver`)
+## Produce PRs (via `deliver`)
 
-Drive each in-scope unit's PR to terminal through `deliver` — one §2.4 instance
-each. Invoke `dispatch:deliver` inline (single PR) or as a subagent (concurrent
-PRs), forwarding operator login + identity/mode + `agent_context`:
-subagent-dispatched → `subagent`; inline → your **own** effective context
-(`main` only when work-ticket itself runs standalone in the main session —
-dispatched, you are a subagent and so is an inline deliver); unknown at any hop
-→ `subagent`. **Sequential by default** (one building PR at a time, keeping PRs
-small and the ledger draw minimal); go concurrent only for independent work,
-one slot per building PR. In a remote sandbox, concurrent deliver subagents
-each run an inline bounded-`Monitor` loop holding context for the whole PR life
-— supported, but weigh against sequential. Record the ticket↔PR mapping on the
-ticket as each PR opens. Read a delegated PR's status only via §2.4/§2.2.
+Drive each in-scope unit's PR to terminal through `deliver`. Invoke
+`dispatch:deliver` inline (single PR) or as a subagent (concurrent PRs),
+forwarding identity/mode + `agent_context`: subagent-dispatched → `subagent`;
+inline → your **own** effective context (`main` only when work-ticket itself
+runs standalone in the main session — dispatched, you are a subagent and so is
+an inline deliver); unknown at any hop → `subagent`. **Sequential by default**
+(one building PR at a time); go concurrent only for independent work, one slot
+per building PR. In a remote sandbox, concurrent deliver subagents each run an
+inline bounded-`Monitor` loop holding context for the whole PR life —
+supported, but weigh against sequential. Record the ticket↔PR mapping on the
+ticket as each PR opens. Read a delegated PR's status only via `deliver`.
 
-## Sync the role (§2.3)
+## Sync the role
 
 | ticket condition                                   | role          |
 | -------------------------------------------------- | ------------- |
 | claimed; implementation underway                   | `in-progress` |
 | delegated to review; no implementation outstanding | `in-review`   |
+| review approved; merge pending (adapter maps it)   | `finished`    |
 | **every** PR required by the aims has landed       | `delivered`   |
 | aims validated and DoD artifact posted             | `verified`    |
 
-Never `delivered` until **all** required PRs land (intermediate merges are
-recorded, not promoted). No `finished` where the tracker lacks it (collapse
-`in-review → delivered`). Corrective transitions carry a rationale. Emit no
-unenumerated transition; every change → a `TRANSITION` log **and** a state-change
-comment on the primary venue.
+Intermediate merges are recorded, not promoted to `delivered`. No `finished`
+where the adapter leaves it unmapped (collapse `in-review → delivered`).
+Corrective transitions carry a rationale.
+Emit no unenumerated transition; every change → a `TRANSITION` log **and** a
+state-change comment on the primary venue.
 
 ## Definition of done
 
 `verified` requires a ticket comment stating **what** was verified (vs the aims),
 **how** (concrete method), and **what was not** (each deferred item with a
-follow-up ticket filed), per §2.1. Merging ≠ done — evaluate the aims. Any in-scope
+follow-up ticket filed). Merging ≠ done — evaluate the aims. Any in-scope
 aim unverified → return to `in-progress` with a corrective comment; never edit or
 delete the original artifact.
 
@@ -125,18 +186,20 @@ delete the original artifact.
 Read the named conformance suite and deployed target; confirm it is reachable at
 the expected revision; run the suite **read-only** (a verification never mutates —
 a required mutation is a structural failure); attach the evidence; advance the
-§2.3 forward path to `verified` with the DoD artifact (the path collapses where the
-tracker lacks roles; no unenumerated transition). Can't pass → `failed` with
-`retryable` (transient cause = retryable; structural = not). Never `verified` on
-failure.
+forward path to `verified` with the DoD artifact (the path collapses over roles
+the adapter leaves unmapped; no unenumerated transition). Can't pass → `failed`
+with `retryable` (transient cause = retryable; structural = not). Never
+`verified` on failure.
 
 ## Injected bare PR (no ticket)
 
-Inputs are the forge identity; nothing to claim, decompose, or transition. Drive
-the one PR via `deliver`; report `delivered` on merge (terminal — a ticketless PR
-has no separate verification step), else `canceled`/`failed`. Lock is **PR-keyed**.
-If the PR *is* ticket-linked, act as that ticket's coordinator with the PR as one
-§2.4 instance.
+Inputs are the forge identity; the graph item is keyed `<repo>#<n>` —
+dispatched, claim it like a ticket; standalone, create it first with
+`dispatch graph pr add`. Nothing to decompose or transition on a tracker. Drive
+the one PR via `deliver`; report `delivered` on merge (terminal — a ticketless
+PR has no separate verification step), else `canceled`/`failed`. If the PR *is*
+ticket-linked, act as that ticket's coordinator with the PR as one `deliver`
+instance.
 
 ## Human handoff (worker-discovered)
 
@@ -144,54 +207,42 @@ When a human must act — a decision you can't make, a credential you lack, a ma
 external step:
 
 1. **Alert** via PR → ticket → new ticket, tagging ≥1 human, stating what's needed
-   and why you can't proceed (§2.1).
-2. Transition to **`awaiting-external`** (or `paused`); if the tracker maps
+   and why you can't proceed.
+2. Transition to **`awaiting-external`** (or `paused`); if the adapter maps
    neither, `ERROR` — there is no valid park.
 3. Log **`WAIT`** (name the venue + awaited outcome).
-4. **Release** — dispatched: write the `human-blocked` outcome and exit; standalone:
-   wait on the venue per §2.1 thread-aware filtering.
+4. **Report** — dispatched: record the `human-blocked` outcome and exit;
+   standalone: wait on the venue with thread-aware filtering.
 
-Keep **≤1** open alert (scan the venue first). Resolution (§2.3): on an addressable
-human response, react per §2.1, log `RESUME`, post a follow-up if substantive, then
+Keep **≤1** open alert (scan the venue first). Resolution: on an addressable
+human response, react, log `RESUME`, post a follow-up if substantive, then
 resume from a **fresh claim** (parked → `available` → `in-progress`).
 
-## Slot seam (§2.6)
+## Slots
 
-A slot is the right to use **local compute** (write code, install, build, test).
-§2.6 requires the delivery worker — and this coordinator while it runs a
-verification suite — to hold a ledger entry while computing and release it for any
-wait. The ledger is the orchestrator's; **standalone there is none**, so
-acquire/release are no-op seams at the mandated points: acquire before a worker
-builds or a suite runs (one entry per concurrent build, else sequence), release on
-any wait (CI/review/merge/handoff/idle) or exit.
+A slot is the right to use **local compute** (write code, install, build,
+test), taken from the shared ledger: `dispatch graph slot acquire --agent
+<agent-id>` before a worker builds or a suite runs (one slot per concurrent
+build, else sequence; exit 3 = full — wait and retry), `slot release` on any
+wait (CI/review/merge/handoff/idle) or exit, `slot heartbeat` while computing.
+The ledger is host-wide, so standalone runs share the same bound.
 
 ## Report
 
 The outcome is one of `verified` · `canceled` · `delivered` · `human-blocked` ·
 `decomposed` · `failed` — meaning, terminality, and how each resumes are in
-[`reference.md`](./reference.md#outcomes-25). Dispatched: write the outcome artifact
-as your **final action**, honoring the lock until then. Standalone: report it to
-the session.
+[`reference.md`](./reference.md#outcomes). Record it as your **final action**:
 
-## Log (§2.3)
+```shell
+dispatch graph outcome set --id <key> --agent <agent-id> --outcome <o> \
+    [--retryable true|false] [--detail "one line"]
+```
+
+It releases your claim in the same write. Standalone, also report it to the
+session.
+
+## Log
 
 Emit `TRANSITION` / `WAIT` / `RESUME` / `BLOCK` / `INFO` / `ERROR` one-liners, and
 echo every role change as a state-change comment on the primary venue. Format and
-fields: [`reference.md`](./reference.md#logging-23).
-
-## Config
-
-From the plugin's `userConfig` (env `CLAUDE_PLUGIN_OPTION_*`), shared with
-`deliver`:
-
-| key                 | effect                                                                                                     |
-| ------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `operator_login`    | operator's GitHub login; forwarded to `deliver`, used for §2.1 routing. Required.                          |
-| `tracker`           | **default** tracker (default `linear`); the per-item tracker is resolved from its URL/identity (§Tracker). |
-| `worktree_base`     | forwarded to `deliver` (per-PR worktrees). Default `~/.worktrees`.                                         |
-| `team_mode`         | forwarded to `deliver` (review shape). Default `false`.                                                    |
-| `copilot_available` | forwarded to `deliver`. Default `true`.                                                                    |
-
-See [`reference.md`](./reference.md) for the role mapping, tracker operations, §2.1
-recap, dispatch-artifact shapes, and log format. The spec (§2.1/§2.3/§2.4/§2.5/§2.6)
-is authoritative where they differ.
+fields: [`reference.md`](./reference.md#logging).

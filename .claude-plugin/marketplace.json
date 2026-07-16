@@ -4,14 +4,14 @@
     "name": "Ian Remmel"
   },
   "metadata": {
-    "description": "Agentic workflows for pull request management and Linear.app project orchestration.",
+    "description": "Agentic workflows for pull request management and ticket-tracker project orchestration.",
     "pluginRoot": "./plugins"
   },
   "plugins": [
     {
       "name": "dispatch",
       "source": "./plugins/dispatch",
-      "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and Linear.app project orchestration (triage, planning, status, cross-team sync).",
+      "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
       "category": "development",
       "tags": [
         "github",

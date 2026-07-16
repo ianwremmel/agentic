@@ -1,25 +1,41 @@
 #!/usr/bin/env bash
 # pr-status — emit PR state XML per §2.2.2 PR Status Protocol.
 #
-# Usage:
-#   DISPATCH_AGENT_ID=<id> DISPATCH_SKILL=<skill> \
-#     DISPATCH_OPERATOR_LOGIN=<login> pr-status <pr>
+# Usage: pr-status <pr>
 #
-# Requires: gh, jq, claude. Run from inside the repo's git worktree.
+# Config comes from the plugin's userConfig, which the harness exports to this
+# subprocess as CLAUDE_PLUGIN_OPTION_* — the invoking skill never forwards it.
+# Only CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN is required (the operator sets it in
+# the plugin config); the script errors, pointing at the plugin config, if unset.
+#
+# Requires: gh + jq (hard — the script exits if either is missing). git and
+# claude are optional: content_present (terminal resolution) and summarize
+# degrade gracefully without them. Run from inside the repo's git worktree.
 
 set -euo pipefail
 
 PR="${1:-}"
 [[ -n "$PR" ]] || { echo "usage: pr-status <pr>" >&2; exit 2; }
-: "${DISPATCH_AGENT_ID:?DISPATCH_AGENT_ID required}"
-: "${DISPATCH_SKILL:?DISPATCH_SKILL required}"
-: "${DISPATCH_OPERATOR_LOGIN:?DISPATCH_OPERATOR_LOGIN required (operator GitHub login; see §2.2.2 Operator identity)}"
-OPERATOR_LC="$(printf '%s' "$DISPATCH_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
+
+# Required tools: the script cannot emit valid XML without gh + jq. Fail loudly
+# up front rather than partway through with a cryptic error. (git and claude
+# degrade gracefully in content_present/summarize, so they are not hard-required.)
+for _tool in gh jq; do
+  command -v "$_tool" >/dev/null 2>&1 \
+    || { echo "pr-status: required tool not found on PATH: $_tool" >&2; exit 3; }
+done
+
+# Required plugin option. If unset, the operator hasn't configured the dispatch
+# plugin — surface that (the agent must NOT invent a login or fall back to the
+# ticket assigner; it's the operator's to set). §2.2.2 Operator identity.
+: "${CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN:?the dispatch plugin option operator_login is not set; the operator must configure it in the plugin config — pr-status cannot classify reviews without it}"
+
+OPERATOR_LC="$(printf '%s' "$CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
 
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 SLUG="${REPO/\//__}"
 BASE="${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}"
-DIR="$BASE/$DISPATCH_SKILL/$SLUG/$PR"
+DIR="$BASE/deliver/$SLUG/$PR"
 mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations"
 
 INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|codeql)$"
@@ -33,12 +49,12 @@ STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
 # period.
 TERMINAL_RE='^[[:space:]]*(✓|✅|done\.?|declined\.?|shipped\.?|acknowledged\.?|wontfix\.?|dismissed\.?|resolved\.?)[[:space:]]*$'
 
-# gh-authenticated identity used as a fallback in classify_actionable so
-# agent-id drift in markers across runs does not re-actionable the calling
-# agent's own resolved replies. Empty if `gh api user` fails; one breadcrumb
-# then logs the fallback path as inactive.
+# gh-authenticated identity — the agent's own login. classify_actionable uses it
+# (author match + marker) to recognize the calling agent's own plan/engagement/
+# terminal-tagged artifacts and suppress them. It's the only identity source, so
+# a failure here is fatal — without it every self-authored item stays actionable.
 CALLER_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
-[[ -z "$CALLER_LOGIN" ]] && echo "pr-status: warning: gh api user failed; author-identity actionability fallback disabled" >&2
+[[ -n "$CALLER_LOGIN" ]] || { echo "pr-status: could not resolve the authenticated GitHub user (gh api user failed); run 'gh auth status' — cannot proceed" >&2; exit 3; }
 
 xml_attr() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
 xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -50,7 +66,7 @@ summarize() {
   claude -p --max-turns 1 \
     "Summarize the following PR item in 1-3 sentences describing its outcome. Plain prose only.
 
-$(cat "$body")" > "$out" 2>/dev/null || echo "(summary unavailable)" > "$out"
+$(cat "$body")" > "$out" 2>/dev/null </dev/null || echo "(summary unavailable)" > "$out"
 }
 
 # Args: <id> <subdir> <body>
@@ -97,10 +113,8 @@ THREADS_JSON="$(gh api graphql \
             nodes {
               id
               isResolved
-              isOutdated
-              path
               comments(last:50) {
-                nodes { id databaseId body author { login } createdAt }
+                nodes { body author { login } }
               }
             }
           }
@@ -129,6 +143,7 @@ COMMENTS_JSON="$(gh api graphql --paginate \
               reactions(first:100) {
                 nodes { content user { login } }
               }
+              reactionGroups { content viewerHasReacted }
             }
             pageInfo { hasNextPage endCursor }
           }
@@ -334,12 +349,12 @@ has_terminal_signal() {
 # engagement comment (line-anchored agent-plan/agent-engagement sentinel +
 # author identity, so a human quoting the marker stays actionable), or the body
 # is the calling agent's terminal-tagged reply (any agent-reply marker + author
-# identity + terminal signal on the last non-empty line). When $CALLER_LOGIN is
-# unavailable (`gh api user` failed), the reply check falls back to the pre-fix
-# behavior — exact $DISPATCH_AGENT_ID marker alone — so the script degrades, not
-# fails.
+# identity + terminal signal on the last non-empty line), or the calling agent
+# reacted to the item with a terminal reaction (+1/-1/rocket). The author checks
+# key on $CALLER_LOGIN (guaranteed set — the script exits earlier if it can't be
+# resolved).
 classify_actionable() {
-  local body="$1" author="$2" resolved="$3"
+  local body="$1" author="$2" resolved="$3" reaction_groups="${4:-[]}"
   [[ "$resolved" == "true" ]] && { printf 'false\tresolved\n'; return; }
 
   # Plan or engagement comment by the calling agent. Both are agent artifacts,
@@ -347,26 +362,33 @@ classify_actionable() {
   # approval (Gate 6) and would otherwise stay actionable forever — blocking
   # Gate 4 and thus the draft-clear/merge transitions — since the agent never
   # "addresses" its own request.
-  if [[ -n "$CALLER_LOGIN" && "$author" == "$CALLER_LOGIN" ]] \
+  if [[ "$author" == "$CALLER_LOGIN" ]] \
       && grep -qE '^<!-- agent-(plan|engagement):[^ ]+ -->$' <<<"$body"; then
     printf 'false\tagent-artifact\n'; return
   fi
 
-  # Terminal-tagged reply by the calling agent.
-  if has_terminal_signal "$body"; then
-    if [[ -n "$CALLER_LOGIN" ]]; then
-      if [[ "$author" == "$CALLER_LOGIN" ]] \
-          && grep -qF '<!-- agent-reply:' <<<"$body"; then
-        printf 'false\tagent-terminal-reply\n'; return
-      fi
-    else
-      # Degraded path: no caller identity; gate on the exact agent-id marker
-      # alone. False-positive on a human quoting the exact marker + terminal
-      # signal is preserved from the pre-fix behavior.
-      if grep -qF "<!-- agent-reply:$DISPATCH_AGENT_ID -->" <<<"$body"; then
-        printf 'false\tagent-terminal-reply\n'; return
-      fi
-    fi
+  # Terminal-tagged reply by the calling agent: own login + an agent-reply marker
+  # + a terminal signal on the last non-empty line.
+  if has_terminal_signal "$body" \
+      && [[ "$author" == "$CALLER_LOGIN" ]] \
+      && grep -qF '<!-- agent-reply:' <<<"$body"; then
+    printf 'false\tagent-terminal-reply\n'; return
+  fi
+
+  # A terminal reaction (+1/-1/rocket, reference.md → Terminal signals) by the
+  # calling agent. Top-level comments have no reply threading, so this is the
+  # only signal that can ever settle a comment someone else authored — without
+  # it an operator note stays actionable forever and Gate 4 never passes.
+  # Keys on reactionGroups' viewerHasReacted rather than scanning reaction
+  # nodes: the GraphQL viewer is the same identity as $CALLER_LOGIN (one gh
+  # token), and viewerHasReacted is set regardless of how many reactions the
+  # comment has — a nodes scan is capped at the first page and can miss the
+  # caller's reaction on a heavily-reacted comment.
+  if jq -e 'any(.[]; .viewerHasReacted == true
+                and (.content == "THUMBS_UP" or .content == "THUMBS_DOWN"
+                     or .content == "ROCKET"))' \
+       <<<"$reaction_groups" >/dev/null 2>&1; then
+    printf 'false\tagent-terminal-reply\n'; return
   fi
   printf 'true\t\n'
 }
@@ -407,15 +429,16 @@ reactions_xml_for() {
 comments_xml() {
   echo "  <comments>"
   jq -c '.[]' <<<"$COMMENTS_JSON" | while read -r c; do
-    local raw_id id author body reactions
+    local raw_id id author body reactions reaction_groups
     raw_id="$(jq -r '.id // .databaseId // ""' <<<"$c")"
     author="$(jq -r '.author.login // ""' <<<"$c")"
     body="$(jq -r '.body // ""' <<<"$c")"
     reactions="$(jq -c '.reactions.nodes // []' <<<"$c")"
+    reaction_groups="$(jq -c '.reactionGroups // []' <<<"$c")"
     [[ -n "$raw_id" ]] || continue
     id="${raw_id//[^A-Za-z0-9_=-]/_}"
     cache_item "$id" "comments" "$body"
-    parse_actionable "$(classify_actionable "$body" "$author" "false")"
+    parse_actionable "$(classify_actionable "$body" "$author" "false" "$reaction_groups")"
     local actionable="$CA_ACTIONABLE" reason_attr="$CA_REASON_ATTR"
     local cache_path="$DIR/comments/$id.md"
     local sum_path="$DIR/comments/$id.summary.md"

@@ -29,14 +29,14 @@ Determined by the credentials held at write time.
 Every agent-authored post (new post or thread reply — not reactions) carries one
 machine marker as its **first line**, alone, no leading whitespace:
 
-```
+```text
 <!-- agent-reply:<agent-id> -->
 ```
 
 In **Mode B**, the body is additionally wrapped in a sparkle block after the
 marker:
 
-```
+```text
 <!-- agent-reply:dispatch -->
 ✨
 
@@ -56,7 +56,7 @@ A terminal signal means "finished with this item"; it suppresses re-evaluation
 next poll. Anything else means "still working." The agent signals finished
 **only** via a terminal signal — it MUST NOT resolve the thread, even one it
 opened. Resolution is a human's call. Platform-resolved threads are read (see
-[§Actionability](#actionability)) but never written by the agent.
+[Actionability](#actionability)) but never written by the agent.
 
 Reactions (preferred where supported):
 
@@ -159,8 +159,12 @@ A comment or thread is **non-actionable** iff any of:
 - the newest comment was written by the calling agent (author = calling
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
   terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional
-  trailing period, or `✓`/`✅`). If `gh api user` fails, this degrades to the
-  pre-fix "exact `$DISPATCH_AGENT_ID` marker alone" rule (warning to stderr).
+  trailing period, or `✓`/`✅`). The author match keys on the gh-authenticated
+  login; `pr-status` exits early if it can't resolve that login (a `gh api user`
+  failure is fatal, since it's the only identity source).
+- the calling agent reacted to it with a terminal reaction (`+1`/`-1`/`rocket`;
+  comments only). Top-level comments have no reply threading, so this is the
+  only signal that can settle a comment someone else authored.
 - the platform has explicitly resolved the thread (threads only).
 
 A reviewer reply after the agent's last turn re-actionables the item. An
@@ -170,7 +174,7 @@ annotation is actionable unless `<cache>/<id>.ack` exists.
 
 One line per entry:
 
-```
+```text
 <timestamp> <kind> ticket=<ticket-url> pr=<pr-url> ticket-role=<role> pr-state=<state> | <message>
 ```
 
@@ -193,7 +197,7 @@ Kinds `deliver` emits:
 When a linked ticket's role changes, also post a state-change comment to the PR
 (or ticket) in wire format, body exactly:
 
-```
+```text
 State: <prev-role> → <new-role>
 Rationale: <one line; required for corrective and cancel transitions>
 ```

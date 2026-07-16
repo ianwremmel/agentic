@@ -8,11 +8,11 @@ All commands exit 0 on success and non-zero on error.
 
 ---
 
-### `dispatch create-comment`
+## `dispatch create-comment`
 
 Post a new top-level comment on a PR or ticket, applying the §2.1 wire format.
 
-```
+```shell
 dispatch create-comment \
     --repo <owner/repo> \
     (--pr <number> | --issue <number>) \
@@ -38,11 +38,11 @@ mode detection fails with no default.
 
 ---
 
-### `dispatch reply-to-thread`
+## `dispatch reply-to-thread`
 
 Post a reply in an existing PR review thread or ticket comment thread.
 
-```
+```shell
 dispatch reply-to-thread \
     --repo <owner/repo> \
     --thread-id <id> \
@@ -61,11 +61,11 @@ Applies §2.1 wire format identically to `create-comment`.
 
 ---
 
-### `dispatch react`
+## `dispatch react`
 
 Add a reaction to a comment.
 
-```
+```shell
 dispatch react \
     --repo <owner/repo> \
     --comment-id <id> \
@@ -83,11 +83,11 @@ per §2.1.2 §Writing rules. The command MUST NOT add them.
 
 ---
 
-### `dispatch request-review`
+## `dispatch request-review`
 
 Request a review on a PR.
 
-```
+```shell
 dispatch request-review \
     --repo <owner/repo> \
     --pr <number> \
@@ -110,11 +110,11 @@ GitHub), the command MUST surface an actionable error message.
 
 ---
 
-### `dispatch pr-status`
+## `dispatch pr-status`
 
 Emit the §2.2 XML document for a PR and update the disk cache.
 
-```
+```shell
 dispatch pr-status \
     --repo <owner/repo> \
     --pr <number> \
@@ -135,11 +135,11 @@ are insufficient.
 
 ---
 
-### `dispatch ack-annotation`
+## `dispatch ack-annotation`
 
 Mark an annotation as non-actionable by writing the §2.2 `.ack` marker.
 
-```
+```shell
 dispatch ack-annotation \
     --repo <owner/repo> \
     --pr <number> \

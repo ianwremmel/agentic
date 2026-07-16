@@ -29,7 +29,7 @@ changes code:
 
 Work flows through up to seven stages:
 
-```
+```text
 Worktree setup → PR open → Implementation → Pre-push review → CI + Copilot →
   [Private review (team mode only, in draft)] → Public review → Termination
 ```

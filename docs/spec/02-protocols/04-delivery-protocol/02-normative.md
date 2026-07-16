@@ -47,7 +47,7 @@ proceeding.
 
 The default path for a new worktree is:
 
-```
+```text
 ~/.worktrees/<owner>/<repo>/<branch>
 ```
 
@@ -70,7 +70,7 @@ created for that PR. Worktrees not created by the agent MUST be left alone.
 Before any real work, the agent MUST create an empty commit on the work branch
 with this exact message:
 
-```
+```text
 chore: open PR [skip ci]
 ```
 
@@ -100,7 +100,7 @@ wrapper where required).
 The comment MUST be findable for later editing. The agent MUST embed a
 plan-specific sentinel in the comment body:
 
-```
+```text
 <!-- agent-plan:<agent-id> -->
 ```
 
@@ -263,7 +263,7 @@ still in draft. Engagement has two parts:
    wrapped body (after the marker in Mode A / after the opening sparkle in Mode
    B, never displacing the leading machine marker), the engagement sentinel:
 
-   ```
+   ```text
    <!-- agent-engagement:<agent-id> -->
    ```
 

@@ -199,8 +199,7 @@ A `pass` on a dispatched re-run scopes it: `resume` — the previous run died;
 re-derive where it got to from the ticket and PRs, then continue. `verify` —
 the PRs landed (`delivered`); validate the aims and post the DoD. `finalize` —
 the decomposed parent's subtasks all resolved; verify the parent's aims.
-`retry` — re-run a failed verification. Mirror a "working" label on the
-tracker where one is available.
+`retry` — re-run a failed verification.
 
 ## Logging
 

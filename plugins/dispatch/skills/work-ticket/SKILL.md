@@ -79,7 +79,7 @@ of the `tracker` config (see **Injected bare PR**).
 Same rules; only the reporting surface differs. **Standalone** — a human runs
 `/work-ticket <ID>`; also report the outcome to the session. **Dispatched** —
 the orchestrator hands over the item with the claim agent id, any `pass`
-(verify · finalize · retry — a re-dispatch scoped to that step;
+(resume · verify · finalize · retry — a re-dispatch scoped to that step;
 [`reference.md`](./reference.md#dispatch-bookkeeping)), identity/mode, and
 `agent_context` (absent → assume `subagent`), which you forward to every
 `deliver`. (Operator login is not forwarded — each `deliver` reads it from the
@@ -119,7 +119,8 @@ Idempotent, in order:
    if not already
    `in-progress`, emit `available → in-progress` (state-change comment +
    `TRANSITION` log); if already `in-progress` as self (resume / re-dispatch
-   after a stale claim), don't re-emit. Parked (`paused`/`awaiting-external`) →
+   after a stale claim), don't re-emit; (e) mirror a "working" label where the
+   tracker has one. Parked (`paused`/`awaiting-external`) →
    resume via `available` first, never straight to `in-progress`.
 
 While you hold the claim, run `dispatch graph heartbeat` (same `--id`/`--agent`)

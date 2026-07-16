@@ -149,8 +149,7 @@ succeed. `held` is another agent's live claim (exit 3). Exit 4 carries the
 reason: `unknown-task`, or `not-available` with the classification.
 
 **Subgraph fetch (`unknown-task`).** Fetch the ticket and every transitive
-blocker and write them — the ticket-scoped slice of what `build-graph` does per
-project:
+blocker and write them:
 
 - Each ticket: `get_issue(id, includeRelations=true)` →
   `dispatch graph task set --id … --project … --role <mapped> --url … --title …`
@@ -194,16 +193,15 @@ Ticket-backed liveness is the **graph claim** (claim/heartbeat/release per
 SKILL — no lock file); mirror a "working" label where available. A bare PR has
 no graph node, so it keeps a PR-keyed lock file instead:
 
-- **`lock.json`** (bare PR only) — heartbeated on a fixed interval; staleness
-  judged by age.
+- **`lock.json`** (bare PR only) — heartbeated every few minutes; stale after
+  10m without one (the graph-claim default).
   `{ "key":"o/r#7", "agent_id":"…", "kind":"pr", "heartbeat":"<RFC3339>" }`
 - **`outcome.json`** — written as the final action.
   `{ "key":"DEV-123", "outcome":"…", "ticket_url":"…|null", "pr_urls":[…], "retryable":null, "subtasks":[], "detail":"…" }`
   (`retryable` is a boolean only for a `failed` verification; `subtasks` lists filed
   ids on `decomposed`.)
 
-There is no compute-slot ledger yet — `orchestrate` bounds concurrency at
-dispatch; see Slot seam in `SKILL.md`.
+No compute-slot ledger yet — see Slot seam in `SKILL.md`.
 
 ## Logging
 

@@ -130,15 +130,36 @@ trackers: a ticket on one tracker must not block a ticket on another.
 
 ## Primary venue
 
-Where a state-change comment lands: the PR if one exists, else the ticket. With
-several PRs, first match wins — (1) the PR the event is about (its delivery
-triggered the transition, or the blocker arose in it); (2) else the most recently
-updated open PR; (3) else the ticket. Ticket-level transitions (`available →
-in-progress`, the aggregate `delivered`, `verified`) go to the ticket, as do the
-DoD artifact and the ticket↔PR mapping.
+Where a state-change comment lands. First match: (1) ticket-level transitions
+(`available → in-progress`, the aggregate `delivered`, `verified`) → the
+ticket, as do the DoD artifact and the ticket↔PR mapping; (2) else the PR the
+event is about (its delivery triggered the transition, or the blocker arose in
+it); (3) else the most recently updated open PR; (4) else the ticket.
 
 PR-venue writes go through the **forge**, the path `deliver` uses — never the
 tracker's API.
+
+## Graph claim
+
+Flags, store resolution, and exit codes are `dispatch graph`'s — see
+[`build-graph/reference.md`](../build-graph/reference.md). `claimed`,
+`refreshed` (already yours — a resume), and `reclaimed` (stale takeover) all
+succeed. `held` is another agent's live claim (exit 3). Exit 4 carries the
+reason: `unknown-task`, or `not-available` with the classification.
+
+**Subgraph fetch (`unknown-task`).** Fetch the ticket and every transitive
+blocker and write them:
+
+- Each ticket: read it through the adapter (`fetch brief` + `one-edge
+  neighbors`; its Graph fetch section has the field mapping) →
+  `dispatch graph task set --id … --project … --role <mapped> --url … --title …`
+  (plus `--labels`/`--priority`/`--branch-hint` when present), role mapped by
+  the adapter's role map; then
+  `dispatch graph edge set --blocked <id> --blockers <its blockers' ids>`.
+  Repeat for each blocker not yet written, to closure.
+- Omit `--milestone` and never run `project set`: a slice must not make the
+  project look complete or wire milestone gates it cannot see. The next full
+  `build-graph` run fills those in.
 
 ## Communication recap
 
@@ -158,28 +179,28 @@ resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human
 | `verified`      | ticket-backed: aims validated, DoD posted, ticket at `verified`        | yes                    | —                                                                            |
 | `canceled`      | abandoned (ticket canceled with rationale, or bare PR closed unmerged) | yes                    | —                                                                            |
 | `delivered`     | landed: all required PRs merged (ticket) / the PR merged (bare PR)     | ticket: no / bare: yes | a verification coordinator takes the ticket to `verified`; a bare PR is done |
-| `human-blocked` | parked in `awaiting-external`; one alert posted                        | no                     | re-dispatched from a fresh claim once resolved                               |
+| `human-blocked` | parked (`awaiting-external`, or `paused` fallback); one alert posted   | no                     | re-dispatched from a fresh claim once resolved                               |
 | `decomposed`    | split into subtasks; parent `in-progress`, blocked by them             | no                     | parent finalized once all subtasks `verified`/`canceled`                     |
 | `failed`        | could not complete; reason recorded; verification carries `retryable`  | no                     | retryable verification auto-re-dispatches; else operator decides             |
 
-## Dispatch artifacts
+## Dispatch bookkeeping
 
-Standalone writes none of this (report to the session and stop). A **dispatched**
-coordinator honors the orchestrator's contract; the orchestrator owns the real
-paths, the shapes below are the stub. Base:
-`${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-ticket/<key>/`,
-`<key>` = `ticket_id` (ticket) or `<repo>#<pr_number>` (bare PR).
+All of it is the graph CLI — no files. `<key>` = `ticket_id` (ticket) or
+`<repo>#<pr_number>` (bare PR); the agent id is the claim id (dispatched: the
+one handed over; standalone: the one you minted).
 
-- **`lock.json`** — ticket- or PR-keyed; heartbeated on a fixed interval;
-  staleness judged by age; mirror a "working" label where available.
-  `{ "key":"DEV-123", "agent_id":"…", "kind":"ticket|pr", "heartbeat":"<RFC3339>" }`
-- **`outcome.json`** — written as the final action.
-  `{ "key":"DEV-123", "outcome":"…", "ticket_url":"…|null", "pr_urls":[…], "retryable":null, "subtasks":[], "detail":"…" }`
-  (`retryable` is a boolean only for a `failed` verification; `subtasks` lists filed
-  ids on `decomposed`.)
+| what     | how                                                                                   |
+| -------- | ------------------------------------------------------------------------------------- |
+| liveness | `dispatch graph claim` / `heartbeat` — stale claims are reclaimed by the next dispatch |
+| outcome  | `dispatch graph outcome set` as the final action (also releases the claim)            |
+| slots    | `dispatch graph slot acquire` / `release` / `heartbeat` around compute                 |
 
-The compute-slot **ledger** (`MAX_PARALLEL`) is the orchestrator's, not written
-here — see Slot seam in `SKILL.md`.
+A `pass` on a dispatched re-run scopes it: `resume` — the previous run died;
+re-derive where it got to from the ticket and PRs, then continue. `verify` —
+the PRs landed (`delivered`); validate the aims and post the DoD. `finalize` —
+the decomposed parent's subtasks all resolved; verify the parent's aims.
+`retry` — re-run a failed verification. Mirror a "working" label on the
+tracker where one is available.
 
 ## Logging
 

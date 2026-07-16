@@ -4,9 +4,10 @@ import {Database} from '../db/database.mts';
 import {DataError} from '../errors.mts';
 import {
   classifiedNodes,
-  frontier,
+  dispatchQueue,
   milestoneStates,
   type DeriveOptions,
+  type Pass,
 } from './queries.mts';
 import {isRole, isTargetKind, ROLE_LIST, TARGET_KIND_LIST} from './roles.mts';
 import type {
@@ -15,6 +16,21 @@ import type {
   GraphNode,
   Milestone,
 } from './types.mts';
+
+/** The §2.5 coordinator outcomes the store records. */
+export const OUTCOMES = [
+  'verified',
+  'canceled',
+  'delivered',
+  'human-blocked',
+  'decomposed',
+  'failed',
+] as const;
+export type Outcome = (typeof OUTCOMES)[number];
+
+export function isOutcome(value: string): value is Outcome {
+  return (OUTCOMES as readonly string[]).includes(value);
+}
 
 /** The outcome of a claim attempt, so the command can report it precisely. */
 export type ClaimOutcome =
@@ -145,6 +161,12 @@ export class GraphStore {
           updatedAtMs,
         ]
       );
+      // A tracker move back to ready-to-work invalidates any recorded outcome:
+      // a human re-opening a verified or parked ticket must return it to the
+      // frontier, not leave it wedged behind a stale report.
+      if (task.role === 'available' || task.role === 'backlog') {
+        this.#db.run('DELETE FROM outcome WHERE node_id = ?', [nodeId]);
+      }
     });
   }
 
@@ -232,6 +254,7 @@ export class GraphStore {
       this.#db.run(
         `DELETE FROM node
          WHERE id NOT IN (SELECT node_id FROM claim)
+           AND id NOT IN (SELECT node_id FROM outcome)
            AND id NOT IN (SELECT milestone_id FROM review)`
       );
       this.#db.run("UPDATE node SET kind = 'unknown'");
@@ -239,10 +262,11 @@ export class GraphStore {
   }
 
   /**
-   * Claim a task for an agent, atomically. Succeeds when the task is free and
-   * available, already held by the caller (a refresh), or held by a stale
-   * claim (a takeover — eligibility is ignored, because taking over a dead
-   * agent's in-progress work is the point).
+   * Claim a task or milestone for an agent, atomically. Succeeds when the node
+   * is dispatchable (an available/pass-eligible task, or a ready-unreviewed
+   * milestone — a review agent's lock), already held by the caller (a
+   * refresh), or held by a stale claim (a takeover — eligibility is ignored,
+   * because taking over a dead agent's in-progress work is the point).
    */
   async claim(
     id: string,
@@ -251,13 +275,14 @@ export class GraphStore {
   ): Promise<ClaimResult> {
     return this.#db.transaction(() => {
       const node = this.#node(id);
-      if (node?.kind !== 'task') return {outcome: 'unknown-task'};
-      return this.#claimLocked(node.id, id, agent, options);
+      if (node === null || node.kind === 'unknown')
+        return {outcome: 'unknown-task'};
+      return this.#claimLocked(node, id, agent, options);
     });
   }
 
   /**
-   * Claim the top eligible task off the ranked frontier, atomically. A
+   * Claim the top eligible item off the dispatch queue, atomically. A
    * candidate held by a live claim is skipped; the first one taken is
    * returned, or null when nothing is claimable.
    */
@@ -265,28 +290,28 @@ export class GraphStore {
     agent: string,
     options: DeriveOptions,
     project?: string
-  ): Promise<{entry: ClassifiedNode; outcome: ClaimOutcome} | null> {
+  ): Promise<{
+    entry: ClassifiedNode;
+    outcome: ClaimOutcome;
+    pass: Pass | null;
+  } | null> {
     return this.#db.transaction(() => {
-      for (const entry of frontier(this.#db, options, project)) {
+      for (const {entry, pass} of dispatchQueue(this.#db, options, project)) {
         const node = this.#node(entry.node.id);
         if (node === null) continue;
-        const result = this.#claimLocked(
-          node.id,
-          entry.node.id,
-          agent,
-          options
-        );
+        const result = this.#claimLocked(node, entry.node.id, agent, options);
         // The claimed entry itself is returned — the caller must print the row
         // this transaction claimed, not whatever an earlier read happened to
         // rank first.
-        if (result.outcome !== 'held') return {entry, outcome: result.outcome};
+        if (result.outcome !== 'held')
+          return {entry, outcome: result.outcome, pass};
       }
       return null;
     });
   }
 
   #claimLocked(
-    nodeId: number,
+    node: NodeRow,
     externalId: string,
     agent: string,
     options: DeriveOptions
@@ -295,26 +320,23 @@ export class GraphStore {
     const staleAfterMs = options.staleAfterMs ?? Number.MAX_SAFE_INTEGER;
     const existing = this.#db.get(
       'SELECT agent, heartbeat_at_ms FROM claim WHERE node_id = ?',
-      [nodeId]
+      [node.id]
     );
     const write = (): void => {
       this.#db.run(
         `INSERT INTO claim (node_id, agent, heartbeat_at_ms) VALUES (?, ?, ?)
          ON CONFLICT(node_id) DO UPDATE SET
            agent = excluded.agent, heartbeat_at_ms = excluded.heartbeat_at_ms`,
-        [nodeId, agent, nowMs]
+        [node.id, agent, nowMs]
       );
     };
 
     if (existing === undefined) {
-      const entry = classifiedNodes(this.#db, options).find(
-        (candidate) => candidate.node.id === externalId
-      );
-      if (entry?.classification !== 'available') {
-        const result: ClaimResult = {outcome: 'not-available'};
-        if (entry !== undefined) result.classification = entry.classification;
-        return result;
-      }
+      const refusal =
+        node.kind === 'milestone'
+          ? this.#milestoneClaimRefusal(externalId, options)
+          : this.#taskClaimRefusal(externalId, options);
+      if (refusal !== null) return refusal;
       write();
       return {outcome: 'claimed'};
     }
@@ -334,6 +356,42 @@ export class GraphStore {
       outcome: 'held',
       heldBy: typeof existing.agent === 'string' ? existing.agent : '?',
     };
+  }
+
+  /**
+   * Why a fresh claim on a task is refused, or null when it is dispatchable —
+   * on the queue as ordinary available work or as a follow-up pass.
+   */
+  #taskClaimRefusal(
+    externalId: string,
+    options: DeriveOptions
+  ): ClaimResult | null {
+    const queued = dispatchQueue(this.#db, options).some(
+      (candidate) => candidate.entry.node.id === externalId
+    );
+    if (queued) return null;
+    const entry = classifiedNodes(this.#db, options).find(
+      (candidate) => candidate.node.id === externalId
+    );
+    const result: ClaimResult = {outcome: 'not-available'};
+    if (entry !== undefined) result.classification = entry.classification;
+    return result;
+  }
+
+  /**
+   * A milestone claim is a review agent's lock: fresh-claimable exactly while
+   * the milestone is ready for review and the review is not yet recorded.
+   */
+  #milestoneClaimRefusal(
+    externalId: string,
+    options: DeriveOptions
+  ): ClaimResult | null {
+    const state = milestoneStates(this.#db, options).find(
+      (candidate) => candidate.id === externalId
+    );
+    if (state !== undefined && state.readyForReview && !state.reviewRecorded)
+      return null;
+    return {outcome: 'not-available'};
   }
 
   async heartbeat(id: string, agent: string, nowMs: number): Promise<boolean> {
@@ -367,6 +425,170 @@ export class GraphStore {
       );
       return 'released';
     });
+  }
+
+  /**
+   * Record a coordinator's final report on a node, releasing the recorder's
+   * claim in the same transaction — the artifact proves its writer exited. One
+   * row per node: a later pass's report replaces it, which is how a `verify`
+   * pass consumes the `delivered` it was dispatched for.
+   */
+  async setOutcome(
+    id: string,
+    agent: string,
+    report: {
+      outcome: Outcome;
+      retryable: boolean | null;
+      detail: string | null;
+    },
+    nowMs: number
+  ): Promise<void> {
+    assert(
+      report.retryable === null || report.outcome === 'failed',
+      new DataError('--retryable is meaningful only with --outcome failed', {
+        hint: 'drop --retryable, or report the failure as --outcome failed.',
+      })
+    );
+    await this.#db.transaction(() => {
+      const node = this.#node(id);
+      assert(
+        node?.kind === 'task',
+        new DataError(`no task "${id}" in the graph`, {
+          hint: 'an outcome is recorded on a task the graph already holds.',
+        })
+      );
+      this.#db.run(
+        `INSERT INTO outcome (node_id, outcome, retryable, detail, recorded_at_ms)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(node_id) DO UPDATE SET
+           outcome = excluded.outcome, retryable = excluded.retryable,
+           detail = excluded.detail, recorded_at_ms = excluded.recorded_at_ms`,
+        [
+          node.id,
+          report.outcome,
+          report.retryable === null ? null : report.retryable ? 1 : 0,
+          report.detail,
+          nowMs,
+        ]
+      );
+      this.#db.run('DELETE FROM claim WHERE node_id = ? AND agent = ?', [
+        node.id,
+        agent,
+      ]);
+    });
+  }
+
+  /** Drop a recorded outcome (operator cleanup — e.g. requeue a failure). */
+  async removeOutcome(id: string): Promise<boolean> {
+    return (
+      this.#db.run(
+        'DELETE FROM outcome WHERE node_id = (SELECT id FROM node WHERE external_id = ?)',
+        [id]
+      ) > 0
+    );
+  }
+
+  /**
+   * Record an injected bare PR (§2.6 runtime injection) as a claimable work
+   * item: a task keyed `<repo>#<number>` in the synthetic `pr:<repo>` project.
+   * The prefix keeps it off any tracker project sharing the repo's name — the
+   * synthetic project must stay undeclared (⇒ partial ⇒ never counted toward
+   * termination). Injected, so it ranks to the head of the queue.
+   */
+  async addBarePr(pr: {
+    repo: string;
+    number: number;
+    url: string;
+    branch: string | null;
+    title: string | null;
+  }): Promise<string> {
+    const id = `${pr.repo}#${String(pr.number)}`;
+    await this.upsertTask({
+      id,
+      project: `pr:${pr.repo}`,
+      url: pr.url,
+      title: pr.title ?? id,
+      role: 'available',
+      milestone: null,
+      targetKind: 'bare-pr',
+      humanInteractive: false,
+      injected: true,
+      priority: null,
+      branchHint: pr.branch,
+      labels: [],
+      updatedAt: null,
+    });
+    return id;
+  }
+
+  /**
+   * Acquire a compute slot (§2.6 slot accounting): the right to build/test on
+   * this host. Bounded by `max`; a slot whose heartbeat went stale is swept
+   * first, so a crashed agent cannot leak capacity. Re-acquiring is a refresh.
+   */
+  async acquireSlot(
+    agent: string,
+    max: number,
+    nowMs: number,
+    staleAfterMs: number
+  ): Promise<'acquired' | 'refreshed' | 'full'> {
+    return this.#db.transaction(() => {
+      this.#db.run('DELETE FROM slot WHERE ? - heartbeat_at_ms > ?', [
+        nowMs,
+        staleAfterMs,
+      ]);
+      const held = this.#db.get('SELECT 1 FROM slot WHERE agent = ?', [agent]);
+      if (held !== undefined) {
+        this.#db.run('UPDATE slot SET heartbeat_at_ms = ? WHERE agent = ?', [
+          nowMs,
+          agent,
+        ]);
+        return 'refreshed';
+      }
+      const count = this.#db.get('SELECT COUNT(*) AS n FROM slot');
+      if (Number(count?.n ?? 0) >= max) return 'full';
+      this.#db.run('INSERT INTO slot (agent, heartbeat_at_ms) VALUES (?, ?)', [
+        agent,
+        nowMs,
+      ]);
+      return 'acquired';
+    });
+  }
+
+  /** Release a slot. Idempotent — releasing a slot you don't hold is a no-op. */
+  async releaseSlot(agent: string): Promise<boolean> {
+    return this.#db.run('DELETE FROM slot WHERE agent = ?', [agent]) > 0;
+  }
+
+  async heartbeatSlot(agent: string, nowMs: number): Promise<boolean> {
+    return (
+      this.#db.run('UPDATE slot SET heartbeat_at_ms = ? WHERE agent = ?', [
+        nowMs,
+        agent,
+      ]) > 0
+    );
+  }
+
+  /** Live claims across every node — the exit check's "work still owned". */
+  async liveClaimCount(nowMs: number, staleAfterMs: number): Promise<number> {
+    const row = this.#db.get(
+      'SELECT COUNT(*) AS n FROM claim WHERE ? - heartbeat_at_ms <= ?',
+      [nowMs, staleAfterMs]
+    );
+    return Number(row?.n ?? 0);
+  }
+
+  /** Every held slot, its liveness judged against the staleness window. */
+  async slots(
+    nowMs: number,
+    staleAfterMs: number
+  ): Promise<{agent: string; live: boolean}[]> {
+    return this.#db
+      .all('SELECT agent, heartbeat_at_ms FROM slot ORDER BY agent')
+      .map((row) => ({
+        agent: String(row.agent),
+        live: nowMs - Number(row.heartbeat_at_ms) <= staleAfterMs,
+      }));
   }
 
   /**
@@ -409,6 +631,10 @@ export class GraphStore {
         'INSERT INTO review (milestone_id, recorded_at_ms) VALUES (?, ?)',
         [nodeId, recordedAtMs]
       );
+      // The claim is the review agent's lock; the recorded review is its
+      // outcome, so the lock ends here — a live leftover claim would hold the
+      // orchestrator's exit check open for nothing.
+      this.#db.run('DELETE FROM claim WHERE node_id = ?', [nodeId]);
       this.#db.run(
         `INSERT INTO review_member (milestone_id, member_external_id)
          SELECT ?, n.external_id

@@ -13,18 +13,20 @@ import {
 } from './store-context.mts';
 
 /**
- * Claim a task for an agent. Succeeds if the task is free and available, if the
- * caller already holds it (a heartbeat), or if the current holder's claim is
- * stale (a takeover). Fails if another agent holds it live.
+ * Claim a task or milestone for an agent. Succeeds if the item is dispatchable
+ * (an available or pass-eligible task, or a ready-unreviewed milestone — the
+ * review agent's lock), if the caller already holds it (a heartbeat), or if
+ * the current holder's claim is stale (a takeover). Fails if another agent
+ * holds it live.
  */
 export const claim: Command = {
   name: 'claim',
-  summary: 'Claim a task for an agent, or reclaim a stale one.',
+  summary: 'Claim a task or milestone for an agent, or reclaim a stale one.',
   usage: [
     'dispatch graph claim --id CLC-945 --agent <session-id> [--stale-after 10m]',
     '',
     'options:',
-    '  --id <id>       Task to claim (required).',
+    '  --id <id>       Task (or milestone, for a review lock) to claim (required).',
     "  --agent <id>    The claiming agent's session id (required).",
     STALE_AFTER_USAGE,
     STORE_USAGE,
@@ -60,14 +62,16 @@ export const claim: Command = {
           );
         case 'not-available':
           throw new DataError(
-            `${id} is not available (state=${result.classification ?? 'unknown'})`,
+            result.classification === undefined
+              ? `${id} is not claimable`
+              : `${id} is not claimable (state=${result.classification})`,
             {
-              hint: 'claim only an available task; `dispatch graph next` returns one.',
+              hint: 'claim a dispatchable task (`dispatch graph next` returns one) or a ready-unreviewed milestone.',
             }
           );
         case 'unknown-task':
           throw new DataError(`no task "${id}" in the graph`, {
-            hint: 'add it with `dispatch graph task set` before claiming it.',
+            hint: 'fetch it into the graph (task set) before claiming it.',
           });
         default:
           return;

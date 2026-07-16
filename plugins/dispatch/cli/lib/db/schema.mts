@@ -4,7 +4,7 @@ import {ROLES, TARGET_KINDS} from '../graph/roles.mts';
  * Bumped on any change an existing database file cannot absorb. `Database.open`
  * refuses a file whose recorded version differs — see `database.mts`.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const quoted = (values: readonly string[]): string =>
   values.map((value) => `'${value}'`).join(', ');
@@ -32,6 +32,13 @@ const quoted = (values: readonly string[]): string =>
  *   tracker ids, and must not mutate when a member is later deleted.
  * - `labels` is a JSON array in a TEXT column: labels are read and written
  *   whole with their task and never queried across tasks.
+ * - `outcome` is a coordinator's final report on a node — the write that lets
+ *   the scheduler serve re-dispatch passes (verify, finalize, retry) instead of
+ *   the orchestrator reconciling files. One row per node; a later run's report
+ *   replaces it.
+ * - `slot` is the compute-slot ledger (§2.6): one row per held slot, bounded by
+ *   the config's maxParallel at acquire time, reclaimed when its heartbeat goes
+ *   stale.
  */
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -96,6 +103,20 @@ CREATE TABLE IF NOT EXISTS review_member (
   milestone_id       INTEGER NOT NULL REFERENCES review(milestone_id) ON DELETE CASCADE,
   member_external_id TEXT NOT NULL,
   PRIMARY KEY (milestone_id, member_external_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS outcome (
+  node_id        INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+  outcome        TEXT NOT NULL CHECK (outcome IN
+    ('verified', 'canceled', 'delivered', 'human-blocked', 'decomposed', 'failed')),
+  retryable      INTEGER CHECK (retryable IN (0, 1)),
+  detail         TEXT,
+  recorded_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS slot (
+  agent           TEXT PRIMARY KEY,
+  heartbeat_at_ms INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS cursor (

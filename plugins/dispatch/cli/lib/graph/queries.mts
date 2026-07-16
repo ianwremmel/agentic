@@ -12,6 +12,7 @@ import type {
   Anomaly,
   Classification,
   ClassifiedNode,
+  ClaimView,
   MilestoneState,
 } from './types.mts';
 
@@ -61,6 +62,14 @@ const STARTED_SQL = quoted(
  * - `classified` — the §2.3-derived classification, highest precedence first:
  *   resolved → in-flight (started role, or a live claim) → dormant (backlog) →
  *   blocked → human-blocked → available.
+ * - `queued` — what the scheduler may hand out, and as which pass. An ordinary
+ *   `available` node with no outcome row is dispatchable as-is; a started node
+ *   whose claim went stale with no outcome is a crashed run, re-served as
+ *   `resume`; a recorded outcome re-admits the node for exactly one follow-up
+ *   pass — `verify` for a delivered ticket (a bare PR is done at delivered),
+ *   `finalize` for a decomposed parent whose subtasks all resolved, `retry`
+ *   for a retryable failure. Nothing human-owned, parked, resolved, or held by
+ *   a live claim is ever handed out.
  */
 const PREFIX = `
 WITH RECURSIVE
@@ -188,6 +197,9 @@ classified AS (
       WHEN lc.node_id IS NOT NULL THEN 1
       ELSE 0
     END AS claim_live,
+    o.outcome AS outcome,
+    o.retryable AS outcome_retryable,
+    o.detail AS outcome_detail,
     (SELECT group_concat(nx.external_id, ',' ORDER BY nx.external_id)
        FROM unresolved_anc ua JOIN node nx ON nx.id = ua.id
       WHERE ua.target = t.node_id) AS blocked_by,
@@ -196,6 +208,10 @@ classified AS (
       WHERE g.task_id = t.node_id) AS gated_by,
     COALESCE(f.n, 0) AS fanout,
     CASE
+      -- delivered is terminal for a ticketless PR: its recorded outcome, not a
+      -- tracker role nobody will ever write, is what resolves it.
+      WHEN t.target_kind = 'bare-pr' AND o.outcome IN ('delivered', 'verified') THEN 'verified'
+      WHEN t.target_kind = 'bare-pr' AND o.outcome = 'canceled' THEN 'canceled'
       WHEN t.role = 'verified' THEN 'verified'
       WHEN t.role = 'canceled' THEN 'canceled'
       WHEN t.role IN (${STARTED_SQL}) THEN 'in-flight'
@@ -216,6 +232,24 @@ classified AS (
   LEFT JOIN claim c ON c.node_id = t.node_id
   LEFT JOIN live_claim lc ON lc.node_id = t.node_id
   LEFT JOIN fanout f ON f.id = t.node_id
+  LEFT JOIN outcome o ON o.node_id = t.node_id
+),
+queued AS (
+  SELECT *,
+    CASE
+      WHEN human_interactive = 1
+        OR classification IN ('verified', 'canceled', 'human-blocked', 'dormant')
+        THEN NULL
+      WHEN outcome IS NULL AND classification = 'available' THEN 'available'
+      WHEN outcome IS NULL AND claim_agent IS NOT NULL AND claim_live = 0
+        AND classification = 'in-flight' THEN 'resume'
+      WHEN outcome IS NULL OR claim_live = 1 THEN NULL
+      WHEN outcome = 'delivered' AND target_kind <> 'bare-pr' THEN 'verify'
+      WHEN outcome = 'decomposed'
+        AND node_id NOT IN (SELECT target FROM unresolved_anc) THEN 'finalize'
+      WHEN outcome = 'failed' AND outcome_retryable = 1 THEN 'retry'
+    END AS pass
+  FROM classified
 )
 `;
 
@@ -231,6 +265,20 @@ const PROJECT_FILTER =
  */
 const RANK_ORDER =
   'ORDER BY injected DESC, (priority IS NULL) ASC, priority ASC, fanout DESC, id ASC';
+
+/**
+ * The dispatch queue's order: injected work first (a runtime-injected ticket or
+ * bare PR goes to the head without preempting anything in flight), then the
+ * follow-up passes on work already invested in (finalize, verify, retry), then
+ * the ranked available frontier.
+ */
+const QUEUE_ORDER = `ORDER BY
+  (pass = 'available' AND injected = 1) DESC,
+  CASE pass
+    WHEN 'resume' THEN 0 WHEN 'finalize' THEN 1 WHEN 'verify' THEN 2
+    WHEN 'retry' THEN 3 ELSE 4
+  END ASC,
+  (priority IS NULL) ASC, priority ASC, fanout DESC, id ASC`;
 
 function params(options: DeriveOptions, project?: string): SqlValue[] {
   return [
@@ -254,7 +302,10 @@ export function classifiedNodes(
     .map(toClassified);
 }
 
-/** The ranked available frontier, most urgent first. */
+/**
+ * The ranked available frontier, most urgent first. A node carrying an outcome
+ * row is excluded — its next dispatch is a pass, not fresh work.
+ */
 export function frontier(
   db: Database,
   options: DeriveOptions,
@@ -262,10 +313,39 @@ export function frontier(
 ): ClassifiedNode[] {
   return db
     .all(
-      `${PREFIX} SELECT * FROM classified WHERE classification = 'available' AND ${PROJECT_FILTER} ${RANK_ORDER}`,
+      `${PREFIX} SELECT * FROM queued WHERE pass = 'available' AND ${PROJECT_FILTER} ${RANK_ORDER}`,
       params(options, project)
     )
     .map(toClassified);
+}
+
+/** A dispatch that continues earlier work rather than starting fresh. */
+export type Pass = 'resume' | 'verify' | 'finalize' | 'retry';
+
+export interface QueueEntry {
+  entry: ClassifiedNode;
+  /** Null for ordinary available work; otherwise the follow-up pass. */
+  pass: Pass | null;
+}
+
+/**
+ * Everything the scheduler may hand out right now, in dispatch order. The one
+ * read `next` (and claim eligibility) runs, so pick and admit always agree.
+ */
+export function dispatchQueue(
+  db: Database,
+  options: DeriveOptions,
+  project?: string
+): QueueEntry[] {
+  return db
+    .all(
+      `${PREFIX} SELECT * FROM queued WHERE pass IS NOT NULL AND ${PROJECT_FILTER} ${QUEUE_ORDER}`,
+      params(options, project)
+    )
+    .map((row) => ({
+      entry: toClassified(row),
+      pass: row.pass === 'available' ? null : (text(row.pass) as Pass),
+    }));
 }
 
 /** Every declared milestone's derived state, ordered by project then id. */
@@ -283,12 +363,21 @@ export function milestoneStates(
        ms.open_count,
        ms.dep_blocked,
        ms.review_recorded,
+       c.agent AS claim_agent,
+       c.heartbeat_at_ms AS claim_heartbeat_at_ms,
+       CASE
+         WHEN c.node_id IS NULL THEN NULL
+         WHEN lc.node_id IS NOT NULL THEN 1
+         ELSE 0
+       END AS claim_live,
        (SELECT group_concat(mem.external_id, ',' ORDER BY mem.external_id)
           FROM member mem WHERE mem.milestone_id = ms.id) AS members
      FROM milestone_state ms
      JOIN milestone m ON m.node_id = ms.id
      JOIN node n ON n.id = ms.id
      JOIN project pr ON pr.id = m.project_id
+     LEFT JOIN claim c ON c.node_id = ms.id
+     LEFT JOIN live_claim lc ON lc.node_id = ms.id
      ORDER BY project, id`,
     params(options)
   );
@@ -305,6 +394,7 @@ export function milestoneStates(
       integer(row.open_count) === 0 &&
       integer(row.dep_blocked) === 0,
     reviewRecorded: integer(row.review_recorded) === 1,
+    claim: toClaim(row),
   }));
 }
 
@@ -518,18 +608,31 @@ function toClassified(row: Row): ClassifiedNode {
     effectiveBlocked: blockedBy.length > 0 || gatedBy.length > 0,
     blockedBy,
     gatedBy,
-    claim:
-      row.claim_agent === null || row.claim_agent === undefined
+    claim: toClaim(row),
+    outcome:
+      row.outcome === null || row.outcome === undefined
         ? null
         : {
-            agent: text(row.claim_agent) ?? '',
-            live: integer(row.claim_live) === 1,
-            heartbeatAt: new Date(
-              integer(row.claim_heartbeat_at_ms)
-            ).toISOString(),
+            outcome: text(row.outcome) ?? '',
+            retryable:
+              row.outcome_retryable === null ||
+              row.outcome_retryable === undefined
+                ? null
+                : integer(row.outcome_retryable) === 1,
+            detail: text(row.outcome_detail),
           },
     fanout: integer(row.fanout),
   };
+}
+
+function toClaim(row: Row): ClaimView | null {
+  return row.claim_agent === null || row.claim_agent === undefined
+    ? null
+    : {
+        agent: text(row.claim_agent) ?? '',
+        live: integer(row.claim_live) === 1,
+        heartbeatAt: new Date(integer(row.claim_heartbeat_at_ms)).toISOString(),
+      };
 }
 
 function splitList(value: unknown): string[] {

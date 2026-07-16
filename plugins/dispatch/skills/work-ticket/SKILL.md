@@ -77,13 +77,14 @@ of the `tracker` config (see **Injected bare PR**).
 ## Standalone vs dispatched
 
 Same rules; only the reporting surface differs. **Standalone** — a human runs
-`/work-ticket <ID>`; report the outcome to the session. **Dispatched** — the
-orchestrator hands over the item and expects an outcome artifact + heartbeated lock
-([`reference.md`](./reference.md#dispatch-artifacts)), and passes identity/mode,
+`/work-ticket <ID>`; also report the outcome to the session. **Dispatched** —
+the orchestrator hands over the item with the claim agent id, any `pass`
+(verify · finalize · retry — a re-dispatch scoped to that step;
+[`reference.md`](./reference.md#dispatch-bookkeeping)), and identity/mode,
 which you forward to every `deliver`. (Operator login is not forwarded — each
 `deliver` reads it from the shared plugin config.)
 
-Assigned for the run, you are bound by the **communication restriction**:
+In both modes you are bound by the **communication restriction**:
 never solicit a session response or block on session input for progress; route
 human input PR → ticket → new ticket, tagging a human (see **Human handoff**).
 Progress, status, and summaries to the session are fine — but if proactive
@@ -92,17 +93,47 @@ or PR.
 
 ## Claim (ticket-backed only)
 
-Idempotent. (1) Resolve the role. (2) If a `started` role is held by a *different*
-identity, stop. (3) Assign to self. (4) If not already `in-progress`, emit
-`available → in-progress` (state-change comment + `TRANSITION` log); if already
-`in-progress` as self (resume / re-dispatch after a stale lock), don't re-emit.
-Parked (`paused`/`awaiting-external`) → resume via `available` first, never
-straight to `in-progress`.
+Idempotent, in order:
+
+1. **Graph claim** — `dispatch graph claim --id <ID> --agent <agent-id>` (the
+   dispatched claim id, or mint `wt-<epoch>` standalone). On `claimed` /
+   `refreshed` / `reclaimed`, proceed. Otherwise
+   ([details](./reference.md#graph-claim)):
+   - `unknown-task` — the graph hasn't seen this ticket. Fetch its subgraph
+     (the ticket + transitive blockers, per the reference), then retry once.
+   - blocked — unresolved blockers. Standalone: work them first — apply this
+     skill to each unresolved id in the ticket's `blocked-by` (from
+     `dispatch graph doc`), depth-first, then re-claim. Dispatched: the graph
+     moved under the dispatch; write `failed` (retryable) and stop.
+   - `held` — another agent's live claim; stop.
+   - any other classification (backlog, parked, terminal) — not claimable;
+     report and stop (parked resumes only via **Human handoff**).
+
+   `reclaimed` is a sanctioned takeover of a dead run — proceed even though the
+   ticket is already `in-progress`, re-deriving its state from the ticket and
+   PRs (a `pass=resume` dispatch is exactly this).
+2. **Tracker claim** — (a) resolve the role; (b) if a `started` role is held by
+   a *different* platform identity, stop — a reclaim covers a dead run under
+   your own platform account, not someone else's work; (c) assign to self; (d)
+   if not already
+   `in-progress`, emit `available → in-progress` (state-change comment +
+   `TRANSITION` log); if already `in-progress` as self (resume / re-dispatch
+   after a stale claim), don't re-emit. Parked (`paused`/`awaiting-external`) →
+   resume via `available` first, never straight to `in-progress`.
+
+While you hold the claim, run `dispatch graph heartbeat` (same `--id`/`--agent`)
+at least every few minutes (fold into poll ticks). The claim ends with your
+outcome — `dispatch graph outcome set` releases it (see **Report**). Never run
+a bare `release`: a released claim with no outcome reads as a crash and gets
+re-dispatched.
 
 ## Decompose
 
 - **Too large** → file native subtasks; parent stays `in-progress`; record each
-  subtask as a `blocks` edge to the parent; log `INFO`; emit `decomposed`;
+  subtask as a `blocks` edge to the parent — on the tracker **and** in the
+  graph (`dispatch graph task set` each subtask, then
+  `dispatch graph edge add --blocker <subtask> --blocked <ID>`), so the
+  finalize gate holds before the next refresh; log `INFO`; record `decomposed`;
   **stop**. You don't drive the subtasks' PRs or finalize the parent — both are a
   later, separate pass.
 - **Out-of-scope blocker** → file a `blocks`-linked ticket; log `BLOCK`; then park
@@ -124,6 +155,7 @@ PR's status only via `deliver`.
 | -------------------------------------------------- | ------------- |
 | claimed; implementation underway                   | `in-progress` |
 | delegated to review; no implementation outstanding | `in-review`   |
+| review approved; merge pending (adapter maps it)   | `finished`    |
 | **every** PR required by the aims has landed       | `delivered`   |
 | aims validated and DoD artifact posted             | `verified`    |
 
@@ -153,11 +185,13 @@ with `retryable` (transient cause = retryable; structural = not). Never
 
 ## Injected bare PR (no ticket)
 
-Inputs are the forge identity; nothing to claim, decompose, or transition. Drive
-the one PR via `deliver`; report `delivered` on merge (terminal — a ticketless PR
-has no separate verification step), else `canceled`/`failed`. Lock is **PR-keyed**.
-If the PR *is* ticket-linked, act as that ticket's coordinator with the PR as one
-`deliver` instance.
+Inputs are the forge identity; the graph item is keyed `<repo>#<n>` —
+dispatched, claim it like a ticket; standalone, create it first with
+`dispatch graph pr add`. Nothing to decompose or transition on a tracker. Drive
+the one PR via `deliver`; report `delivered` on merge (terminal — a ticketless
+PR has no separate verification step), else `canceled`/`failed`. If the PR *is*
+ticket-linked, act as that ticket's coordinator with the PR as one `deliver`
+instance.
 
 ## Human handoff (worker-discovered)
 
@@ -169,30 +203,35 @@ external step:
 2. Transition to **`awaiting-external`** (or `paused`); if the adapter maps
    neither, `ERROR` — there is no valid park.
 3. Log **`WAIT`** (name the venue + awaited outcome).
-4. **Release** — dispatched: write the `human-blocked` outcome and exit; standalone:
-   wait on the venue with thread-aware filtering.
+4. **Report** — dispatched: record the `human-blocked` outcome and exit;
+   standalone: wait on the venue with thread-aware filtering.
 
 Keep **≤1** open alert (scan the venue first). Resolution: on an addressable
 human response, react, log `RESUME`, post a follow-up if substantive, then
 resume from a **fresh claim** (parked → `available` → `in-progress`).
 
-## Slot seam
+## Slots
 
-A slot is the right to use **local compute** (write code, install, build, test).
-The delivery worker — and this coordinator while it runs a verification suite —
-must hold a ledger entry while computing and release it for any wait. The ledger
-is the orchestrator's; **standalone there is none**, so acquire/release are no-op
-seams at the mandated points: acquire before a worker builds or a suite runs (one
-entry per concurrent build, else sequence), release on any wait
-(CI/review/merge/handoff/idle) or exit.
+A slot is the right to use **local compute** (write code, install, build,
+test), taken from the shared ledger: `dispatch graph slot acquire --agent
+<agent-id>` before a worker builds or a suite runs (one slot per concurrent
+build, else sequence; exit 3 = full — wait and retry), `slot release` on any
+wait (CI/review/merge/handoff/idle) or exit, `slot heartbeat` while computing.
+The ledger is host-wide, so standalone runs share the same bound.
 
 ## Report
 
 The outcome is one of `verified` · `canceled` · `delivered` · `human-blocked` ·
 `decomposed` · `failed` — meaning, terminality, and how each resumes are in
-[`reference.md`](./reference.md#outcomes). Dispatched: write the outcome artifact
-as your **final action**, honoring the lock until then. Standalone: report it to
-the session.
+[`reference.md`](./reference.md#outcomes). Record it as your **final action**:
+
+```shell
+dispatch graph outcome set --id <key> --agent <agent-id> --outcome <o> \
+    [--retryable true|false] [--detail "one line"]
+```
+
+It releases your claim in the same write. Standalone, also report it to the
+session.
 
 ## Log
 

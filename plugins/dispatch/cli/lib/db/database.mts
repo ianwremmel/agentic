@@ -100,7 +100,12 @@ export class Database {
 
   async transaction<T>(body: () => T): Promise<T> {
     return this.guard(() => {
-      this.#db.exec('BEGIN');
+      // IMMEDIATE takes the write lock up front. Every transaction here writes
+      // (or intends to), and a deferred BEGIN that reads first — claimNext
+      // ranking the queue before inserting the claim — could not upgrade to a
+      // writer if a concurrent connection committed in between; SQLite refuses
+      // the upgrade instead of retrying the read.
+      this.#db.exec('BEGIN IMMEDIATE');
       try {
         const result = body();
         this.#db.exec('COMMIT');

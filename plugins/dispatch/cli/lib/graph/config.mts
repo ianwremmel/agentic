@@ -15,6 +15,8 @@ export interface GraphConfig {
   parkedRoles: readonly Role[];
   /** Default staleness for a claim (ms). Overridable per call by `--stale-after`. */
   claimStaleAfterMs: number;
+  /** Compute-slot ledger size: how many agents may build/test at once (§2.6). */
+  maxParallel: number;
 }
 
 /** Ten minutes: a claim not heartbeated within it is presumed dead (§2.6). */
@@ -25,6 +27,7 @@ export const DEFAULT_CONFIG: GraphConfig = Object.freeze({
   verificationLabels: ['verification'],
   parkedRoles: DEFAULT_PARKED_ROLES,
   claimStaleAfterMs: DEFAULT_STALE_AFTER_MS,
+  maxParallel: 3,
 });
 
 /**
@@ -139,7 +142,19 @@ export function parseConfig(raw: string, source: string): GraphConfig {
       DEFAULT_CONFIG.verificationLabels,
     parkedRoles: parkedRoles(doc.parkedRoles, source),
     claimStaleAfterMs: claimStaleAfter(doc.claimStaleAfter, source),
+    maxParallel: maxParallel(doc.maxParallel, source),
   };
+}
+
+function maxParallel(raw: unknown, source: string): number {
+  if (raw === undefined || raw === null) return DEFAULT_CONFIG.maxParallel;
+  assert(
+    typeof raw === 'number' && Number.isInteger(raw) && raw >= 1,
+    new DataError(`${source}: "maxParallel" must be a positive integer`, {
+      hint: 'write it as {"maxParallel": 3}.',
+    })
+  );
+  return raw;
 }
 
 function claimStaleAfter(raw: unknown, source: string): number {

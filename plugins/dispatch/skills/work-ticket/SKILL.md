@@ -145,6 +145,7 @@ PR's status only via `deliver`.
 | -------------------------------------------------- | ------------- |
 | claimed; implementation underway                   | `in-progress` |
 | delegated to review; no implementation outstanding | `in-review`   |
+| review approved; merge pending (adapter maps it)   | `finished`    |
 | **every** PR required by the aims has landed       | `delivered`   |
 | aims validated and DoD artifact posted             | `verified`    |
 

@@ -114,8 +114,8 @@ Idempotent, in order:
    after a stale claim), don't re-emit. Parked (`paused`/`awaiting-external`) →
    resume via `available` first, never straight to `in-progress`.
 
-While you hold the claim, `dispatch graph heartbeat --id <ID> --agent
-<agent-id>` at least every few minutes (fold into poll ticks). **Release only
+While you hold the claim, run `dispatch graph heartbeat` (same `--id`/`--agent`)
+at least every few minutes (fold into poll ticks). **Release only
 when the ticket leaves the started group** — `verified`, `canceled`, or a park.
 On `decomposed` or `failed`, leave the claim in place — the next pass resumes
 it (the same agent id refreshes; a fresh id reclaims once it is stale).

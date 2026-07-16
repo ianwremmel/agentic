@@ -154,8 +154,9 @@ blocker and write them:
   neighbors`; its Graph fetch section has the field mapping) →
   `dispatch graph task set --id … --project … --role <mapped> --url … --title …`
   (plus `--labels`/`--priority`/`--branch-hint` when present), role mapped by
-  the adapter's role map; then `edge set --blocked <id> --blockers <its
-  blockers' ids>`. Repeat for each blocker not yet written, to closure.
+  the adapter's role map; then
+  `dispatch graph edge set --blocked <id> --blockers <its blockers' ids>`.
+  Repeat for each blocker not yet written, to closure.
 - Omit `--milestone` and never run `project set`: a slice must not make the
   project look complete or wire milestone gates it cannot see. The next full
   `build-graph` run fills those in.

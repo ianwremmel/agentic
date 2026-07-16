@@ -83,7 +83,7 @@ claim (or bare-PR lock; [`reference.md`](./reference.md#dispatch-artifacts)), an
 which you forward to every `deliver`. (Operator login is not forwarded — each
 `deliver` reads it from the shared plugin config.)
 
-Assigned for the run, you are bound by the **communication restriction**:
+In both modes you are bound by the **communication restriction**:
 never solicit a session response or block on session input for progress; route
 human input PR → ticket → new ticket, tagging a human (see **Human handoff**).
 Progress, status, and summaries to the session are fine — but if proactive
@@ -92,7 +92,7 @@ or PR.
 
 ## Claim (ticket-backed only)
 
-Idempotent. Graph claim first, then the tracker claim:
+Idempotent, in order:
 
 1. **Graph claim** — `dispatch graph claim --id <ID> --agent <agent-id>` (the
    dispatched claim id, or mint `wt-<epoch>` standalone). On `claimed` /

@@ -191,7 +191,7 @@ here — see Slot seam in `SKILL.md`; it's the orchestrator's slot accounting.
 
 ## Logging
 
-```
+```text
 <timestamp> <kind> ticket=<url> pr=<url> ticket-role=<role> pr-state=<state> | <message>
 ```
 
@@ -212,7 +212,7 @@ here — see Slot seam in `SKILL.md`; it's the orchestrator's slot accounting.
 Every role change also posts a state-change comment to the primary venue, body
 exactly (then the Mode A/B wrapping):
 
-```
+```text
 State: <prev-role> → <new-role>
 Rationale: <one line; required for corrective and cancel transitions>
 ```

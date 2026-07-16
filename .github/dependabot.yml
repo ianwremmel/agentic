@@ -1,0 +1,43 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    commit-message:
+      prefix: 'chore'
+      include: 'scope'
+    # Wait 7 days before proposing dependency updates
+    cooldown:
+      default-days: 7
+    directory: /
+    groups:
+      # The toolchain moves together and is only ever exercised by CI, so one
+      # grouped bump either passes or fails as a unit.
+      dev-dependencies:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Ignore Node major version updates until we're ready to actually update
+      # Node.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+    pull-request-branch-name:
+      separator: '_'
+    schedule:
+      interval: 'daily'
+    versioning-strategy: 'increase'
+
+  - package-ecosystem: github-actions
+    commit-message:
+      prefix: 'chore'
+      include: 'scope'
+    # Wait 7 days before proposing dependency updates
+    cooldown:
+      default-days: 7
+    directory: /
+    pull-request-branch-name:
+      separator: '_'
+    schedule:
+      # Check for updates to GitHub Actions every weekday
+      interval: 'daily'

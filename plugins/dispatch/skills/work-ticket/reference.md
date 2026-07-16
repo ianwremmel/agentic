@@ -130,12 +130,11 @@ trackers: a ticket on one tracker must not block a ticket on another.
 
 ## Primary venue
 
-Where a state-change comment lands: the PR if one exists, else the ticket. With
-several PRs, first match wins — (1) the PR the event is about (its delivery
-triggered the transition, or the blocker arose in it); (2) else the most recently
-updated open PR; (3) else the ticket. Ticket-level transitions (`available →
-in-progress`, the aggregate `delivered`, `verified`) go to the ticket, as do the
-DoD artifact and the ticket↔PR mapping.
+Where a state-change comment lands. First match: (1) ticket-level transitions
+(`available → in-progress`, the aggregate `delivered`, `verified`) → the
+ticket, as do the DoD artifact and the ticket↔PR mapping; (2) else the PR the
+event is about (its delivery triggered the transition, or the blocker arose in
+it); (3) else the most recently updated open PR; (4) else the ticket.
 
 PR-venue writes go through the **forge**, the path `deliver` uses — never the
 tracker's API.

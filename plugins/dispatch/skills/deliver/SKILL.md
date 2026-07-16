@@ -341,8 +341,10 @@ need not burn the loop:
   naming `next_wakeup_at`, write wait-state, end the turn.
 - **Never yield on an unconfirmed arm.** If `send_later` errors, retry once,
   then run the remainder of the lifecycle as an inline loop.
-- **On wake** (webhook or check-in): log `RESUME` + heartbeat, re-read
-  `pr-status`, do the reactive work, re-arm, yield again. Ticks are idempotent;
+- **On wake** (webhook or check-in): log the wake heartbeat (`INFO`; `RESUME`
+  only when the awaited condition has actually arrived), re-read
+  `pr-status`, do the reactive work, then apply the end-of-tick rule above
+  (which may re-arm and yield, or keep going inline). Ticks are idempotent;
   duplicate or stale wakes are cheap no-ops. Track exactly one logical
   `next_wakeup_at` (cancel-and-replace where supported).
 - **Terminal**: best-effort unsubscribe, stop re-arming, clear wait-state, run
@@ -361,9 +363,10 @@ Maintain `<cache-base>/<skill>/<repo-slug>/<pr-number>/wait-state.json`:
 ```
 
 Write it at entry, on every lifecycle transition, and before every yield; clear
-it at terminal. Callers judge staleness by `now > next_wakeup_at + grace` —
-never by fixed heartbeat age (an event-mode agent is silent between wakes by
-design).
+it at terminal. In inline mode, `next_wakeup_at` is the end of the current
+bounded wait — refresh it before each wait tick. Callers judge staleness by
+`now > next_wakeup_at + grace` — never by fixed heartbeat age (an event-mode
+agent is silent between wakes by design); the predicate covers both modes.
 
 ### Forbidden
 

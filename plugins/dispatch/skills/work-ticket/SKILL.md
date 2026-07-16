@@ -83,9 +83,7 @@ the orchestrator hands over the item with the claim agent id, any `pass`
 [`reference.md`](./reference.md#dispatch-bookkeeping)), identity/mode, and
 `agent_context` (absent → assume `subagent`), which you forward to every
 `deliver`. (Operator login is not forwarded — each `deliver` reads it from the
-shared plugin config.) Staleness note: an event-mode `deliver` (remote main
-agent) is silent between wakes by design — judge its liveness by the
-`next_wakeup_at` in its wait-state file, never by fixed heartbeat age.
+shared plugin config.)
 
 In both modes you are bound by the **communication restriction**:
 never solicit a session response or block on session input for progress; route
@@ -148,9 +146,11 @@ re-dispatched.
 Drive each in-scope unit's PR to terminal through `deliver`. Invoke
 `dispatch:deliver` inline (single PR) or as a subagent (concurrent PRs),
 forwarding identity/mode + `agent_context`: subagent-dispatched → `subagent`;
-inline → your **own** effective context (`main` only when work-ticket itself
-runs standalone in the main session — dispatched, you are a subagent and so is
-an inline deliver); unknown at any hop → `subagent`. **Sequential by default**
+inline while holding a graph claim → `subagent` (an event-driven `deliver`
+yields between wakes, pausing the claim heartbeats — a paused heartbeat reads
+as a dead run to the next orchestrator sweep); inline, claim-free, in the main
+session (an injected bare PR driven standalone) → `main`; unknown at any hop →
+`subagent`. **Sequential by default**
 (one building PR at a time); go concurrent only for independent work, one slot
 per building PR. In a remote sandbox, concurrent deliver subagents each run an
 inline bounded-`Monitor` loop holding context for the whole PR life —

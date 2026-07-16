@@ -190,7 +190,7 @@ Kinds `deliver` emits:
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `INFO`       | Heartbeats — each tick while polling inline; one per wake in event-driven mode (silence between wakes is by design). Substantive non-state events. |
 | `WAIT`       | Entering a poll; event-driven: immediately before each yield. Names the venue, the awaited outcome, and (event-driven) `next_wakeup_at`.           |
-| `RESUME`     | The awaited condition is met and work resumes; event-driven: also on every wake, before the tick.                                                  |
+| `RESUME`     | The awaited condition is met and work resumes. A wake that finds the condition unmet logs only its `INFO` heartbeat, never `RESUME`.               |
 | `ERROR`      | Errors surfaced but not immediately fatal.                                                                                                         |
 | `TRANSITION` | (Ticket-driven runs) a ticket role change.                                                                                                         |
 

@@ -8,7 +8,7 @@ description: Coordinate one tracked work item to a terminal role — claim it, f
 Drive one **tracked work item** to a terminal role. The coordinator owns the
 *ticket*: it delegates each code change to [`deliver`](../deliver/SKILL.md),
 applies the role transitions, decomposes when needed, and decides when the
-aims are **verified** — not merely merged. It does **not** own the PR lifecycle
+aims are **verified**. It does **not** own the PR lifecycle
 (`deliver` does), the dependency graph, ranking, or dispatch (the orchestrator
 does).
 
@@ -43,33 +43,32 @@ successors) read-only when it shapes delivery; never walk or reason over the gra
 
 ## Tracker
 
-Ticket-backed work runs through a **tracker adapter** — the one document that
-knows a platform's state names and tool calls. Load it before the first ticket
-read:
+Ticket-backed work runs through a **tracker adapter** — a skill named
+`tracker-adapter-<id>`, the one place that knows a platform's state names and
+tool calls. Load it before the first ticket read:
 
-1. **Search path**, most specific first — `.claude/dispatch/trackers/` under the
-   repo root, then `${user_config.tracker_adapters_dir}`, then this skill's own
-   `trackers/` directory. Each holds one `<tracker-id>.md` per tracker;
-   `TEMPLATE.md` is the skeleton for writing one, not an adapter — skip it.
-2. **Tracker id** — list the search path and read each adapter's Identity section
-   (don't assume the bundled set), then: the adapter whose *ticket URLs* shape
-   matches the ticket's URL; failing that (a bare id, no URL) the adapter whose
-   *ticket ids* shape matches; failing that `${user_config.tracker}`. A ticket URL
-   that matches no adapter is an `ERROR` — it is a tracker you have no adapter
-   for, not a default-tracker ticket.
-3. **Adapter file** — the first `<tracker-id>.md` on the search path. A file
-   earlier in the path replaces a same-named one later, wholesale.
-4. **No adapter, or one missing a section the contract requires** → `ERROR` and
-   stop. Never infer a state name or a tool call; a hand-written adapter is more
-   often wrong than absent.
+1. **Tracker id** — list the installed `tracker-adapter-*` skills and read each
+   one's Identity section (don't assume the bundled set), then: the adapter
+   whose *ticket URLs* shape matches the ticket's URL; failing that (a bare id,
+   no URL) the adapter whose *ticket ids* shape matches; failing that
+   `${user_config.tracker}`. A ticket URL that matches no adapter is an
+   `ERROR` — it is a tracker you have no adapter for, not a default-tracker
+   ticket.
+2. **Adapter skill** — read `tracker-adapter-<id>`
+   (`tracker-adapter-linear` ships with this plugin). When several skills carry
+   the same id — a repo or personal skill shadowing a bundled one — the most
+   specific wins (repo, then personal, then plugin), wholesale: adapters
+   replace, never merge.
+3. **No adapter, or one missing a section the contract requires** → `ERROR` and
+   stop. Never infer a state name or a tool call.
 
 Every ticket read and write below is one of the adapter's **operations**: name
 the operation, run its binding, and speak roles, never native states. Contract,
 operation vocabulary, and the fallbacks for an operation an adapter marks
 `unsupported`: [`reference.md`](./reference.md#tracker-adapters).
 
-A **bare PR** has no ticket, hence no adapter — it is driven on the forge
-(GitHub) via `deliver` regardless of the `tracker` config.
+A **bare PR** has no ticket, hence no adapter — driven on the forge regardless
+of the `tracker` config (see **Injected bare PR**).
 
 ## Standalone vs dispatched
 
@@ -108,13 +107,12 @@ straight to `in-progress`.
 
 ## Produce PRs (via `deliver`)
 
-Drive each in-scope unit's PR to terminal through `deliver` — one `deliver`
-instance each. Invoke `dispatch:deliver` inline (single PR) or as a subagent
-(concurrent PRs), forwarding identity/mode. **Sequential by
-default** (one building PR at a time, keeping PRs small and the ledger draw
-minimal); go concurrent only for independent work, one slot per building PR.
-Record the ticket↔PR mapping on the ticket as each PR opens. Read a delegated PR's
-status only via `deliver`.
+Drive each in-scope unit's PR to terminal through `deliver`. Invoke
+`dispatch:deliver` inline (single PR) or as a subagent (concurrent PRs),
+forwarding identity/mode. **Sequential by default** (one building PR at a
+time); go concurrent only for independent work, one slot per building PR.
+Record the ticket↔PR mapping on the ticket as each PR opens. Read a delegated
+PR's status only via `deliver`.
 
 ## Sync the role
 
@@ -125,9 +123,9 @@ status only via `deliver`.
 | **every** PR required by the aims has landed       | `delivered`   |
 | aims validated and DoD artifact posted             | `verified`    |
 
-Never `delivered` until **all** required PRs land (intermediate merges are
-recorded, not promoted). No `finished` where the adapter leaves it unmapped
-(collapse `in-review → delivered`). Corrective transitions carry a rationale.
+Intermediate merges are recorded, not promoted to `delivered`. No `finished`
+where the adapter leaves it unmapped (collapse `in-review → delivered`).
+Corrective transitions carry a rationale.
 Emit no unenumerated transition; every change → a `TRANSITION` log **and** a
 state-change comment on the primary venue.
 
@@ -197,6 +195,3 @@ the session.
 Emit `TRANSITION` / `WAIT` / `RESUME` / `BLOCK` / `INFO` / `ERROR` one-liners, and
 echo every role change as a state-change comment on the primary venue. Format and
 fields: [`reference.md`](./reference.md#logging).
-
-See [`reference.md`](./reference.md) for the role vocabulary, the tracker-adapter
-contract, dispatch-artifact shapes, and the log format.

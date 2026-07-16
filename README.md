@@ -43,9 +43,9 @@ After installing, reload plugins to pick up the new skills, agents, and commands
 
 ## Plugins
 
-| Plugin                         | What it does                                                                                                                                                                                                                                                                           |
-| :----------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`dispatch`](plugins/dispatch) | Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync). [Linear.app](https://linear.app) ships bundled; other trackers are added with an adapter file. |
+| Plugin                         | What it does                                                                                                                                                                                                                                                                            |
+| :----------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`dispatch`](plugins/dispatch) | Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync). [Linear.app](https://linear.app) ships bundled; other trackers are added with an adapter skill. |
 
 ## Local Development
 

@@ -29,9 +29,9 @@ Plugins currently published:
 
 - `plugins/dispatch/` — dispatch engineering work across pull requests and
   tracked work items (PR lifecycle plus ticket triage, planning, status, and
-  cross-team sync). Trackers are pluggable: `work-ticket` resolves a tracker
-  adapter (`skills/work-ticket/trackers/<id>.md`, overridable by the installer)
-  rather than hardcoding one; Linear ships bundled.
+  cross-team sync). Trackers are pluggable: `work-ticket` and `build-graph`
+  load a per-tracker adapter skill (`tracker-adapter-<id>`) rather than
+  hardcoding one; `tracker-adapter-linear` ships bundled.
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.

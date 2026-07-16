@@ -20,15 +20,9 @@ Once installed, the plugin's skills appear under the `dispatch:` namespace. Run 
 
 ## Tracker adapters
 
-`work-ticket` speaks an abstract role vocabulary (`available`, `in-progress`, `in-review`, `delivered`, `verified`, …) and an abstract set of ticket operations. A **tracker adapter** — one markdown file per tracker — maps a platform's native states onto those roles and binds each operation to a concrete tool call. The skill reads nothing else about your tracker, so working tickets on Jira, GitLab, or an in-house tool means writing an adapter, not editing the skill.
+`work-ticket` speaks an abstract role vocabulary (`available`, `in-progress`, `in-review`, `delivered`, `verified`, …) and an abstract set of ticket operations; `build-graph` sweeps a tracker's projects through the same per-tracker lens. A **tracker adapter** — a skill named `tracker-adapter-<id>` — maps a platform's native states onto those roles, binds each ticket operation to a concrete tool call, and supplies the graph fetch and field mapping. `work-ticket` reads nothing else about your tracker — a ticket whose tracker has no adapter is an error, never a guess — and `build-graph` prefers the adapter, falling back to driving the tracker's MCP server directly only when none exists. Working tickets on Jira, GitLab, or an in-house tool therefore means adding a `tracker-adapter-<id>` skill — in your repo's `.claude/skills/`, personally, or via a plugin — not editing the skills.
 
-For a tracker id `foo`, the first `foo.md` found wins:
-
-1. `.claude/dispatch/trackers/foo.md` in the repo (team-committed)
-2. `<tracker_adapters_dir>/foo.md` (defaults to `~/.claude/dispatch/trackers`)
-3. the adapters bundled with the plugin (`linear.md`)
-
-Because (1) and (2) shadow (3), the same mechanism customizes the bundled Linear mapping — for instance, to map the custom Backlog substates a team uses for `paused` and `awaiting-external`. Adapters replace rather than merge, so start from a copy of the file you're overriding, or from [`skills/work-ticket/trackers/TEMPLATE.md`](skills/work-ticket/trackers/TEMPLATE.md) for a new tracker; the contract is in [`skills/work-ticket/reference.md`](skills/work-ticket/reference.md#tracker-adapters). A ticket whose tracker has no adapter is an error, never a guess.
+The plugin bundles [`tracker-adapter-linear`](skills/tracker-adapter-linear/SKILL.md). A more specific skill with the same tracker id (repo over personal over plugin) shadows it wholesale — adapters replace rather than merge — and the same mechanism customizes the bundled Linear mapping, for instance to map the custom Backlog substates a team uses for `paused` and `awaiting-external`. Start from a copy of the adapter you're replacing; the contract is in [`skills/work-ticket/reference.md`](skills/work-ticket/reference.md#tracker-adapters).
 
 ## CLI
 

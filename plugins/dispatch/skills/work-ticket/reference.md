@@ -1,6 +1,6 @@
 # work-ticket — reference
 
-Lookup tables for [`SKILL.md`](./SKILL.md), bundled so the skill is self-contained.
+Lookup tables for [`SKILL.md`](./SKILL.md).
 
 ## Actors
 
@@ -38,8 +38,8 @@ group and a role.
 | `verified`          | `completed` | required    | Validated against the ticket's aims; method recorded. |
 | `canceled`          | `canceled`  | required    | Will not be done.                                     |
 
-The four **required** roles must be mapped; a tracker that cannot express one of
-them cannot be adapted, and the adapter should say so rather than approximate.
+A tracker that cannot express a required role cannot be adapted; the adapter
+should say so rather than approximate.
 
 Forward path — `available → in-progress → in-review → finished → delivered →
 verified`. The path **collapses** over any role the adapter leaves unmapped (no
@@ -52,35 +52,34 @@ is forbidden — regressed work goes back through `verified → in-progress`.
 ## Tracker adapters
 
 An adapter binds the roles and operations above to one platform, and is the
-**only** place a tracker's own vocabulary and tool calls appear. Supporting a new
-tracker means writing an adapter, never editing the skill: `trackers/TEMPLATE.md`
-is the skeleton, `trackers/linear.md` the worked example.
+**only** place a tracker's own vocabulary and tool calls appear. It is a skill
+named `tracker-adapter-<id>`, so supporting a new tracker means adding a skill
+(in a repo's `.claude/skills/`, personally, or via a plugin), never editing
+this one: the bundled `tracker-adapter-linear` is the worked example — start
+from a copy of it.
 
-Resolution — search path, tracker id, and the `ERROR` on a missing or
-contract-incomplete adapter — is in [`SKILL.md`](./SKILL.md), which is where the
-configured directories resolve. The rest of the contract is here.
+Resolution — tracker id and the `ERROR` on a missing or contract-incomplete
+adapter — is in [`SKILL.md`](./SKILL.md). The rest of the contract is here.
 
-An adapter earlier in the search path **replaces** a same-named one later,
-wholesale: there is no per-row merge. To adjust one row of a bundled mapping (say,
-adding the substates that carry `paused` and `awaiting-external`), copy the whole
-adapter and edit the copy. Every ticket read and write this skill makes goes
-through the resolved adapter — nothing here reads a tracker any other way.
+A more specific adapter skill **replaces** a same-id one wholesale: there is no
+per-row merge. To adjust one row of the bundled mapping (say, adding the
+substates that carry `paused` and `awaiting-external`), copy the whole adapter
+skill and edit the copy. Every ticket read and write this skill makes goes
+through the resolved adapter.
 
 The tracker's access mechanism (MCP, CLI, REST) is an adapter's business and is
 **orthogonal** to the Mode A/B communication rules, which follow the credentials
 in use.
 
-A **bare PR** has no ticket, so no adapter and no tracker to resolve — it is
-driven on the forge via `deliver` regardless of the `tracker` config.
-
 ### What an adapter contains
 
-| Section    | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Identity   | The tracker id, the URL and id shapes it owns (the skill matches a ticket to an adapter on these), the MCP server or CLI its operations use, how to read the acting account.                                                                                                                                                                                                                                                                                                             |
-| Role map   | Every native state the skill can encounter → one group, and a role wherever the skill must read or write that state. The required roles must be mapped. Rules are read **first-match, in order**, so a tracker whose roles are *computed* from metadata (a linked PR's state, a close reason, an assignee) writes predicates instead of state names, and one whose states come from two layers (a board field over a bare issue's own state) writes the precedence out as ordered rules. |
-| Operations | One binding per operation below.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Quirks     | Constraints to respect: writes the tracker refuses, transitions it performs atomically as a side effect, roles it cannot express.                                                                                                                                                                                                                                                                                                                                                        |
+| Section     | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identity    | The tracker id, the URL and id shapes it owns (the skill matches a ticket to an adapter on these), the MCP server or CLI its operations use, how to read the acting account.                                                                                                                                                                                                                                                                                                             |
+| Role map    | Every native state the skill can encounter → one group, and a role wherever the skill must read or write that state. The required roles must be mapped. Rules are read **first-match, in order**, so a tracker whose roles are *computed* from metadata (a linked PR's state, a close reason, an assignee) writes predicates instead of state names, and one whose states come from two layers (a board field over a bare issue's own state) writes the precedence out as ordered rules. |
+| Operations  | One binding per operation below.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Quirks      | Constraints to respect: writes the tracker refuses, transitions it performs atomically as a side effect, roles it cannot express.                                                                                                                                                                                                                                                                                                                                                        |
+| Graph fetch | What `build-graph` needs to sweep the tracker's projects: fetch calls, field → CLI-flag mapping, and the sync cursor. Read only by `build-graph`; required only for a tracker whose projects are graphed.                                                                                                                                                                                                                                                                                |
 
 ### Operations
 
@@ -187,7 +186,7 @@ paths, the shapes below are the stub. Base:
   ids on `decomposed`.)
 
 The compute-slot **ledger** (`MAX_PARALLEL`) is the orchestrator's, not written
-here — see Slot seam in `SKILL.md`; it's the orchestrator's slot accounting.
+here — see Slot seam in `SKILL.md`.
 
 ## Logging
 
@@ -209,8 +208,7 @@ here — see Slot seam in `SKILL.md`; it's the orchestrator's slot accounting.
 | `INFO`       | substantive non-state events (subtasks, mapping, reassignment, heartbeat) |
 | `ERROR`      | tracker errors, verification failures                                     |
 
-Every role change also posts a state-change comment to the primary venue, body
-exactly (then the Mode A/B wrapping):
+State-change comment body, exactly (Mode A/B wrapping applies):
 
 ```text
 State: <prev-role> → <new-role>

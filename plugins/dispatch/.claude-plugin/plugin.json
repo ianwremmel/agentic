@@ -1,6 +1,6 @@
 {
   "name": "dispatch",
-  "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter.",
+  "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
   "version": "0.11.0",
   "author": {
     "name": "Ian Remmel"
@@ -46,14 +46,8 @@
     "tracker": {
       "type": "string",
       "title": "Work-item tracker",
-      "description": "Default work-item tracker for `work-ticket`, named by the id of its adapter file (`linear` ships with the plugin). For ticket-backed work the tracker is resolved from the ticket's URL; this value is the fallback when the URL is ambiguous or the input is a bare id. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) A tracker with no adapter errors rather than guessing.",
+      "description": "Default work-item tracker for `work-ticket`, named by the id of its adapter skill: `tracker-adapter-<id>` (`tracker-adapter-linear` ships with the plugin). For ticket-backed work the tracker is resolved from the ticket's URL; this value is the fallback for a bare id whose shape matches no adapter (a URL that matches no adapter is an error, not a default-tracker ticket). (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) A tracker with no adapter skill errors rather than guessing.",
       "default": "linear"
-    },
-    "tracker_adapters_dir": {
-      "type": "directory",
-      "title": "Tracker adapters directory",
-      "description": "Directory of your own tracker adapters — one `<tracker-id>.md` per tracker, binding the work-ticket role vocabulary and ticket operations to that platform. Searched after the repo's `.claude/dispatch/trackers/` and before the adapters bundled with the plugin, so a file here adds a tracker (Jira, GitLab, an internal tool) or replaces the bundled mapping for one, without editing the skill. Start from the TEMPLATE.md in the plugin's work-ticket trackers directory; see the plugin README.",
-      "default": "~/.claude/dispatch/trackers"
     }
   }
 }

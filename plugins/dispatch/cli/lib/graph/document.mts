@@ -164,7 +164,14 @@ function milestoneXml(milestone: DerivedGraph['milestones'][number]): string {
  */
 export function toSummaryXml(
   graph: DerivedGraph,
-  queue: {available: number; verify: number; finalize: number; retry: number},
+  queue: {
+    available: number;
+    resume: number;
+    verify: number;
+    finalize: number;
+    retry: number;
+    liveClaims: number;
+  },
   slots: {max: number; held: {agent: string; live: boolean}[]}
 ): string {
   const live = slots.held.filter((slot) => slot.live).length;
@@ -179,7 +186,7 @@ export function toSummaryXml(
   out.push('  </counts>');
 
   out.push(
-    `  <queue available="${String(queue.available)}" verify="${String(queue.verify)}" finalize="${String(queue.finalize)}" retry="${String(queue.retry)}"/>`
+    `  <queue available="${String(queue.available)}" resume="${String(queue.resume)}" verify="${String(queue.verify)}" finalize="${String(queue.finalize)}" retry="${String(queue.retry)}" live-claims="${String(queue.liveClaims)}"/>`
   );
   out.push(
     `  <slots max="${String(slots.max)}" held="${String(live)}" free="${String(Math.max(0, slots.max - live))}"/>`

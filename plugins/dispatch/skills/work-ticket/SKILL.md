@@ -108,8 +108,14 @@ Idempotent, in order:
    - `held` — another agent's live claim; stop.
    - any other classification (backlog, parked, terminal) — not claimable;
      report and stop (parked resumes only via **Human handoff**).
+
+   `reclaimed` is a sanctioned takeover of a dead run — proceed even though the
+   ticket is already `in-progress`, re-deriving its state from the ticket and
+   PRs (a `pass=resume` dispatch is exactly this).
 2. **Tracker claim** — (a) resolve the role; (b) if a `started` role is held by
-   a *different* identity, stop; (c) assign to self; (d) if not already
+   a *different* platform identity, stop — a reclaim covers a dead run under
+   your own platform account, not someone else's work; (c) assign to self; (d)
+   if not already
    `in-progress`, emit `available → in-progress` (state-change comment +
    `TRANSITION` log); if already `in-progress` as self (resume / re-dispatch
    after a stale claim), don't re-emit. Parked (`paused`/`awaiting-external`) →
@@ -124,7 +130,10 @@ re-dispatched.
 ## Decompose
 
 - **Too large** → file native subtasks; parent stays `in-progress`; record each
-  subtask as a `blocks` edge to the parent; log `INFO`; emit `decomposed`;
+  subtask as a `blocks` edge to the parent — on the tracker **and** in the
+  graph (`dispatch graph task set` each subtask, then
+  `dispatch graph edge add --blocker <subtask> --blocked <ID>`), so the
+  finalize gate holds before the next refresh; log `INFO`; record `decomposed`;
   **stop**. You don't drive the subtasks' PRs or finalize the parent — both are a
   later, separate pass.
 - **Out-of-scope blocker** → file a `blocks`-linked ticket; log `BLOCK`; then park

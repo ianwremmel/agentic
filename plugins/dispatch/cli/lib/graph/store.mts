@@ -490,9 +490,10 @@ export class GraphStore {
 
   /**
    * Record an injected bare PR (§2.6 runtime injection) as a claimable work
-   * item: a task keyed `<repo>#<number>` in an undeclared project named after
-   * the repo (undeclared ⇒ partial ⇒ never counted toward termination),
-   * injected so it ranks to the head of the queue.
+   * item: a task keyed `<repo>#<number>` in the synthetic `pr:<repo>` project.
+   * The prefix keeps it off any tracker project sharing the repo's name — the
+   * synthetic project must stay undeclared (⇒ partial ⇒ never counted toward
+   * termination). Injected, so it ranks to the head of the queue.
    */
   async addBarePr(pr: {
     repo: string;
@@ -504,7 +505,7 @@ export class GraphStore {
     const id = `${pr.repo}#${String(pr.number)}`;
     await this.upsertTask({
       id,
-      project: pr.repo,
+      project: `pr:${pr.repo}`,
       url: pr.url,
       title: pr.title ?? id,
       role: 'available',
@@ -568,6 +569,15 @@ export class GraphStore {
     );
   }
 
+  /** Live claims across every node — the exit check's "work still owned". */
+  async liveClaimCount(nowMs: number, staleAfterMs: number): Promise<number> {
+    const row = this.#db.get(
+      'SELECT COUNT(*) AS n FROM claim WHERE ? - heartbeat_at_ms <= ?',
+      [nowMs, staleAfterMs]
+    );
+    return Number(row?.n ?? 0);
+  }
+
   /** Every held slot, its liveness judged against the staleness window. */
   async slots(
     nowMs: number,
@@ -621,6 +631,10 @@ export class GraphStore {
         'INSERT INTO review (milestone_id, recorded_at_ms) VALUES (?, ?)',
         [nodeId, recordedAtMs]
       );
+      // The claim is the review agent's lock; the recorded review is its
+      // outcome, so the lock ends here — a live leftover claim would hold the
+      // orchestrator's exit check open for nothing.
+      this.#db.run('DELETE FROM claim WHERE node_id = ?', [nodeId]);
       this.#db.run(
         `INSERT INTO review_member (milestone_id, member_external_id)
          SELECT ?, n.external_id

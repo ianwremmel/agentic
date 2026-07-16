@@ -45,8 +45,10 @@ re-invoking.
    never dispatch for it. Log `WAIT` when it parks; `RESUME` when a later
    summary shows its role left the parked group.
 5. **Failures** — each `<failures>` ticket is parked, non-retryable work:
-   surface it to the operator once (`ERROR` log). The operator requeues it with
-   `dispatch graph outcome rm` or cancels the ticket.
+   surface it to the operator once (`ERROR` log). The operator requeues it by
+   marking it retryable (`dispatch graph outcome set … --outcome failed
+   --retryable true`) or by moving the ticket back to ready on the tracker
+   (the next refresh clears the record); or cancels it.
 6. **Milestone gates** — for each `<milestone ready-for-review="true"
    review-recorded="false">` with no live claim: mint
    `review-<milestone>-<epoch>`, take the lock with `dispatch graph claim --id
@@ -60,14 +62,15 @@ re-invoking.
    [dispatch inputs](./reference.md#dispatch-inputs) — id, url, kind, hints,
    the claim id, any `pass` — never ticket content.
 8. **Exit check** — stop the loop only when every non-partial `<counts>`
-   project is `terminal="true"`, `<queue>` is all zeros, and no claim is live —
-   or the operator says stop. An empty queue with work in flight, a pending
-   human handoff, or an unreviewed milestone all mean keep looping.
+   project is `terminal="true"` and `<queue>` shows zero in every pass count
+   *and* `live-claims="0"` — or the operator says stop. An empty queue with
+   work in flight, a pending human handoff, or an unreviewed milestone all mean
+   keep looping.
 
 Re-dispatch falls out of the store — you reconcile nothing by hand. A crashed
-coordinator's claim goes stale and its item comes back through `next`; a
-finished coordinator's outcome either ends the item or re-queues it as a
-`pass` (verify, finalize, retry).
+coordinator's claim goes stale and its item comes back through `next` as a
+`resume`; a finished coordinator's outcome either ends the item or re-queues
+it as a follow-up pass (verify, finalize, retry).
 
 ## Capacity
 

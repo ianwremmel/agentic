@@ -8,9 +8,9 @@ import {STORE_OPTIONS, STORE_USAGE, withStore} from './store-context.mts';
 
 /**
  * Runtime injection of a ticketless PR: stored as a claimable work item keyed
- * `<repo>#<number>` (target-kind `bare-pr`) in an undeclared project named
- * after the repo, injected so `next` returns it ahead of ranked ticket work.
- * `delivered` is terminal for it; remove a mistaken entry with `task rm`.
+ * `<repo>#<number>` (target-kind `bare-pr`) in the synthetic undeclared
+ * project `pr:<repo>`, injected so `next` returns it ahead of ranked ticket
+ * work. `delivered` is terminal for it; remove a mistaken entry with `task rm`.
  */
 const add: Command = {
   name: 'add',

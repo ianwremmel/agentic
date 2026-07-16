@@ -204,10 +204,64 @@ describe('injected bare PRs', () => {
     });
     const {derive} = await import('./derive.mts');
     const counts = derive(store.database, OPTS).counts;
-    const prProject = counts.find((count) => count.project === 'o/r');
+    const prProject = counts.find((count) => count.project === 'pr:o/r');
     assert.ok(prProject);
     assert.equal(prProject.partial, true);
     assert.equal(prProject.terminal, false);
+    await store.close();
+  });
+
+  it('resolves a bare PR by its recorded outcome, not a tracker role', async () => {
+    const store = await seededStore({nodes: []});
+    await store.addBarePr({
+      repo: 'o/r',
+      number: 7,
+      url: 'https://github.com/o/r/pull/7',
+      branch: null,
+      title: null,
+    });
+    await store.setOutcome(
+      'o/r#7',
+      'wt-1',
+      {outcome: 'delivered', retryable: null, detail: null},
+      NOW
+    );
+
+    const {derive} = await import('./derive.mts');
+    const entry = derive(store.database, OPTS).nodes[0];
+    assert.ok(entry);
+    assert.equal(entry.classification, 'verified');
+    await store.close();
+  });
+});
+
+describe('resume pass', () => {
+  it('re-serves a started item whose claim went stale with no outcome', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    assert.equal((await store.claim('A', 'wt-dead', OPTS)).outcome, 'claimed');
+    await store.upsertTask(node('A', {role: 'in-progress'}));
+
+    // Claim still live: nothing to hand out.
+    assert.equal(dispatchQueue(store.database, OPTS).length, 0);
+
+    const later = {...OPTS, nowMs: NOW + 2 * HOUR};
+    const queue = dispatchQueue(store.database, later);
+    assert.deepEqual(
+      queue.map((item) => [item.entry.node.id, item.pass]),
+      [['A', 'resume']]
+    );
+    const claimed = await store.claimNext('wt-new', later);
+    assert.equal(claimed?.outcome, 'reclaimed');
+    await store.close();
+  });
+
+  it('never resumes work parked for a human', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'wt-dead', OPTS);
+    await store.upsertTask(node('A', {role: 'awaiting-external'}));
+
+    const later = {...OPTS, nowMs: NOW + 2 * HOUR};
+    assert.equal(dispatchQueue(store.database, later).length, 0);
     await store.close();
   });
 });
@@ -236,7 +290,7 @@ describe('milestone claims (review locks)', () => {
     await store.close();
   });
 
-  it('stops fresh claims once the review is recorded, but a takeover still works', async () => {
+  it('record-review releases the lock and stops fresh claims', async () => {
     const store = await seededStore(spec);
     assert.equal(
       (await store.claim('m1', 'review-1', OPTS)).outcome,
@@ -244,7 +298,9 @@ describe('milestone claims (review locks)', () => {
     );
     await store.recordReview('m1', NOW, OPTS);
 
-    await store.release('m1', 'review-1');
+    // The recorded review is the lock's outcome: the claim is gone, and the
+    // reviewed milestone is no longer claimable.
+    assert.equal(await store.liveClaimCount(NOW, HOUR), 0);
     assert.equal(
       (await store.claim('m1', 'review-2', OPTS)).outcome,
       'not-available'

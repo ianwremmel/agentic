@@ -195,11 +195,12 @@ one handed over; standalone: the one you minted).
 | outcome  | `dispatch graph outcome set` as the final action (also releases the claim)            |
 | slots    | `dispatch graph slot acquire` / `release` / `heartbeat` around compute                 |
 
-A `pass` on a dispatched re-run scopes it: `verify` — the PRs landed
-(`delivered`); validate the aims and post the DoD. `finalize` — the decomposed
-parent's subtasks all resolved; verify the parent's aims. `retry` — re-run a
-failed verification. Mirror a "working" label on the tracker where one is
-available.
+A `pass` on a dispatched re-run scopes it: `resume` — the previous run died;
+re-derive where it got to from the ticket and PRs, then continue. `verify` —
+the PRs landed (`delivered`); validate the aims and post the DoD. `finalize` —
+the decomposed parent's subtasks all resolved; verify the parent's aims.
+`retry` — re-run a failed verification. Mirror a "working" label on the
+tracker where one is available.
 
 ## Logging
 

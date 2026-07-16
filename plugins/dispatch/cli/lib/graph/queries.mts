@@ -63,11 +63,13 @@ const STARTED_SQL = quoted(
  *   resolved → in-flight (started role, or a live claim) → dormant (backlog) →
  *   blocked → human-blocked → available.
  * - `queued` — what the scheduler may hand out, and as which pass. An ordinary
- *   `available` node with no outcome row is dispatchable as-is; a recorded
- *   outcome re-admits the node for exactly one follow-up pass — `verify` for a
- *   delivered ticket (a bare PR is done at delivered), `finalize` for a
- *   decomposed parent whose subtasks all resolved, `retry` for a retryable
- *   failure — and only while no live claim holds it and no human owns it.
+ *   `available` node with no outcome row is dispatchable as-is; a started node
+ *   whose claim went stale with no outcome is a crashed run, re-served as
+ *   `resume`; a recorded outcome re-admits the node for exactly one follow-up
+ *   pass — `verify` for a delivered ticket (a bare PR is done at delivered),
+ *   `finalize` for a decomposed parent whose subtasks all resolved, `retry`
+ *   for a retryable failure. Nothing human-owned, parked, resolved, or held by
+ *   a live claim is ever handed out.
  */
 const PREFIX = `
 WITH RECURSIVE
@@ -206,6 +208,10 @@ classified AS (
       WHERE g.task_id = t.node_id) AS gated_by,
     COALESCE(f.n, 0) AS fanout,
     CASE
+      -- delivered is terminal for a ticketless PR: its recorded outcome, not a
+      -- tracker role nobody will ever write, is what resolves it.
+      WHEN t.target_kind = 'bare-pr' AND o.outcome IN ('delivered', 'verified') THEN 'verified'
+      WHEN t.target_kind = 'bare-pr' AND o.outcome = 'canceled' THEN 'canceled'
       WHEN t.role = 'verified' THEN 'verified'
       WHEN t.role = 'canceled' THEN 'canceled'
       WHEN t.role IN (${STARTED_SQL}) THEN 'in-flight'
@@ -231,9 +237,13 @@ classified AS (
 queued AS (
   SELECT *,
     CASE
-      WHEN outcome IS NULL THEN
-        CASE WHEN classification = 'available' THEN 'available' END
-      WHEN claim_live = 1 OR human_interactive = 1 THEN NULL
+      WHEN human_interactive = 1
+        OR classification IN ('verified', 'canceled', 'human-blocked', 'dormant')
+        THEN NULL
+      WHEN outcome IS NULL AND classification = 'available' THEN 'available'
+      WHEN outcome IS NULL AND claim_agent IS NOT NULL AND claim_live = 0
+        AND classification = 'in-flight' THEN 'resume'
+      WHEN outcome IS NULL OR claim_live = 1 THEN NULL
       WHEN outcome = 'delivered' AND target_kind <> 'bare-pr' THEN 'verify'
       WHEN outcome = 'decomposed'
         AND node_id NOT IN (SELECT target FROM unresolved_anc) THEN 'finalize'
@@ -264,7 +274,10 @@ const RANK_ORDER =
  */
 const QUEUE_ORDER = `ORDER BY
   (pass = 'available' AND injected = 1) DESC,
-  CASE pass WHEN 'finalize' THEN 0 WHEN 'verify' THEN 1 WHEN 'retry' THEN 2 ELSE 3 END ASC,
+  CASE pass
+    WHEN 'resume' THEN 0 WHEN 'finalize' THEN 1 WHEN 'verify' THEN 2
+    WHEN 'retry' THEN 3 ELSE 4
+  END ASC,
   (priority IS NULL) ASC, priority ASC, fanout DESC, id ASC`;
 
 function params(options: DeriveOptions, project?: string): SqlValue[] {
@@ -306,8 +319,8 @@ export function frontier(
     .map(toClassified);
 }
 
-/** A follow-up pass on a node a coordinator already reported an outcome for. */
-export type Pass = 'verify' | 'finalize' | 'retry';
+/** A dispatch that continues earlier work rather than starting fresh. */
+export type Pass = 'resume' | 'verify' | 'finalize' | 'retry';
 
 export interface QueueEntry {
   entry: ClassifiedNode;

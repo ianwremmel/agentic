@@ -400,8 +400,13 @@ Detection follows §2.2 and §2.1. Whether the agent uses event subscription,
 polling, or another mechanism is implementation-defined.
 
 While monitoring, the agent MUST emit `INFO` heartbeats per §2.3 operational
-logging so observers can confirm the agent is alive. Sessions with no linked
-ticket use `ticket=-` in the log format.
+logging so observers can confirm the agent is alive — each poll tick when
+waiting inline, or once per wake when waiting event-driven (woken by scheduled
+check-ins or platform events rather than an inline poll loop). An event-driven
+agent is silent between wakes by design; it MUST instead record its next
+scheduled wake in machine-readable wait state, and observers judge its
+liveness by that deadline plus a grace period, never by heartbeat age.
+Sessions with no linked ticket use `ticket=-` in the log format.
 
 ## Termination
 

@@ -178,7 +178,7 @@ resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human
 | `verified`      | ticket-backed: aims validated, DoD posted, ticket at `verified`        | yes                    | —                                                                            |
 | `canceled`      | abandoned (ticket canceled with rationale, or bare PR closed unmerged) | yes                    | —                                                                            |
 | `delivered`     | landed: all required PRs merged (ticket) / the PR merged (bare PR)     | ticket: no / bare: yes | a verification coordinator takes the ticket to `verified`; a bare PR is done |
-| `human-blocked` | parked in `awaiting-external`; one alert posted                        | no                     | re-dispatched from a fresh claim once resolved                               |
+| `human-blocked` | parked (`awaiting-external`, or `paused` fallback); one alert posted   | no                     | re-dispatched from a fresh claim once resolved                               |
 | `decomposed`    | split into subtasks; parent `in-progress`, blocked by them             | no                     | parent finalized once all subtasks `verified`/`canceled`                     |
 | `failed`        | could not complete; reason recorded; verification carries `retryable`  | no                     | retryable verification auto-re-dispatches; else operator decides             |
 

@@ -404,8 +404,9 @@ logging so observers can confirm the agent is alive — each poll tick when
 waiting inline, or once per wake when waiting event-driven (woken by scheduled
 check-ins or platform events rather than an inline poll loop). An event-driven
 agent is silent between wakes by design; it MUST instead record its next
-scheduled wake in machine-readable wait state, and observers judge its
-liveness by that deadline plus a grace period, never by heartbeat age.
+scheduled wake — at minimum a `next_wakeup_at` RFC 3339 timestamp — in wait
+state at a location its observers are told to read, and observers judge its
+liveness by `next_wakeup_at` plus a grace period, never by heartbeat age.
 Sessions with no linked ticket use `ticket=-` in the log format.
 
 ## Termination

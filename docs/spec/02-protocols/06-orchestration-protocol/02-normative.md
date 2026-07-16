@@ -291,9 +291,11 @@ never passes ticket *content*. It dispatches two kinds of unit:
   for each injected bare PR. Inputs: `ticket_id` and `ticket_url` (for a bare PR
   with no ticket, the PR's forge identity instead — `repo`, `pr_number`,
   `pr_url`, `branch`), `target-kind`, any branch-name hint, the identity/mode
-  context (§Credential modes), `agent_context` (`main` | `subagent` — how the
-  unit itself is being run; when absent the unit assumes `subagent`), and the
-  §2.3 hook responsibilities the coordinator owns. The coordinator branches on `target-kind`: drive PR(s) via §2.4, or run a
+  context (§Credential modes), `agent_context` (`main` | `subagent` — the
+  waiting discipline the unit MUST adopt, not a description of where it runs:
+  `subagent` mandates the inline no-yield loop, `main` permits event-driven
+  yields; when absent the unit assumes `subagent`), and the §2.3 hook
+  responsibilities the coordinator owns. The coordinator branches on `target-kind`: drive PR(s) via §2.4, or run a
   no-PR verification.
 - **Milestone review agent** (§2.3, §2.6) — for a milestone that is
   ready-for-review and not yet review-recorded. Inputs: the milestone identifier

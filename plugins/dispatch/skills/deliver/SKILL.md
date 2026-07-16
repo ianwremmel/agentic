@@ -288,9 +288,11 @@ invocation context:
 
 Resolve the cell once at entry and record it in the wait-state file:
 
-1. **Invocation** — read `agent_context=main|subagent` from the dispatch brief.
-   Standalone `/deliver` → `main`. Absent or unknown → `subagent` (the inline
-   loop never yields, so it is safe everywhere).
+1. **Invocation** — read `agent_context=main|subagent` from the dispatch
+   brief: the waiting discipline to adopt (`subagent` = the no-yield inline
+   loop), not a description — a caller may send `subagent` to a main-session
+   deliver to forbid yields. Standalone `/deliver` → `main`. Absent or
+   unknown → `subagent` (safe everywhere).
 2. **Environment** — probe `Bash` `sleep 1`. Succeeds → local. Blocked (remote
    sandboxes block foreground `sleep`, subagents included) → remote.
 3. **Remote main** — `send_later` (claude-code-remote MCP) available →

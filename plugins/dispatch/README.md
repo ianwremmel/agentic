@@ -45,10 +45,13 @@ dispatch graph next --claim --agent <session-id>                        # grab t
 ```
 
 A skill writes what it fetched through typed `project`/`task`/`edge`/`milestone`
-commands; `doc` derives the document. Effective blocking, ranking, cycle
-detection, and milestone gating are computed here rather than by the fetching
-skill, so every consumer gets the same answer. `next` and the claim lifecycle
-(`claim`/`heartbeat`/`release`) coordinate which agent works which task. See
+commands; `doc` derives the document and `summary` its scheduling sections.
+Effective blocking, ranking, cycle detection, and milestone gating are computed
+here rather than by the fetching skill, so every consumer gets the same answer.
+`next` and the claim lifecycle (`claim`/`heartbeat`/`release`) coordinate which
+agent works which task; `outcome` records each coordinator's final report (and
+re-queues follow-up passes), `slot` bounds concurrent local builds, and
+`pr add` injects a ticketless PR as a work item. See
 [`skills/build-graph/reference.md`](skills/build-graph/reference.md).
 
 It is a bash wrapper around `cli/main.mts`. The wrapper checks that Node is

@@ -51,8 +51,10 @@ if it exists. All keys optional:
   "humanInteractiveLabels": ["human-only", "needs-human"],
   "verificationLabels": ["verification"],
   "parkedRoles": ["awaiting-external", "paused"],
-  "claimStaleAfter": "10m"
+  "claimStaleAfter": "10m",
+  "maxParallel": 3
 }
 ```
 
-The label lists derive a task's target-kind and human-interactive flag.
+The label lists derive a task's target-kind and human-interactive flag;
+`maxParallel` sizes the compute-slot ledger (`dispatch graph slot`).

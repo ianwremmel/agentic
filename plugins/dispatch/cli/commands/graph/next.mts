@@ -2,7 +2,7 @@ import {parseArgsOrUsage} from '../../lib/args.mts';
 import type {Command} from '../../lib/command.mts';
 import {assertUsage} from '../../lib/errors.mts';
 import {availableTicket} from '../../lib/graph/document.mts';
-import {frontier} from '../../lib/graph/queries.mts';
+import {dispatchQueue} from '../../lib/graph/queries.mts';
 import {writeLine} from '../../lib/io.mts';
 import {
   deriveOptions,
@@ -14,14 +14,15 @@ import {
 } from './store-context.mts';
 
 /**
- * Print the next task to work — the top of the ranked available frontier — so an
- * agent need not read the whole document. With `--claim`, grab it atomically:
- * the store ranks and claims in one transaction, so two agents calling
- * `next --claim` cannot get the same task.
+ * Print the next item to work — the top of the dispatch queue (injected work,
+ * then the finalize/verify/retry passes on already-reported work, then the
+ * ranked available frontier) — so an agent need not read the whole document.
+ * With `--claim`, grab it atomically: the store ranks and claims in one
+ * transaction, so two agents calling `next --claim` cannot get the same task.
  *
- * Prints one `<ticket>` element — the same shape the document uses — or nothing
- * when the frontier is empty. Empty output plus exit 0 is the "no work right now"
- * signal.
+ * Prints one `<ticket>` element — the same shape the document uses, plus a
+ * `pass` attribute on a follow-up dispatch — or nothing when the queue is
+ * empty. Empty output plus exit 0 is the "no work right now" signal.
  */
 export const next: Command = {
   name: 'next',
@@ -65,27 +66,34 @@ export const next: Command = {
       const options = deriveOptions(config, staleAfterMs);
 
       if (agent === undefined) {
-        const top = frontier(store.database, options, values.project)[0];
+        const top = dispatchQueue(store.database, options, values.project)[0];
         if (top !== undefined)
-          await writeLine(context.stdout, availableTicket(top));
-        await context.log.info('next task', {task: top?.node.id ?? '-'});
+          await writeLine(
+            context.stdout,
+            availableTicket(top.entry, undefined, top.pass)
+          );
+        await context.log.info('next task', {task: top?.entry.node.id ?? '-'});
         return;
       }
 
       const claimed = await store.claimNext(agent, options, values.project);
 
       if (claimed === null) {
-        // Either the frontier was empty or every candidate is held live. No work
+        // Either the queue was empty or every candidate is held live. No work
         // to hand out right now — not an error.
         await context.log.info('next task', {task: '-', claimed: false});
         return;
       }
 
-      await writeLine(context.stdout, availableTicket(claimed.entry));
+      await writeLine(
+        context.stdout,
+        availableTicket(claimed.entry, undefined, claimed.pass)
+      );
       await context.log.info('claimed next task', {
         task: claimed.entry.node.id,
         agent,
         outcome: claimed.outcome,
+        pass: claimed.pass ?? '-',
       });
     });
   },

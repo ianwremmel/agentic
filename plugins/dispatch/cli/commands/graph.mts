@@ -5,9 +5,13 @@ import {doc} from './graph/doc.mts';
 import {edge} from './graph/edge.mts';
 import {milestone} from './graph/milestone.mts';
 import {next} from './graph/next.mts';
+import {outcome} from './graph/outcome.mts';
+import {pr} from './graph/pr.mts';
 import {project} from './graph/project.mts';
 import {recordReview} from './graph/record-review.mts';
 import {reset} from './graph/reset.mts';
+import {slot} from './graph/slot.mts';
+import {summary} from './graph/summary.mts';
 import {task} from './graph/task.mts';
 
 /**
@@ -31,11 +35,15 @@ export const graph = group({
     task,
     edge,
     milestone,
+    pr,
     doc,
+    summary,
     next,
     claim,
     heartbeat,
     release,
+    outcome,
+    slot,
     reset,
     cursor,
     recordReview,

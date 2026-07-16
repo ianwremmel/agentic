@@ -5,101 +5,87 @@ description: Drive one or more tracker projects to completion — refresh the de
 
 # orchestrate
 
-You own the graph, the bookkeeping, and dispatch — nothing else. Never read a
-ticket body, evaluate CI/review state, or run a milestone review yourself;
-coordinators
+You own dispatch — nothing else. Never read a ticket body, evaluate CI/review
+state, or run a milestone review yourself; coordinators
 ([`work-ticket`](../work-ticket/SKILL.md)) and milestone-review agents do that.
-Act only on `dispatch graph doc` output and the on-disk artifacts below.
+All state lives in the graph store (the `dispatch graph` CLI) and the tracker:
+you keep no files and carry nothing in memory between ticks.
 
 **Plan mode is incompatible** — this skill dispatches subagents and writes
 state. If invoked in a read-only planning mode, decline and ask the operator to
 re-invoke outside it.
 
-You are bound by the **communication restriction**:
-human input routes through the tracker (alerts on tickets, questions on review
-artifacts), never by blocking on session input. Status reports to the session
-are fine. Wire format and Mode A/B:
-[`deliver/reference.md`](../deliver/reference.md).
+You are bound by the **communication restriction**: human input routes through
+the tracker (alerts on tickets, questions on review artifacts), never by
+blocking on session input. Status reports to the session are fine. Wire format
+and Mode A/B: [`deliver/reference.md`](../deliver/reference.md).
 
-## Setup
+Inputs: the projects to drive (tracker + names/ids). Concurrency is the graph
+config's `maxParallel` (the slot-ledger size).
 
-- **Inputs**: the projects to drive (tracker + names/ids) and optionally
-  `max-parallel` (default 3) — the most live subagents (coordinators + review
-  agents) at once.
-- **Paths**: `<cache>` =
-  `${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}`. Inbox
-  `<cache>/orchestrate/inbox/`, review sentinels `<cache>/orchestrate/reviews/`,
-  coordinator artifacts `<cache>/work-ticket/<key>/` (their shapes are
-  [`work-ticket`'s](../work-ticket/reference.md#dispatch-artifacts)).
+## The loop
+
+Drive the ticks with the host's `/loop` (self-paced): each firing runs one tick
+below and ends the turn; `/loop` re-invokes for the next, paced per the
+[cadence](./reference.md#cadence). Never a detached background poll. A stopped
+loop loses nothing — every decision re-derives from the store — resume by
+re-invoking.
 
 ## The tick
 
-Run as **stateless ticks**: every decision derives from `dispatch graph doc`
-and the files above, nothing from memory — a re-invocation after a crash reads
-the same state and continues. Each tick, in order:
-
-1. **Inbox** — read `<cache>/orchestrate/inbox/*.json`
-   ([shapes](./reference.md#injection-inbox)). Ticket entries feed step 2; PR
-   entries become top-priority coordinator dispatches at step 7. Injection
-   never preempts or reclaims from work already in flight.
-2. **Refresh** — dispatch a subagent running
-   [`build-graph`](../build-graph/SKILL.md) for the selected projects, telling
-   it to also fetch any inbox tickets and write them with `--injected`. Delete
-   each inbox ticket file once written.
-3. **Read** — `dispatch graph doc --format xml`. The derived sections are
-   authoritative — never re-derive blocking, ranking, or readiness. Surface
-   every `<anomaly>` to the operator and do not work around it (a cycle is
-   illegal).
-4. **Reconcile** each active coordinator — every `<cache>/work-ticket/<key>/`
-   and every in-flight node with a claim — per the
-   [outcome table](./reference.md#reconcile). An outcome artifact supersedes
-   claim liveness (its writer exited); without one, never re-dispatch over a
-   live claim.
-5. **Human-blocked** — for each `<human-blocked>` ticket: ensure it is parked
+1. **Refresh** — dispatch a subagent running
+   [`build-graph`](../build-graph/SKILL.md) for the selected projects.
+2. **Read** — `dispatch graph summary`. Everything below acts on its sections;
+   never read `doc` in the loop (whole-graph output — debugging only).
+3. **Anomalies** — surface each `<anomaly>` to the operator; never work around
+   one (a cycle is illegal).
+4. **Human-blocked** — for each `<human-blocked>` ticket: ensure it is parked
    (`awaiting-external`, else `paused`), ensure **exactly one** open alert
-   (scan the ticket for the `<!-- agent-human-alert:dispatch -->` sentinel
-   before posting; [alert rules](./reference.md#human-alerts)), and never
-   dispatch a coordinator for it. Log `WAIT` when it parks; when a fetch shows
-   its role left the parked group, log `RESUME` — it re-enters the frontier by
-   itself.
+   (scan for the sentinel first; [rules](./reference.md#human-alerts)), and
+   never dispatch for it. Log `WAIT` when it parks; `RESUME` when a later
+   summary shows its role left the parked group.
+5. **Failures** — each `<failures>` ticket is parked, non-retryable work:
+   surface it to the operator once (`ERROR` log). The operator requeues it with
+   `dispatch graph outcome rm` or cancels the ticket.
 6. **Milestone gates** — for each `<milestone ready-for-review="true"
-   review-recorded="false"/>` with no live review sentinel: dispatch a
-   milestone-review agent ([brief](./reference.md#milestone-review-agent)).
-   When the doc shows `review-recorded="true"`, delete the sentinel.
-7. **Fill** — capacity = `max-parallel` − live coordinators − live review
-   agents. While capacity > 0, dispatch the first of:
-   1. an inbox PR (record it under `<cache>/work-ticket/<repo>#<n>/` first);
-   2. a `decomposed` parent whose subtasks are all `verified`/`canceled` in
-      the doc — a finalization pass;
-   3. `dispatch graph next --claim --agent <id>` with a freshly minted id
-      (`wt-<epoch>-<n>`) — empty output means no dispatchable work right now,
-      not done.
+   review-recorded="false">` with no live claim: mint
+   `review-<milestone>-<epoch>`, take the lock with `dispatch graph claim --id
+   <milestone> --agent <id>`, and dispatch a milestone-review agent
+   ([brief](./reference.md#milestone-review-agent)).
+7. **Fill** — while `<slots free>` > 0 and the previous call returned an item:
+   `dispatch graph next --claim --agent wt-<epoch>-<n>`, a fresh id per call —
+   each claim belongs to the coordinator it is handed to. Empty output means
+   nothing dispatchable right now, not done. Dispatch each item as a background
+   `work-ticket` subagent with the
+   [dispatch inputs](./reference.md#dispatch-inputs) — id, url, kind, hints,
+   the claim id, any `pass` — never ticket content.
+8. **Exit check** — stop the loop only when every non-partial `<counts>`
+   project is `terminal="true"`, `<queue>` is all zeros, and no claim is live —
+   or the operator says stop. An empty queue with work in flight, a pending
+   human handoff, or an unreviewed milestone all mean keep looping.
 
-   Dispatch each as a background `work-ticket` subagent with the
-   [dispatch inputs](./reference.md#dispatch-inputs) — ids, urls, kind, hints,
-   the claim agent id — never ticket content.
-8. **Exit check** — terminate only when every selected project has
-   `terminal="true"` in `<counts>` and no coordinator or review agent is live,
-   or the operator says stop. An empty
-   frontier with work in flight, an outstanding human handoff, or a milestone
-   awaiting review all mean **keep ticking**. Otherwise sleep per the
-   [cadence](./reference.md#cadence) and tick again.
-
-Run the loop yourself with foreground `sleep` between ticks: no detached
-background poll loops, never end the turn mid-run — nothing re-prods a session,
-so an ended turn is a stopped orchestrator until re-invoked. Subagent
-completion notices are advisory — the next tick reads disk regardless.
+Re-dispatch falls out of the store — you reconcile nothing by hand. A crashed
+coordinator's claim goes stale and its item comes back through `next`; a
+finished coordinator's outcome either ends the item or re-queues it as a
+`pass` (verify, finalize, retry).
 
 ## Capacity
 
-There is no compute-slot ledger yet; the bound is dispatch-granular: at most
-`max-parallel` live units (coordinators + review agents). A ticket that is
-merely open — awaiting CI, review, or a human — still counts while its
-coordinator lives, and each coordinator runs its PRs sequentially, so prefer a
-`max-parallel` sized for concurrent *builds* on this host.
+A slot is a compute permit (write code, install, build, test), acquired and
+released by the workers themselves (`dispatch graph slot …`). `<slots free>`
+gates *admission* only — the atomic acquire is the hard bound, so over-admitting
+a tick never overloads the host. A ticket merely awaiting CI, review, or a
+human holds no slot.
+
+## Injection
+
+Mid-run work arrives through the store, never a file. A ticket: have the next
+refresh fetch and write it with `--injected`. A ticketless PR:
+`dispatch graph pr add --repo o/r --pr 7 --url …`. Both rank to the head of the
+queue and preempt nothing in flight.
 
 ## Logging
 
-Emit `INFO` for dispatch, cleanup, and heartbeats while idle; `WAIT`/`RESUME`
-around human-blocked tickets; `ERROR` for producer or tracker failures. Format:
+`INFO` for dispatch and cleanup; `WAIT`/`RESUME` around human-blocked tickets;
+`ERROR` for producer or tracker failures and surfaced failed work. Format:
 [`work-ticket/reference.md`](../work-ticket/reference.md#logging).

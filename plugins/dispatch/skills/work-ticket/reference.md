@@ -183,26 +183,23 @@ resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human
 | `decomposed`    | split into subtasks; parent `in-progress`, blocked by them             | no                     | parent finalized once all subtasks `verified`/`canceled`                     |
 | `failed`        | could not complete; reason recorded; verification carries `retryable`  | no                     | retryable verification auto-re-dispatches; else operator decides             |
 
-## Dispatch artifacts
+## Dispatch bookkeeping
 
-Standalone writes none of this (report to the session and stop). A **dispatched**
-coordinator honors the `orchestrate` contract. Base:
-`${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}/work-ticket/<key>/`,
-`<key>` = `ticket_id` (ticket) or `<repo>#<pr_number>` (bare PR).
+All of it is the graph CLI — no files. `<key>` = `ticket_id` (ticket) or
+`<repo>#<pr_number>` (bare PR); the agent id is the claim id (dispatched: the
+one handed over; standalone: the one you minted).
 
-Ticket-backed liveness is the **graph claim** (claim/heartbeat/release per
-SKILL — no lock file); mirror a "working" label where available. A bare PR has
-no graph node, so it keeps a PR-keyed lock file instead:
+| what     | how                                                                                   |
+| -------- | ------------------------------------------------------------------------------------- |
+| liveness | `dispatch graph claim` / `heartbeat` — stale claims are reclaimed by the next dispatch |
+| outcome  | `dispatch graph outcome set` as the final action (also releases the claim)            |
+| slots    | `dispatch graph slot acquire` / `release` / `heartbeat` around compute                 |
 
-- **`lock.json`** (bare PR only) — heartbeated every few minutes; stale after
-  10m without one (the graph-claim default).
-  `{ "key":"o/r#7", "agent_id":"…", "kind":"pr", "heartbeat":"<RFC3339>" }`
-- **`outcome.json`** — written as the final action.
-  `{ "key":"DEV-123", "outcome":"…", "ticket_url":"…|null", "pr_urls":[…], "retryable":null, "subtasks":[], "detail":"…" }`
-  (`retryable` is a boolean only for a `failed` verification; `subtasks` lists filed
-  ids on `decomposed`.)
-
-No compute-slot ledger yet — see Slot seam in `SKILL.md`.
+A `pass` on a dispatched re-run scopes it: `verify` — the PRs landed
+(`delivered`); validate the aims and post the DoD. `finalize` — the decomposed
+parent's subtasks all resolved; verify the parent's aims. `retry` — re-run a
+failed verification. Mirror a "working" label on the tracker where one is
+available.
 
 ## Logging
 

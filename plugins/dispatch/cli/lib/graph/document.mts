@@ -1,3 +1,4 @@
+import type {Pass} from './queries.mts';
 import {GROUP_OF} from './roles.mts';
 import type {ClassifiedNode, DerivedGraph} from './types.mts';
 
@@ -59,9 +60,7 @@ export function toXml(graph: DerivedGraph): string {
 
   out.push('  <milestones>');
   for (const milestone of graph.milestones) {
-    out.push(
-      `    <milestone id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}" open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" in-flight="${String(milestone.inFlight)}" blocked="${String(milestone.blocked)}"/>`
-    );
+    out.push(`    ${milestoneXml(milestone)}`);
   }
   out.push('  </milestones>');
 
@@ -99,6 +98,7 @@ export function toJson(graph: DerivedGraph): string {
         blockedBy: entry.blockedBy,
         gatedBy: entry.gatedBy,
         claim: entry.claim,
+        outcome: entry.outcome,
       })),
       edges: graph.edges,
       available: graph.available.map((entry, index) => ({
@@ -132,14 +132,93 @@ export function toJson(graph: DerivedGraph): string {
  * One `<ticket>` element for the available frontier. Shared by the document and
  * by `graph next`, so an agent picking work parses the same XML shape wherever it
  * comes from. `rank` is omitted when there is nothing to rank against (a lone
- * `next` result).
+ * `next` result); `pass` marks a follow-up dispatch on already-reported work.
  */
-export function availableTicket(entry: ClassifiedNode, rank?: number): string {
+export function availableTicket(
+  entry: ClassifiedNode,
+  rank?: number,
+  pass?: Pass | null
+): string {
   const rankAttr = rank === undefined ? '' : ` rank="${String(rank)}"`;
+  const passAttr =
+    pass === undefined || pass === null ? '' : ` pass="${attr(pass)}"`;
   return (
-    `<ticket id="${attr(entry.node.id)}"${rankAttr} ` +
+    `<ticket id="${attr(entry.node.id)}"${rankAttr}${passAttr} ` +
     `target-kind="${attr(entry.node.targetKind)}" url="${attr(entry.node.url)}"${branchAttr(entry)}/>`
   );
+}
+
+function milestoneXml(milestone: DerivedGraph['milestones'][number]): string {
+  const claim =
+    milestone.claim === null
+      ? ''
+      : ` claimed-by="${attr(milestone.claim.agent)}" claim-live="${String(milestone.claim.live)}"`;
+  return `<milestone id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}"${claim} open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" in-flight="${String(milestone.inFlight)}" blocked="${String(milestone.blocked)}"/>`;
+}
+
+/**
+ * The orchestrator's per-tick read: the derived sections only — counts,
+ * milestone gates, human-blocked tickets, surfaced failures, queue depth, the
+ * slot ledger, anomalies — never the node and edge lists, which don't fit a
+ * scheduling decision and don't fit a context window.
+ */
+export function toSummaryXml(
+  graph: DerivedGraph,
+  queue: {available: number; verify: number; finalize: number; retry: number},
+  slots: {max: number; held: {agent: string; live: boolean}[]}
+): string {
+  const live = slots.held.filter((slot) => slot.live).length;
+  const out: string[] = ['<summary>'];
+
+  out.push('  <counts>');
+  for (const count of graph.counts) {
+    out.push(
+      `    <project id="${attr(count.project)}" partial="${String(count.partial)}" total="${String(count.total)}" available="${String(count.available)}" blocked="${String(count.blocked)}" human-blocked="${String(count.humanBlocked)}" in-flight="${String(count.inFlight)}" dormant="${String(count.dormant)}" verified="${String(count.verified)}" canceled="${String(count.canceled)}" terminal="${String(count.terminal)}"/>`
+    );
+  }
+  out.push('  </counts>');
+
+  out.push(
+    `  <queue available="${String(queue.available)}" verify="${String(queue.verify)}" finalize="${String(queue.finalize)}" retry="${String(queue.retry)}"/>`
+  );
+  out.push(
+    `  <slots max="${String(slots.max)}" held="${String(live)}" free="${String(Math.max(0, slots.max - live))}"/>`
+  );
+
+  out.push('  <milestones>');
+  for (const milestone of graph.milestones) {
+    out.push(`    ${milestoneXml(milestone)}`);
+  }
+  out.push('  </milestones>');
+
+  out.push('  <human-blocked>');
+  for (const entry of graph.humanBlocked) {
+    out.push(
+      `    <ticket id="${attr(entry.node.id)}" url="${attr(entry.node.url)}" role="${attr(entry.node.role)}" reason="${attr(humanReason(entry))}"/>`
+    );
+  }
+  out.push('  </human-blocked>');
+
+  out.push('  <failures>');
+  for (const entry of graph.nodes) {
+    if (entry.outcome?.outcome !== 'failed' || entry.outcome.retryable === true)
+      continue;
+    out.push(
+      `    <ticket id="${attr(entry.node.id)}" url="${attr(entry.node.url)}" retryable="false">${text(entry.outcome.detail ?? '')}</ticket>`
+    );
+  }
+  out.push('  </failures>');
+
+  out.push('  <anomalies>');
+  for (const anomaly of graph.anomalies) {
+    out.push(
+      `    <anomaly kind="${attr(anomaly.kind)}" nodes="${attr(anomaly.nodes.join(','))}">${text(anomaly.detail)}</anomaly>`
+    );
+  }
+  out.push('  </anomalies>');
+
+  out.push('</summary>');
+  return out.join('\n');
 }
 
 function nodeXml(entry: ClassifiedNode): string {
@@ -162,6 +241,11 @@ function nodeXml(entry: ClassifiedNode): string {
   if (entry.claim !== null) {
     attrs.push(`claimed-by="${attr(entry.claim.agent)}"`);
     attrs.push(`claim-live="${String(entry.claim.live)}"`);
+  }
+  if (entry.outcome !== null) {
+    attrs.push(`outcome="${attr(entry.outcome.outcome)}"`);
+    if (entry.outcome.retryable !== null)
+      attrs.push(`outcome-retryable="${String(entry.outcome.retryable)}"`);
   }
 
   const labels = node.labels

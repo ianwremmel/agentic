@@ -52,6 +52,14 @@ export interface ClaimView {
   heartbeatAt: string;
 }
 
+/** A coordinator's recorded final report on a node. */
+export interface OutcomeView {
+  outcome: string;
+  /** Meaningful only for `failed`; null otherwise. */
+  retryable: boolean | null;
+  detail: string | null;
+}
+
 export interface ClassifiedNode {
   node: GraphNode;
   classification: Classification;
@@ -68,6 +76,8 @@ export interface ClassifiedNode {
   gatedBy: string[];
   /** The claim on this task, live or stale, or null if none. */
   claim: ClaimView | null;
+  /** The recorded outcome, if a coordinator reported one. */
+  outcome: OutcomeView | null;
   /** Transitive descendant count — how much work resolving this would unblock. */
   fanout: number;
 }
@@ -88,6 +98,8 @@ export interface MilestoneState {
   openCount: number;
   readyForReview: boolean;
   reviewRecorded: boolean;
+  /** The review agent's claim on this milestone, if any. */
+  claim: ClaimView | null;
 }
 
 export interface ClassificationCounts {

@@ -63,8 +63,18 @@ export function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value);
 }
 
-/** What working a ticket produces (§2.6): a PR, a no-PR verification, a human. */
-export const TARGET_KINDS = ['pr', 'verification', 'human-only'] as const;
+/**
+ * What working a ticket produces (§2.6): a PR, a no-PR verification, a human.
+ * `bare-pr` is an injected ticketless PR (§2.6 runtime injection) — worked by a
+ * coordinator like the rest, but with no ticket to verify, so `delivered` is
+ * terminal for it.
+ */
+export const TARGET_KINDS = [
+  'pr',
+  'verification',
+  'human-only',
+  'bare-pr',
+] as const;
 export type TargetKind = (typeof TARGET_KINDS)[number];
 
 export function isTargetKind(value: string): value is TargetKind {

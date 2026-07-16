@@ -77,9 +77,10 @@ of the `tracker` config (see **Injected bare PR**).
 ## Standalone vs dispatched
 
 Same rules; only the reporting surface differs. **Standalone** — a human runs
-`/work-ticket <ID>`; report the outcome to the session. **Dispatched** — the
-orchestrator hands over the item and expects an outcome artifact + heartbeated
-claim (or bare-PR lock; [`reference.md`](./reference.md#dispatch-artifacts)), and passes identity/mode,
+`/work-ticket <ID>`; also report the outcome to the session. **Dispatched** —
+the orchestrator hands over the item with the claim agent id, any `pass`
+(verify · finalize · retry — a re-dispatch scoped to that step;
+[`reference.md`](./reference.md#dispatch-bookkeeping)), and identity/mode,
 which you forward to every `deliver`. (Operator login is not forwarded — each
 `deliver` reads it from the shared plugin config.)
 
@@ -115,10 +116,10 @@ Idempotent, in order:
    resume via `available` first, never straight to `in-progress`.
 
 While you hold the claim, run `dispatch graph heartbeat` (same `--id`/`--agent`)
-at least every few minutes (fold into poll ticks). **Release only
-when the ticket leaves the started group** — `verified`, `canceled`, or a park.
-On `decomposed` or `failed`, leave the claim in place — the next pass resumes
-it (the same agent id refreshes; a fresh id reclaims once it is stale).
+at least every few minutes (fold into poll ticks). The claim ends with your
+outcome — `dispatch graph outcome set` releases it (see **Report**). Never run
+a bare `release`: a released claim with no outcome reads as a crash and gets
+re-dispatched.
 
 ## Decompose
 
@@ -175,11 +176,13 @@ with `retryable` (transient cause = retryable; structural = not). Never
 
 ## Injected bare PR (no ticket)
 
-Inputs are the forge identity; nothing to claim, decompose, or transition. Drive
-the one PR via `deliver`; report `delivered` on merge (terminal — a ticketless PR
-has no separate verification step), else `canceled`/`failed`. Lock is **PR-keyed**.
-If the PR *is* ticket-linked, act as that ticket's coordinator with the PR as one
-`deliver` instance.
+Inputs are the forge identity; the graph item is keyed `<repo>#<n>` —
+dispatched, claim it like a ticket; standalone, create it first with
+`dispatch graph pr add`. Nothing to decompose or transition on a tracker. Drive
+the one PR via `deliver`; report `delivered` on merge (terminal — a ticketless
+PR has no separate verification step), else `canceled`/`failed`. If the PR *is*
+ticket-linked, act as that ticket's coordinator with the PR as one `deliver`
+instance.
 
 ## Human handoff (worker-discovered)
 
@@ -191,30 +194,35 @@ external step:
 2. Transition to **`awaiting-external`** (or `paused`); if the adapter maps
    neither, `ERROR` — there is no valid park.
 3. Log **`WAIT`** (name the venue + awaited outcome).
-4. **Release** — dispatched: write the `human-blocked` outcome and exit; standalone:
-   wait on the venue with thread-aware filtering.
+4. **Report** — dispatched: record the `human-blocked` outcome and exit;
+   standalone: wait on the venue with thread-aware filtering.
 
 Keep **≤1** open alert (scan the venue first). Resolution: on an addressable
 human response, react, log `RESUME`, post a follow-up if substantive, then
 resume from a **fresh claim** (parked → `available` → `in-progress`).
 
-## Slot seam
+## Slots
 
-A slot is the right to use **local compute** (write code, install, build, test).
-The delivery worker — and this coordinator while it runs a verification suite —
-must hold a ledger entry while computing and release it for any wait. **No
-install ships a ledger yet** — `orchestrate` bounds concurrency at dispatch — so
-acquire/release are no-op seams at the mandated points: acquire before a worker
-builds or a suite runs (one entry per concurrent build, else sequence), release
-on any wait (CI/review/merge/handoff/idle) or exit.
+A slot is the right to use **local compute** (write code, install, build,
+test), taken from the shared ledger: `dispatch graph slot acquire --agent
+<agent-id>` before a worker builds or a suite runs (one slot per concurrent
+build, else sequence; exit 3 = full — wait and retry), `slot release` on any
+wait (CI/review/merge/handoff/idle) or exit, `slot heartbeat` while computing.
+The ledger is host-wide, so standalone runs share the same bound.
 
 ## Report
 
 The outcome is one of `verified` · `canceled` · `delivered` · `human-blocked` ·
 `decomposed` · `failed` — meaning, terminality, and how each resumes are in
-[`reference.md`](./reference.md#outcomes). Dispatched: write the outcome artifact
-as your **final action**, honoring the claim (or bare-PR lock) until then.
-Standalone: report it to the session.
+[`reference.md`](./reference.md#outcomes). Record it as your **final action**:
+
+```shell
+dispatch graph outcome set --id <key> --agent <agent-id> --outcome <o> \
+    [--retryable true|false] [--detail "one line"]
+```
+
+It releases your claim in the same write. Standalone, also report it to the
+session.
 
 ## Log
 

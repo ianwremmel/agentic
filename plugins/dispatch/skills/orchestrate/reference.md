@@ -41,7 +41,8 @@ reclaims). The brief:
 
 ## Human alerts
 
-One per human-blocked ticket, as a ticket comment: leading
+One per ticket awaiting a human (a `<human-blocked>` park or a surfaced
+`<failures>` entry), as a ticket comment: leading
 `<!-- agent-reply:dispatch -->` marker, then (inside the body, after any Mode B
 sparkle) the sentinel `<!-- agent-human-alert:dispatch -->`, then what is
 needed, why an agent cannot do it, and a request to move the ticket back to an

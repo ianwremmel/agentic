@@ -25,18 +25,16 @@ config's `maxParallel` (the slot-ledger size).
 
 ## The loop
 
-Drive the ticks with the host's `/loop` (self-paced): each firing runs one tick
-below and ends the turn; `/loop` re-invokes for the next, paced per the
-[cadence](./reference.md#cadence). Never a detached background poll. A stopped
-loop loses nothing — every decision re-derives from the store — resume by
-re-invoking.
+Drive the ticks with the host's `/loop` (self-paced, per the
+[cadence](./reference.md#cadence)): each firing runs one tick and ends the
+turn. A stopped loop resumes by re-invoking — every decision re-derives from
+the store.
 
 ## The tick
 
 1. **Refresh** — dispatch a subagent running
    [`build-graph`](../build-graph/SKILL.md) for the selected projects.
-2. **Read** — `dispatch graph summary`. Everything below acts on its sections;
-   never read `doc` in the loop (whole-graph output — debugging only).
+2. **Read** — `dispatch graph summary`; everything below acts on its sections.
 3. **Anomalies** — surface each `<anomaly>` to the operator; never work around
    one (a cycle is illegal).
 4. **Human-blocked** — for each `<human-blocked>` ticket: ensure it is parked
@@ -45,10 +43,10 @@ re-invoking.
    never dispatch for it. Log `WAIT` when it parks; `RESUME` when a later
    summary shows its role left the parked group.
 5. **Failures** — each `<failures>` ticket is parked, non-retryable work:
-   surface it to the operator once (`ERROR` log). The operator requeues it by
-   marking it retryable (`dispatch graph outcome set … --outcome failed
-   --retryable true`) or by moving the ticket back to ready on the tracker
-   (the next refresh clears the record); or cancels it.
+   alert the operator on the ticket (same
+   [alert rules](./reference.md#human-alerts); `ERROR` log). Recovery is
+   tracker-side: moving the ticket back to ready requeues it (the refresh
+   clears the record); canceling it ends it.
 6. **Milestone gates** — for each `<milestone ready-for-review="true"
    review-recorded="false">` with no live claim: mint
    `review-<milestone>-<epoch>`, take the lock with `dispatch graph claim --id

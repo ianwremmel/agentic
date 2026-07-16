@@ -11,10 +11,10 @@ liveness. **Cleanup** = remove `<cache>/work-ticket/<key>/` and any mirrored
 | Signal                                            | Do                                                                                                     |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `verified` · `canceled`                           | Cleanup; drop.                                                                                         |
-| `delivered` (ticket-backed)                       | Cleanup; dispatch the separate verification pass — a fresh coordinator run for the same ticket. Bare PR: terminal — cleanup; drop. |
+| `delivered`                                       | Ticket-backed: dispatch the verification pass — a fresh coordinator run for the same ticket, reusing the artifact's claim id — then cleanup. Bare PR: terminal — cleanup; drop. |
 | `human-blocked`                                   | Cleanup; the parked ticket is tick step 5's.                                                           |
 | `decomposed`                                      | Keep `outcome.json` — it *is* the deferred-finalization record. Dispatch a finalization coordinator once the doc shows every subtask `verified`/`canceled`; cleanup then. |
-| `failed`, verification, `retryable: true`         | Cleanup; re-dispatch next tick.                                                                        |
+| `failed`, verification, `retryable: true`         | Re-dispatch next tick reusing the artifact's id; cleanup after dispatch.                               |
 | `failed`, otherwise                               | Keep `outcome.json` as the parked record — deleting it would route the ticket down the no-outcome re-dispatch row; `ERROR` log + surface to the operator; no auto-re-dispatch. |
 | no outcome; node terminal / bare PR closed        | Cleanup; drop.                                                                                         |
 | no outcome; claim stale (ticket) / lock stale or absent (bare PR) | Presumed dead: re-dispatch with a fresh agent id — its claim reclaims the stale one.   |
@@ -31,9 +31,8 @@ A coordinator gets identifiers and hints, never ticket content:
   the claim agent id, and that it is **dispatched** (outcome artifact +
   heartbeat expected). The id comes from `next --claim` on first dispatch; a
   re-dispatch off an outcome artifact **reuses** the exited run's id (its claim
-  refreshes instantly — the artifact proves the owner exited); only a
-  presumed-dead re-dispatch (stale claim, no outcome) mints a fresh id and
-  reclaims. Finalization and verification re-dispatches also say which pass
+  refreshes instantly); only a presumed-dead re-dispatch (stale claim, no
+  outcome) mints a fresh id and reclaims. Finalization and verification re-dispatches also say which pass
   this is.
 - bare PR: `repo`, `pr_number`, `pr_url`, `branch`; key `<repo>#<n>`.
 - both: identity/mode context, forwarded to every `deliver`.
@@ -77,7 +76,7 @@ One JSON file per item in `<cache>/orchestrate/inbox/`:
 
 ## Cadence
 
-Foreground `sleep` between ticks; never faster than once per minute.
+Never tick faster than once per minute.
 
 | Situation                                         | Tick every |
 | ------------------------------------------------- | ---------- |

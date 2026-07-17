@@ -33,6 +33,25 @@ function describe(cause: unknown): string {
 }
 
 /**
+ * The messages of a cause chain, outermost first. The set guards against a
+ * cycle (an error wired up as its own cause) turning a failure report into a
+ * hang.
+ */
+function describeChain(first: unknown): string[] {
+  const chain: string[] = [];
+  const seen = new Set<unknown>();
+  for (
+    let cause = first;
+    cause !== undefined && !seen.has(cause);
+    cause = cause instanceof Error ? cause.cause : undefined
+  ) {
+    seen.add(cause);
+    chain.push(describe(cause));
+  }
+  return chain;
+}
+
+/**
  * A failure the caller can act on, as opposed to a crash.
  *
  * The caller is an agent choosing between retrying, fixing its input, and
@@ -51,14 +70,12 @@ export class DispatchError extends Error {
 
   /**
    * The failure as the CLI prints it on the `error:` line — the message, then
-   * the message of the cause it wraps. Owning the formatting here lets a throw
-   * site pass the underlying error as `cause` instead of splicing its text
-   * into the message.
+   * the messages of the cause chain it wraps. Owning the formatting here lets
+   * a throw site pass the underlying error as `cause` instead of splicing its
+   * text into the message.
    */
   override toString(): string {
-    return this.cause === undefined
-      ? this.message
-      : `${this.message}: ${describe(this.cause)}`;
+    return [this.message, ...describeChain(this.cause)].join(': ');
   }
 }
 

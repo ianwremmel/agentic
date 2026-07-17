@@ -21,6 +21,22 @@ describe('DispatchError.toString', () => {
     assert.equal(error.toString(), 'parse failed: boom');
   });
 
+  it('renders every link of a nested cause chain', () => {
+    const error = new DispatchError('sync failed', {
+      cause: new Error('fetch failed', {cause: new Error('ECONNREFUSED')}),
+    });
+
+    assert.equal(error.toString(), 'sync failed: fetch failed: ECONNREFUSED');
+  });
+
+  it('survives a cyclic cause chain instead of hanging', () => {
+    const inner = new Error('loop');
+    inner.cause = inner;
+    const error = new DispatchError('outer failure', {cause: inner});
+
+    assert.equal(error.toString(), 'outer failure: loop');
+  });
+
   it('is just the message when nothing was wrapped', () => {
     assert.equal(
       new DispatchError('plain failure').toString(),

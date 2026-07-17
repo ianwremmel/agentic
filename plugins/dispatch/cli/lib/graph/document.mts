@@ -289,6 +289,10 @@ function nodeXml(entry: ClassifiedNode): string {
   if (entry.claim !== null) {
     attrs.push(`claimed-by="${attr(entry.claim.agent)}"`);
     attrs.push(`claim-live="${String(entry.claim.live)}"`);
+    if (entry.claim.worktree !== null)
+      attrs.push(`claim-worktree="${attr(entry.claim.worktree)}"`);
+    if (entry.claim.branch !== null)
+      attrs.push(`claim-branch="${attr(entry.claim.branch)}"`);
   }
   if (entry.outcome !== null) {
     attrs.push(`outcome="${attr(entry.outcome.outcome)}"`);

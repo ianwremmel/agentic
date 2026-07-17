@@ -396,6 +396,14 @@ describe('agent lifecycle bookkeeping', () => {
       '/tmp/wt/t2',
     ]);
     assert.equal(beat.code, 0, beat.stderr);
+
+    // The recorded facts surface in the document, so any agent can locate
+    // in-flight work through the store.
+    const doc = await run(db, ['doc']);
+    assert.match(
+      doc.stdout,
+      /id="T2"[^>]*claim-worktree="\/tmp\/wt\/t2" claim-branch="feat\/t2"/u
+    );
   });
 });
 

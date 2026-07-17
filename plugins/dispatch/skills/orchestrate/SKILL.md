@@ -62,8 +62,8 @@ the store.
    says stop.
 
 Re-dispatch falls out of the store — you reconcile nothing by hand. A crashed
-coordinator's claim goes stale and its item comes back through `next` as a
-`resume`; a finished coordinator's outcome either ends the item or re-queues
+coordinator's claim goes stale and its item comes back through a later `fill`
+as a `resume`; a finished coordinator's outcome either ends the item or re-queues
 it as a follow-up pass (verify, finalize, retry).
 
 ## Capacity

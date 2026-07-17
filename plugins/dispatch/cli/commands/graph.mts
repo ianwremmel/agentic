@@ -23,9 +23,9 @@ import {task} from './graph/task.mts';
  * effective-blocking, ranking, cycle detection, and milestone gating have to give
  * the same answer every tick.
  *
- * `next` and the claim lifecycle (`claim`/`heartbeat`/`release`) live here too:
- * this store is the orchestrator's state, so "who owns which task" belongs beside
- * the graph it is derived against.
+ * `next`, `fill`, and the claim lifecycle (`claim`/`heartbeat`/`release`) live
+ * here too: this store is the orchestrator's state, so "who owns which task"
+ * belongs beside the graph it is derived against.
  */
 export const graph = group({
   name: 'graph',

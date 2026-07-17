@@ -450,6 +450,27 @@ describe('agent footprint', () => {
     await store.close();
   });
 
+  it('setOutcome refuses a reporter whose claim was reclaimed', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
+    // agent-a goes stale; agent-b takes the item over.
+    await store.claim('A', 'agent-b', {
+      nowMs: NOW + 2 * HOUR,
+      staleAfterMs: HOUR,
+    });
+
+    await assert.rejects(
+      store.setOutcome(
+        'A',
+        'agent-a',
+        {outcome: 'delivered', retryable: null, detail: null},
+        NOW + 2 * HOUR
+      ),
+      /claimed by another agent/u
+    );
+    await store.close();
+  });
+
   it('setOutcome releases the reporter slot along with its claim', async () => {
     const store = await seededStore({nodes: [node('A')]});
     await store.claim('A', 'agent-a', OPTS);

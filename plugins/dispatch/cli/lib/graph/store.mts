@@ -535,6 +535,17 @@ export class GraphStore {
           hint: 'an outcome is recorded on a task the graph already holds.',
         })
       );
+      // A reporter whose claim was reclaimed no longer owns the item; letting
+      // it record would overwrite the outcome of the run that took over.
+      const holder = this.#db.get('SELECT agent FROM claim WHERE node_id = ?', [
+        node.id,
+      ]);
+      assert(
+        holder === undefined || holder.agent === agent,
+        new DataError(`${id} is claimed by another agent, not ${agent}`, {
+          hint: 'your claim was reclaimed — that run owns the item now; stop without recording an outcome.',
+        })
+      );
       this.#db.run(
         `INSERT INTO outcome (node_id, outcome, retryable, detail, recorded_at_ms)
          VALUES (?, ?, ?, ?, ?)

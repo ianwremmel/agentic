@@ -50,6 +50,9 @@ export interface ClaimView {
   agent: string;
   live: boolean;
   heartbeatAt: string;
+  /** Where the holder reports the work is checked out, if it has. */
+  worktree: string | null;
+  branch: string | null;
 }
 
 /** A coordinator's recorded final report on a node. */

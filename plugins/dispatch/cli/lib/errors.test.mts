@@ -115,6 +115,31 @@ describe('TaggedUsageError.toString', () => {
   });
 });
 
+describe('details across retagging', () => {
+  it('survive the wrap into a TaggedUsageError, the way the runner retags', () => {
+    const original = new UsageError('flag rejected', {
+      details: {flag: '--stale-after'},
+    });
+    const retagged = new TaggedUsageError(original.message, {
+      cause: original,
+      usage: 'dispatch graph claim <id>',
+      ...(original.details === undefined ? {} : {details: original.details}),
+    });
+
+    assert.equal(
+      retagged.toString(),
+      'flag rejected (flag=--stale-after)\n\nusage: dispatch graph claim <id>'
+    );
+  });
+
+  it('render nothing for an empty details object', () => {
+    assert.equal(
+      new DispatchError('plain failure', {details: {}}).toString(),
+      'plain failure'
+    );
+  });
+});
+
 describe('ensure', () => {
   it('never constructs the error while the condition holds', () => {
     let built = 0;

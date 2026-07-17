@@ -79,11 +79,14 @@ export class DispatchError extends Error {
 
   /** The message with its details attached — what every toString() builds on. */
   protected get detailedMessage(): string {
-    if (this.details === undefined) return this.message;
-    const details = Object.entries(this.details)
+    // Guarded beyond the declared type: a malformed details value from an
+    // untyped caller must not make the failure report itself throw.
+    const details: unknown = this.details;
+    if (details === null || typeof details !== 'object') return this.message;
+    const rendered = Object.entries(details)
       .map(([key, value]) => `${key}=${String(value)}`)
       .join(', ');
-    return `${this.message} (${details})`;
+    return rendered === '' ? this.message : `${this.message} (${rendered})`;
   }
 
   /**

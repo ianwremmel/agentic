@@ -89,6 +89,7 @@ export function group({name, summary, path, children}: GroupSpec): Command {
             cause: error,
             usage: child.usage,
             ...(error.hint === undefined ? {} : {hint: error.hint}),
+            ...(error.details === undefined ? {} : {details: error.details}),
           });
         }
         throw error;

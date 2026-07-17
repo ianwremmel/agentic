@@ -102,6 +102,7 @@ export async function run(
       cause: error,
       usage: error instanceof TaggedUsageError ? error.usage : target.usage,
       ...(error.hint === undefined ? {} : {hint: error.hint}),
+      ...(error.details === undefined ? {} : {details: error.details}),
     });
   }
 

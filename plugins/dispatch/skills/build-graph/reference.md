@@ -40,21 +40,3 @@ written.
 | 4    | bad data                | fix the input, then re-run                  |
 
 Every failure prints `error:` and a `hint:` line saying what to change.
-
-## Config
-
-`--config <path>`, else `$DISPATCH_GRAPH_CONFIG`, else `./.dispatch/graph.json`
-if it exists. All keys optional:
-
-```json
-{
-  "humanInteractiveLabels": ["human-only", "needs-human"],
-  "verificationLabels": ["verification"],
-  "parkedRoles": ["awaiting-external", "paused"],
-  "claimStaleAfter": "10m",
-  "maxParallel": 3
-}
-```
-
-The label lists derive a task's target-kind and human-interactive flag;
-`maxParallel` sizes the compute-slot ledger (`dispatch graph slot`).

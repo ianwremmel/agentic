@@ -1,15 +1,11 @@
 # deliver — protocol reference
 
-The communication, PR-status, and logging rules `deliver` relies on. With
-[`SKILL.md`](./SKILL.md) and `scripts/pr-status`, this is the complete authority
-for the skill.
-
 ## Roles
 
 - **Agent** — the agentic coding assistant doing the work (this skill).
-- **Operator** — the one individual directing the agent. Exactly one per
-  session; almost certainly human; the only human with stop authority. May share
-  platform credentials with the agent (Mode B).
+- **Operator** — the one individual directing the agent; almost certainly
+  human; the only human with stop authority. May share platform credentials
+  with the agent (Mode B).
 - **Reviewer** — any participant leaving review feedback (Copilot, another agent,
   or a human). The operator may also be a reviewer.
 
@@ -55,7 +51,7 @@ Mode B), never as the leading line.
 A terminal signal means "finished with this item"; it suppresses re-evaluation
 next poll. Anything else means "still working." The agent signals finished
 **only** via a terminal signal — it MUST NOT resolve the thread, even one it
-opened. Resolution is a human's call. Platform-resolved threads are read (see
+opened. Platform-resolved threads are read (see
 [Actionability](#actionability)) but never written by the agent.
 
 Reactions (preferred where supported):
@@ -83,11 +79,9 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
 - **Mode B inverse:** on a PR the agent authored under shared credentials, the
   absence of a formal `changes_requested` does NOT mean "no changes requested" —
   every operator comment is a question to answer or an implicit change request.
-- **Sole-reviewer case.** "MUST NOT request review from self" constrains the
-  *request*, not the loop. When the agent is the author and no eligible non-self
-  human reviewer exists, it skips the request but keeps polling on the reviewer
-  cadence until the PR closes (`merged → done` handles closure). Terminating
-  early because there's nobody to ask is non-conforming.
+- The self-request prohibition constrains the *request*, not the loop — the
+  no-eligible-reviewer handling in `SKILL.md` (skip the request, keep polling)
+  still applies.
 
 ### Operator engagement (deliver-specific)
 
@@ -129,33 +123,17 @@ of the mode:
 
 ## Actionability
 
-Drive **all** gate and actionability decisions from `pr-status`, reading the
-cache files it wrote rather than re-fetching; raw `gh`/MCP reads are costly and
-bypass the classification the gates rely on. You may directly read *emergent*
-data the snapshot doesn't cover, but the PR status you act on comes only from
-`pr-status` — routine `gh`/MCP calls are writes.
-
-The agent reads `actionable="true|false"` and treats it as the **sole task
-source**. A non-actionable item carries a `reason=` token (`resolved`,
-`agent-artifact`, `agent-terminal-reply`, `acked`). A `<summary>` is a **reading
-aid, not a work queue**: it recaps the item's *content*, not its resolution, so a
-terminal-tagged item still reads as open — expected, not grounds to reopen. Trust
-the flag and `reason=`.
-
-Reviews are surfaced as one persistent record per reviewer under `<reviews>`,
-each `state` of `pending | commented | changes_requested | approved | dismissed`.
-`pending` is requested-but-undelivered — in-flight, not absent (a bot's inline
-threads can land minutes later). An outstanding request **overrides** any prior
-verdict back to `pending` until the reviewer re-reviews. An unsubmitted draft
-review isn't surfaced at all. Keep polling rather than chasing either.
+`pr-status` classifies each item `actionable="true|false"` by the rules below;
+how to consume the flag (sole task source, cache-only reads, `pending`
+semantics) is covered by `SKILL.md`'s cross-cutting behaviors. A reviewer's
+`<reviews>` record walks `pending | commented | changes_requested | approved |
+dismissed`.
 
 A comment or thread is **non-actionable** iff any of:
 
 - it's one of the calling agent's artifact comments — a line-anchored
   `agent-plan` or `agent-engagement` sentinel AND author = the calling gh
-  identity (the author match keeps a human quoting a marker actionable). These
-  never need addressing; the engagement comment in particular must stay
-  non-actionable while awaiting approval, else Gate 4 blocks draft-clear/merge.
+  identity (the author match keeps a human quoting a marker actionable).
 - the newest comment was written by the calling agent (author = calling
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
   terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional

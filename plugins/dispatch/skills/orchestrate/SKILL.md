@@ -54,8 +54,8 @@ the store.
    subagent ([inputs](./reference.md#milestone-review-agent)) under its `agent`
    id. For each `<ticket>`: dispatch a background `work-ticket` subagent with
    the [dispatch inputs](./reference.md#dispatch-inputs) — the element's
-   attributes, never ticket content. An empty `<dispatches/>` means nothing
-   dispatchable right now, not done.
+   attributes, never ticket content. A `<dispatches>` with zero tickets and
+   reviews means nothing dispatchable right now, not done.
 7. **Exit check** — stop the loop only when the summary reads
    `<summary terminal="true">` — the CLI folds project counts, queue depth,
    live claims, and milestone gates into that one attribute — or the operator

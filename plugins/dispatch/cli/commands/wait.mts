@@ -39,7 +39,7 @@ const record: Command = {
     REPO_USAGE,
     `  --kind <k>       One of: ${WAIT_KINDS.join(', ')} (required).`,
     '  --elapsed <s>    How long the wait took, in whole seconds (required).',
-    '  --outcome <w>    One word on how it ended (e.g. passed, approved).',
+    '  --outcome <w>    Short note on how it ended (e.g. passed, approved).',
     DB_USAGE,
   ].join('\n'),
 
@@ -136,6 +136,12 @@ function requireRepo(raw: string | undefined, where: string): string {
   assertUsage(
     raw !== undefined && raw !== '',
     `${where} needs --repo (the repository as owner/repo)`
+  );
+  assert(
+    /^[^/\s]+\/[^/\s]+$/u.test(raw),
+    new UsageError(`--repo must be owner/repo, not "${raw}"`, {
+      hint: 'e.g. --repo octocat/hello-world.',
+    })
   );
   return raw;
 }

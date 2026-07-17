@@ -104,7 +104,10 @@ export class WaitStore {
   }
 }
 
-/** The median of an ascending list; an even count averages the middle pair. */
+/**
+ * The median of an ascending list, in whole seconds: an even count averages
+ * the middle pair and rounds — schedule tuning has no use for half seconds.
+ */
 function median(sorted: readonly number[]): number {
   const mid = Math.floor(sorted.length / 2);
   const a = sorted[mid];

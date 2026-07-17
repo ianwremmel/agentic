@@ -44,10 +44,13 @@ The milestone's claim is your lock — take it before reading anything:
 `dispatch graph claim --id <milestone> --agent <agent-id>`.
 
 - `claimed` / `refreshed` → proceed.
-- `reclaimed` → sanctioned takeover of a dead run. Scan the review-artifact
-  venue for this episode's sentinel (below) first: an artifact that already
-  records the outcome for the current member set only needs the
-  `record-review`; anything less, review afresh.
+- `reclaimed` → sanctioned takeover of a dead run. A reclaim does not re-check
+  eligibility, so first confirm the milestone is still ready-for-review and
+  unreviewed (`dispatch graph summary`) — the graph may have moved under the
+  dead run; if it isn't, release and exit. Then scan the review-artifact venue
+  for this episode's sentinel (below): an artifact that already records the
+  outcome for the current member set only needs the `record-review`; anything
+  less, review afresh.
 - `held` (exit 3) → another review is live; stop.
 - not claimable (exit 4) → the milestone is not ready-unreviewed, or the graph
   doesn't know it. Standalone: refresh the graph
@@ -65,8 +68,9 @@ re-dispatched.
 ## The review
 
 1. **Members** — the milestone's tickets from the graph (`dispatch graph doc`,
-   nodes with this milestone's id). Every member is already `verified` or
-   `canceled` — that is what made the milestone ready.
+   nodes with this milestone's id). Readiness means every member is already
+   `verified` or `canceled` and every transitive dependency of the milestone
+   is resolved — don't re-verify members; judge their evidence.
 2. **Evidence** — through the adapter: the milestone's goal (its description),
    each `verified` member's DoD comment (what was verified, how, what was
    deferred), each `canceled` member's rationale.
@@ -80,8 +84,9 @@ re-dispatched.
 
 File each follow-up in the **current** milestone through the adapter, and
 write it into the graph in the same pass — `dispatch graph task set --id <id>
---project <project> --milestone <milestone> --role available` (plus any
-`edge add`) — so the gate holds before the next refresh. Record what you found
+--project <project> --milestone <milestone> --role available`, plus
+`dispatch graph edge add --blocker <blocker> --blocked <id>` for any
+dependency it has — so the gate holds before the next refresh. Record what you found
 and filed on the review artifact (sentinel and wire format as below, verdict
 "follow-ups filed"), release the claim, and exit **without** `record-review`.
 A fresh review runs when the milestone re-completes.
@@ -111,9 +116,11 @@ verdict), solicit the question as a comment on it tagging ≥1 human, log `WAIT`
 (name the artifact and the awaited answer), and poll the artifact's thread —
 lazily (minutes, then tens of minutes; never faster than once per minute),
 heartbeating the claim each poll. Keep ≤1 open question; never record the
-outcome until an addressable response resolves it, then log `RESUME` and
-finish the review. Both modes wait here — a review holds no compute slot, so
-waiting is cheap.
+outcome until an addressable response (an answer, a directive, an explicit
+decline) resolves it. On resolution: react with a terminal signal, log
+`RESUME`, post a follow-up on the thread when the response was substantive,
+and finish the review. Both modes wait here — a review holds no compute slot,
+so waiting is cheap.
 
 ## Log
 

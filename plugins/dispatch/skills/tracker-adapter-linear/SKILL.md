@@ -94,6 +94,7 @@ project-scoped, not per-milestone, so the body must carry the milestone id
 | post review artifact   | `save_status_update(type="project", project, body, health)` — `onTrack` when the goal is achieved, `atRisk` otherwise                   |
 | update review artifact | `save_status_update(id, body, health)` — same update; the pending→outcome edit when human input resolved                                |
 | artifact thread        | `list_comments(statusUpdateId)` / `save_comment(statusUpdateId)`; one thread per update — reply via `parentId`; tag with `@displayName` |
+| file follow-up         | `save_issue(title, team, description, project, milestone)` — `milestone` takes a name or id; pick the team per Quirks                   |
 
 Member DoD comments and canceled-member rationales are ticket reads — use the
 Operations bindings above (`fetch brief`, `read comments`).

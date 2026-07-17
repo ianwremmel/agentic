@@ -1,13 +1,11 @@
 # deliver — protocol reference
 
-The communication, PR-status, and logging rules `deliver` relies on.
-
 ## Roles
 
 - **Agent** — the agentic coding assistant doing the work (this skill).
-- **Operator** — the one individual directing the agent. Exactly one per
-  session; almost certainly human; the only human with stop authority. May share
-  platform credentials with the agent (Mode B).
+- **Operator** — the one individual directing the agent; almost certainly
+  human; the only human with stop authority. May share platform credentials
+  with the agent (Mode B).
 - **Reviewer** — any participant leaving review feedback (Copilot, another agent,
   or a human). The operator may also be a reviewer.
 
@@ -53,7 +51,7 @@ Mode B), never as the leading line.
 A terminal signal means "finished with this item"; it suppresses re-evaluation
 next poll. Anything else means "still working." The agent signals finished
 **only** via a terminal signal — it MUST NOT resolve the thread, even one it
-opened. Resolution is a human's call. Platform-resolved threads are read (see
+opened. Platform-resolved threads are read (see
 [Actionability](#actionability)) but never written by the agent.
 
 Reactions (preferred where supported):
@@ -135,9 +133,7 @@ A comment or thread is **non-actionable** iff any of:
 
 - it's one of the calling agent's artifact comments — a line-anchored
   `agent-plan` or `agent-engagement` sentinel AND author = the calling gh
-  identity (the author match keeps a human quoting a marker actionable). These
-  never need addressing; the engagement comment in particular must stay
-  non-actionable while awaiting approval, else Gate 4 blocks draft-clear/merge.
+  identity (the author match keeps a human quoting a marker actionable).
 - the newest comment was written by the calling agent (author = calling
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
   terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional

@@ -226,8 +226,8 @@ Apply in every state.
   re-actionable a suppressed item.
 - **A `pending` review is in-flight, not absent.** Each reviewer appears once
   under `<reviews>` walking `pending → commented | changes_requested |
-  approved`. An outstanding request overrides a prior verdict back to `pending`
-  (re-requested Copilot/operator). While any reviewer is `pending` — especially
+  approved | dismissed`. An outstanding request overrides a prior verdict back
+  to `pending` (re-requested Copilot/operator). While any reviewer is `pending` — especially
   a `mode="bot"` one — inline threads can still land minutes later, so a stable
   thread set is **not** convergence. Keep polling until `pending` clears.
 - **Pre-push review.** Before every significant push, run two adversarial

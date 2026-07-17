@@ -7,7 +7,7 @@ import {
   requestsHelp,
   splitArgv,
 } from './lib/args.mts';
-import {assertUsage, EXIT_OK, UsageError} from './lib/errors.mts';
+import {ensure, EXIT_OK, TaggedUsageError, UsageError} from './lib/errors.mts';
 import {writeLine} from './lib/io.mts';
 import {createLogger, resolveLogLevel} from './lib/log/logger.mts';
 import {findCommand, helpText} from './lib/registry.mts';
@@ -55,12 +55,15 @@ export async function run(
     return EXIT_OK;
   }
 
-  assertUsage(command !== undefined, `no command given\n\n${helpText()}`);
+  ensure(
+    command !== undefined,
+    () => new UsageError(`no command given\n\n${helpText()}`)
+  );
 
   const target = findCommand(command);
-  assertUsage(
+  ensure(
     target !== undefined,
-    `unknown command "${command}"\n\n${helpText()}`
+    () => new UsageError(`unknown command "${command}"\n\n${helpText()}`)
   );
 
   if (requestsHelp(commandArgs) && target.handlesHelp !== true) {
@@ -90,17 +93,16 @@ export async function run(
     // A global option written after the command reaches the command as an
     // unknown flag, so name the real problem rather than let it read as a typo.
     const misplaced = misplacedGlobalOptions(commandArgs);
-    const hint =
+    const note =
       misplaced.length === 0
         ? ''
         : `\n\nnote: ${misplaced.join(', ')} — a global option must come before the command: dispatch ${misplaced.join(' ')} ... ${target.name} ...`;
 
-    const usage = error.usage ?? target.usage;
-
-    throw new UsageError(`${error.message}\n\nusage: ${usage}${hint}`, {
+    throw new TaggedUsageError(`${error.message}${note}`, {
       cause: error,
-      usage,
+      usage: error instanceof TaggedUsageError ? error.usage : target.usage,
       ...(error.hint === undefined ? {} : {hint: error.hint}),
+      ...(error.details === undefined ? {} : {details: error.details}),
     });
   }
 

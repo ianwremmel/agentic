@@ -18,9 +18,10 @@ try {
   });
 } catch (error) {
   if (error instanceof DispatchError) {
-    // An anticipated failure: the message says what happened and the hint says
-    // what to do, so a stack trace would only bury both.
-    await writeLine(process.stderr, `error: ${error.message}`);
+    // An anticipated failure: toString() says what happened (message, cause,
+    // usage) and the hint says what to do, so a stack trace would only bury
+    // both.
+    await writeLine(process.stderr, `error: ${error.toString()}`);
     if (error.hint !== undefined) {
       await writeLine(process.stderr, `hint: ${error.hint}`);
     }

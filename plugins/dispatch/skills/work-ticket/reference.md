@@ -38,9 +38,6 @@ group and a role.
 | `verified`          | `completed` | required    | Validated against the ticket's aims; method recorded. |
 | `canceled`          | `canceled`  | required    | Will not be done.                                     |
 
-A tracker that cannot express a required role cannot be adapted; the adapter
-should say so rather than approximate.
-
 Forward path — `available → in-progress → in-review → finished → delivered →
 verified`. The path **collapses** over any role the adapter leaves unmapped (no
 `finished` ⇒ `in-review → delivered`; no `delivered` either ⇒ `in-review →
@@ -141,7 +138,7 @@ tracker's API.
 
 ## Graph claim
 
-Flags, store resolution, and exit codes are `dispatch graph`'s — see
+Flags and exit codes are `dispatch graph`'s — see
 [`build-graph/reference.md`](../build-graph/reference.md). `claimed`,
 `refreshed` (already yours — a resume), and `reclaimed` (stale takeover) all
 succeed. `held` is another agent's live claim (exit 3). Exit 4 carries the

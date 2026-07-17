@@ -1,8 +1,6 @@
 # deliver — protocol reference
 
-The communication, PR-status, and logging rules `deliver` relies on. With
-[`SKILL.md`](./SKILL.md) and `scripts/pr-status`, this is the complete authority
-for the skill.
+The communication, PR-status, and logging rules `deliver` relies on.
 
 ## Roles
 
@@ -83,11 +81,9 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
 - **Mode B inverse:** on a PR the agent authored under shared credentials, the
   absence of a formal `changes_requested` does NOT mean "no changes requested" —
   every operator comment is a question to answer or an implicit change request.
-- **Sole-reviewer case.** "MUST NOT request review from self" constrains the
-  *request*, not the loop. When the agent is the author and no eligible non-self
-  human reviewer exists, it skips the request but keeps polling on the reviewer
-  cadence until the PR closes (`merged → done` handles closure). Terminating
-  early because there's nobody to ask is non-conforming.
+- The self-request prohibition constrains the *request*, not the loop — the
+  no-eligible-reviewer handling in `SKILL.md` (skip the request, keep polling)
+  still applies.
 
 ### Operator engagement (deliver-specific)
 
@@ -129,25 +125,11 @@ of the mode:
 
 ## Actionability
 
-Drive **all** gate and actionability decisions from `pr-status`, reading the
-cache files it wrote rather than re-fetching; raw `gh`/MCP reads are costly and
-bypass the classification the gates rely on. You may directly read *emergent*
-data the snapshot doesn't cover, but the PR status you act on comes only from
-`pr-status` — routine `gh`/MCP calls are writes.
-
-The agent reads `actionable="true|false"` and treats it as the **sole task
-source**. A non-actionable item carries a `reason=` token (`resolved`,
-`agent-artifact`, `agent-terminal-reply`, `acked`). A `<summary>` is a **reading
-aid, not a work queue**: it recaps the item's *content*, not its resolution, so a
-terminal-tagged item still reads as open — expected, not grounds to reopen. Trust
-the flag and `reason=`.
-
-Reviews are surfaced as one persistent record per reviewer under `<reviews>`,
-each `state` of `pending | commented | changes_requested | approved | dismissed`.
-`pending` is requested-but-undelivered — in-flight, not absent (a bot's inline
-threads can land minutes later). An outstanding request **overrides** any prior
-verdict back to `pending` until the reviewer re-reviews. An unsubmitted draft
-review isn't surfaced at all. Keep polling rather than chasing either.
+The rules `pr-status` applies when classifying an item
+`actionable="true|false"`. How to consume the flag (sole task source, cache-only
+reads, `pending` semantics) is `SKILL.md`'s cross-cutting behaviors. A
+reviewer's `<reviews>` record walks `pending | commented | changes_requested |
+approved | dismissed`.
 
 A comment or thread is **non-actionable** iff any of:
 

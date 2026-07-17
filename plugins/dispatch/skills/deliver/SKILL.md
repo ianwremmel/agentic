@@ -9,7 +9,7 @@ Land a code change via a PR. Each tick: run `scripts/pr-status`, address every
 actionable concern, then evaluate the gates to decide whether to transition.
 
 **Operator** = the one human directing this agent; the only human with stop
-authority. Role glossary in [`reference.md`](./reference.md#roles-1).
+authority. Role glossary in [`reference.md`](./reference.md#roles).
 
 **Running `pr-status`.** Run `scripts/pr-status <pr>`.
 

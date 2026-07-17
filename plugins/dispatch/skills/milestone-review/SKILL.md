@@ -16,8 +16,8 @@ Mode A/B wrapper): [`deliver/reference.md`](../deliver/reference.md).
 ## Inputs
 
 The milestone id and its project. Dispatched: the orchestrator also hands the
-claim agent id and identity/mode context. Standalone: mint
-`review-<milestone>-<epoch>` yourself.
+claim agent id and identity/mode context. Standalone: omit `--agent` on the
+claim and adopt the minted id it prints.
 
 You are bound by the **communication restriction**: human input routes through
 the review artifact (below), never by soliciting or blocking on session input.

@@ -405,3 +405,64 @@ describe('cursors', () => {
     await store.close();
   });
 });
+
+describe('agent footprint', () => {
+  it('claim and heartbeat record checkout facts without erasing them', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS, {branch: 'feat/a'});
+    // A later heartbeat adds the worktree; the branch it does not mention stays.
+    await store.heartbeat('A', 'agent-a', NOW + 1000, {worktree: '/wt/a'});
+
+    const row = store.database.get(
+      'SELECT worktree, branch FROM claim WHERE agent = ?',
+      ['agent-a']
+    );
+    assert.deepEqual({...row}, {worktree: '/wt/a', branch: 'feat/a'});
+    await store.close();
+  });
+
+  it('heartbeatAgent refreshes every claim and the slot in one write', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
+    await store.acquireSlot('agent-a', 3, NOW, HOUR);
+
+    const later = NOW + 50 * 60 * 1000; // would be near-stale without a beat
+    const touched = await store.heartbeatAgent('agent-a', later);
+    assert.deepEqual(touched, {claims: 1, slot: true});
+
+    // Both survived past the original staleness horizon.
+    const claim = await store.claim('A', 'agent-b', {
+      nowMs: NOW + HOUR + 1000,
+      staleAfterMs: HOUR,
+    });
+    assert.equal(claim.outcome, 'held');
+    const slots = await store.slots(NOW + HOUR + 1000, HOUR);
+    assert.deepEqual(slots, [{agent: 'agent-a', live: true}]);
+    await store.close();
+  });
+
+  it('heartbeatAgent reports an empty footprint instead of inventing one', async () => {
+    const store = await seededStore();
+    assert.deepEqual(await store.heartbeatAgent('ghost', NOW), {
+      claims: 0,
+      slot: false,
+    });
+    await store.close();
+  });
+
+  it('setOutcome releases the reporter slot along with its claim', async () => {
+    const store = await seededStore({nodes: [node('A')]});
+    await store.claim('A', 'agent-a', OPTS);
+    await store.acquireSlot('agent-a', 3, NOW, HOUR);
+
+    await store.setOutcome(
+      'A',
+      'agent-a',
+      {outcome: 'delivered', retryable: null, detail: null},
+      NOW + 1000
+    );
+
+    assert.deepEqual(await store.slots(NOW + 1000, HOUR), []);
+    await store.close();
+  });
+});

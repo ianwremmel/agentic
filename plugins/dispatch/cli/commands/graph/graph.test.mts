@@ -302,3 +302,155 @@ describe('what a caller sees when it gets the call wrong', () => {
     assert.match(stdout, /--role/u);
   });
 });
+
+describe('agent lifecycle bookkeeping', () => {
+  it('claim without --agent mints and prints the agent id', async () => {
+    const db = await graphDb();
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+
+    const {code, stdout} = await run(db, ['claim', '--id', 'T2']);
+    assert.equal(code, 0);
+    const match =
+      /<claim id="T2" agent="(wt-\d+-[0-9a-f]{4})" outcome="claimed"\/>/u.exec(
+        stdout
+      );
+    assert.ok(match, stdout);
+
+    // The minted id is the claim's real holder: it can heartbeat.
+    const beat = await run(db, [
+      'heartbeat',
+      '--id',
+      'T2',
+      '--agent',
+      match[1] ?? '',
+    ]);
+    assert.equal(beat.code, 0, beat.stderr);
+  });
+
+  it('an agent-wide heartbeat refreshes every claim and the slot in one call', async () => {
+    const db = await graphDb();
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+    await run(db, ['claim', '--id', 'T2', '--agent', 'agent-a']);
+    await run(db, ['slot', 'acquire', '--agent', 'agent-a']);
+
+    const {code, stdout} = await run(db, ['heartbeat', '--agent', 'agent-a']);
+    assert.equal(code, 0);
+    assert.match(
+      stdout,
+      /<heartbeat agent="agent-a" claims="1" slot="true"\/>/u
+    );
+  });
+
+  it('an agent-wide heartbeat fails when the agent holds nothing', async () => {
+    const db = await graphDb();
+    await seed(db);
+
+    const {code, stderr} = await run(db, ['heartbeat', '--agent', 'ghost']);
+    assert.equal(code, 4);
+    assert.match(stderr, /holds no claim and no slot/u);
+  });
+
+  it('outcome set releases the reporting agent compute slot with its claim', async () => {
+    const db = await graphDb();
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+    await run(db, ['claim', '--id', 'T2', '--agent', 'agent-a']);
+    await run(db, ['slot', 'acquire', '--agent', 'agent-a']);
+
+    const outcome = await run(db, [
+      'outcome',
+      'set',
+      '--id',
+      'T2',
+      '--agent',
+      'agent-a',
+      '--outcome',
+      'delivered',
+    ]);
+    assert.equal(outcome.code, 0, outcome.stderr);
+
+    const status = await run(db, ['slot', 'status']);
+    assert.match(status.stdout, /<slots max="3" held="0" free="3">/u);
+  });
+
+  it('claim and heartbeat record where the work is checked out', async () => {
+    const db = await graphDb();
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+    await run(db, [
+      'claim',
+      '--id',
+      'T2',
+      '--agent',
+      'agent-a',
+      '--branch',
+      'feat/t2',
+    ]);
+    const beat = await run(db, [
+      'heartbeat',
+      '--agent',
+      'agent-a',
+      '--worktree',
+      '/tmp/wt/t2',
+    ]);
+    assert.equal(beat.code, 0, beat.stderr);
+  });
+});
+
+describe('summary terminal attribute', () => {
+  it('is false while work remains and true once everything is resolved', async () => {
+    const db = await graphDb();
+    await seed(db);
+
+    const open = await run(db, ['summary']);
+    assert.match(open.stdout, /^<summary terminal="false">/u);
+
+    // Resolve everything: T2 verified closes the queue; no claims are held.
+    await run(db, [
+      'task',
+      'set',
+      '--id',
+      'T2',
+      '--project',
+      'P',
+      '--role',
+      'verified',
+      '--milestone',
+      'M2',
+    ]);
+
+    // Both gates are now ready but unreviewed — still not terminal.
+    await run(db, ['record-review', '--id', 'M1']);
+    const gated = await run(db, ['summary']);
+    assert.match(gated.stdout, /^<summary terminal="false">/u);
+
+    await run(db, ['record-review', '--id', 'M2']);
+    const done = await run(db, ['summary']);
+    assert.match(done.stdout, /^<summary terminal="true">/u);
+  });
+
+  it('a live claim alone holds the loop open', async () => {
+    const db = await graphDb();
+    await seed(db);
+    await run(db, ['record-review', '--id', 'M1']);
+    await run(db, ['claim', '--id', 'T2', '--agent', 'agent-a']);
+    await run(db, [
+      'task',
+      'set',
+      '--id',
+      'T2',
+      '--project',
+      'P',
+      '--role',
+      'verified',
+      '--milestone',
+      'M2',
+    ]);
+    await run(db, ['record-review', '--id', 'M2']);
+
+    const held = await run(db, ['summary']);
+    assert.match(held.stdout, /^<summary terminal="false">/u);
+  });
+});

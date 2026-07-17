@@ -304,16 +304,16 @@ sweep's job, not a substitute for this discipline.
 
 ### Project memory
 
-Maintain `<cache-base>/<skill>/<repo-slug>/_history.jsonl`. On every observed
-wait, append one line:
+The CLI keeps per-repo wait history. After every observed wait:
 
-```json
-{ "ts": "...", "kind": "ci|reviewer|merge", "elapsed_s": 0, "outcome": "..." }
+```shell
+dispatch wait record --repo <owner>/<repo> --kind ci|reviewer|merge \
+    --elapsed <seconds> [--outcome <word>]
 ```
 
-On entry to a polling state, read the median `elapsed_s` for that kind and tune
-the schedule (shorten the head for fast CI; lengthen the tail for slow
-reviewers). Cap at ~100 entries per kind.
+On entry to a polling state, read `dispatch wait stats --repo <owner>/<repo>`
+and tune the schedule from each kind's `median-s` (shorten the head for fast
+CI; lengthen the tail for slow reviewers).
 
 ## References
 

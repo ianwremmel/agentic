@@ -3,6 +3,7 @@ import {claim, heartbeat, release} from './graph/claim.mts';
 import {cursor} from './graph/cursor.mts';
 import {doc} from './graph/doc.mts';
 import {edge} from './graph/edge.mts';
+import {fill} from './graph/fill.mts';
 import {milestone} from './graph/milestone.mts';
 import {next} from './graph/next.mts';
 import {outcome} from './graph/outcome.mts';
@@ -39,6 +40,7 @@ export const graph = group({
     doc,
     summary,
     next,
+    fill,
     claim,
     heartbeat,
     release,

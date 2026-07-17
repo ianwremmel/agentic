@@ -96,8 +96,8 @@ or PR.
 Idempotent, in order:
 
 1. **Graph claim** — `dispatch graph claim --id <ID> --agent <agent-id>` (the
-   dispatched claim id, or mint `wt-<epoch>` standalone). On `claimed` /
-   `refreshed` / `reclaimed`, proceed. Otherwise
+   dispatched claim id; standalone, omit `--agent` and adopt the minted id the
+   command prints). On `claimed` / `refreshed` / `reclaimed`, proceed. Otherwise
    ([details](./reference.md#graph-claim)):
    - `unknown-task` — the graph hasn't seen this ticket. Fetch its subgraph
      (the ticket + transitive blockers, per the reference), then retry once.
@@ -121,11 +121,12 @@ Idempotent, in order:
    after a stale claim), don't re-emit. Parked (`paused`/`awaiting-external`) →
    resume via `available` first, never straight to `in-progress`.
 
-While you hold the claim, run `dispatch graph heartbeat` (same `--id`/`--agent`)
-at least every few minutes (fold into poll ticks). The claim ends with your
-outcome — `dispatch graph outcome set` releases it (see **Report**). Never run
-a bare `release`: a released claim with no outcome reads as a crash and gets
-re-dispatched.
+While you hold the claim, run `dispatch graph heartbeat --agent <agent-id>` at
+least every few minutes (fold into poll ticks) — one call refreshes every claim
+and slot you hold; pass `--worktree`/`--branch` once known so other agents can
+locate the checkout. The claim ends with your outcome — `dispatch graph outcome
+set` releases it (see **Report**). Never run a bare `release`: a released claim
+with no outcome reads as a crash and gets re-dispatched.
 
 ## Decompose
 
@@ -216,8 +217,9 @@ A slot is the right to use **local compute** (write code, install, build,
 test), taken from the shared ledger: `dispatch graph slot acquire --agent
 <agent-id>` before a worker builds or a suite runs (one slot per concurrent
 build, else sequence; exit 3 = full — wait and retry), `slot release` on any
-wait (CI/review/merge/handoff/idle) or exit, `slot heartbeat` while computing.
-The ledger is host-wide, so standalone runs share the same bound.
+wait (CI/review/merge/handoff/idle). The agent-wide `heartbeat` keeps it alive
+while computing, and `outcome set` frees it on exit. The ledger is host-wide,
+so standalone runs share the same bound.
 
 ## Report
 
@@ -230,8 +232,8 @@ dispatch graph outcome set --id <key> --agent <agent-id> --outcome <o> \
     [--retryable true|false] [--detail "one line"]
 ```
 
-It releases your claim in the same write. Standalone, also report it to the
-session.
+It releases your claim and any compute slot in the same write. Standalone,
+also report it to the session.
 
 ## Log
 

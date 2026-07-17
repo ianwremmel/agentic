@@ -142,8 +142,10 @@ tracker's API.
 Flags and exit codes are `dispatch graph`'s — see
 [`build-graph/reference.md`](../build-graph/reference.md). `claimed`,
 `refreshed` (already yours — a resume), and `reclaimed` (stale takeover) all
-succeed. `held` is another agent's live claim (exit 3). Exit 4 carries the
-reason: `unknown-task`, or `not-available` with the classification.
+succeed and print `<claim id="…" agent="…" outcome="…"/>` — standalone, omit
+`--agent` and adopt the minted id it prints. `held` is another agent's live
+claim (exit 3). Exit 4 carries the reason: `unknown-task`, or `not-available`
+with the classification.
 
 **Subgraph fetch (`unknown-task`).** Fetch the ticket and every transitive
 blocker and write them:
@@ -187,11 +189,11 @@ All of it is the graph CLI — no files. `<key>` = `ticket_id` (ticket) or
 `<repo>#<pr_number>` (bare PR); the agent id is the claim id (dispatched: the
 one handed over; standalone: the one you minted).
 
-| what     | how                                                                                   |
-| -------- | ------------------------------------------------------------------------------------- |
-| liveness | `dispatch graph claim` / `heartbeat` — stale claims are reclaimed by the next dispatch |
-| outcome  | `dispatch graph outcome set` as the final action (also releases the claim)            |
-| slots    | `dispatch graph slot acquire` / `release` / `heartbeat` around compute                 |
+| what     | how                                                                                                        |
+| -------- | ---------------------------------------------------------------------------------------------------------- |
+| liveness | `dispatch graph claim`, then agent-wide `heartbeat` (claims + slot, one call); stale claims are reclaimed  |
+| outcome  | `dispatch graph outcome set` as the final action (releases the claim and any slot)                         |
+| slots    | `dispatch graph slot acquire` before compute; `slot release` on waits (exit is covered by `outcome set`)   |
 
 A `pass` on a dispatched re-run scopes it: `resume` — the previous run died;
 re-derive where it got to from the ticket and PRs, then continue. `verify` —

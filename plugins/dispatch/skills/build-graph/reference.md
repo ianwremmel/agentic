@@ -10,6 +10,7 @@
 | `graph task rm --id T`                                | Delete a task, its edges, and any claim.                 |
 | `graph milestone set --id M --project P [--name N]`   | Upsert a milestone.                                      |
 | `graph milestone rm --id M`                           | Delete a milestone, its edges, and its review.           |
+| `graph milestone show --id M`                         | Print one milestone's gate state and member nodes.       |
 | `graph edge add --blocker B --blocked D`              | `B` blocks `D` — `D` depends on `B`.                     |
 | `graph edge rm --blocker B --blocked D`               | Remove one edge.                                         |
 | `graph edge set --blocked D --blockers a,b`           | Replace all of `D`'s blockers. Empty list clears them.   |

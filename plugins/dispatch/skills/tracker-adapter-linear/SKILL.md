@@ -5,10 +5,6 @@ description: Linear tracker adapter for dispatch — binds work-ticket's roles a
 
 # tracker-adapter-linear
 
-[`work-ticket`](../work-ticket/SKILL.md) reads Identity, Role map, Operations,
-and Quirks; [`build-graph`](../build-graph/SKILL.md) reads Role map, Quirks,
-and Graph fetch.
-
 ## Identity
 
 | Field        | Value                                 |
@@ -79,6 +75,24 @@ A substate this table doesn't name is handled per consumer:
   state or filing into it, and don't reuse another team's substate names.
 - Linear archives completed work; an archived task's `Done`/`Canceled` status
   still counts toward its milestone, so `build-graph` must not `task rm` it.
+
+## Review artifact (milestone-review)
+
+The review artifact is a **project status update**. Status updates are
+project-scoped, not per-milestone, so the body must carry the milestone id
+(the episode sentinel does) to keep concurrent milestones' reviews distinct.
+
+| Operation              | Binding                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| milestone brief        | `get_milestone(project, query)` — the goal lives in its description                                                                     |
+| find review artifact   | `get_status_updates(type="project", project)` → the newest update whose body carries the episode sentinel with this milestone's id      |
+| post review artifact   | `save_status_update(type="project", project, body, health)` — `onTrack` when the goal is achieved, `atRisk` otherwise                   |
+| update review artifact | `save_status_update(id, body, health)` — same update; the pending→outcome edit when human input resolved                                |
+| artifact thread        | `list_comments(statusUpdateId)` / `save_comment(statusUpdateId)`; one thread per update — reply via `parentId`; tag with `@displayName` |
+| file follow-up         | `save_issue(title, team, description, project, milestone)` — `milestone` takes a name or id; pick the team per Quirks                   |
+
+Member DoD comments and canceled-member rationales are ticket reads — use the
+Operations bindings above (`fetch brief`, `read comments`).
 
 ## Graph fetch (build-graph)
 

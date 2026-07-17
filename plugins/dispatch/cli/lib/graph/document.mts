@@ -149,11 +149,32 @@ export function availableTicket(
 }
 
 function milestoneXml(milestone: DerivedGraph['milestones'][number]): string {
+  return `<milestone ${milestoneAttrs(milestone)}/>`;
+}
+
+function milestoneAttrs(milestone: DerivedGraph['milestones'][number]): string {
   const claim =
     milestone.claim === null
       ? ''
       : ` claimed-by="${attr(milestone.claim.agent)}" claim-live="${String(milestone.claim.live)}"`;
-  return `<milestone id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}"${claim} open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" in-flight="${String(milestone.inFlight)}" blocked="${String(milestone.blocked)}"/>`;
+  return `id="${attr(milestone.id)}" project="${attr(milestone.project)}" name="${attr(milestone.name)}" ready-for-review="${String(milestone.readyForReview)}" review-recorded="${String(milestone.reviewRecorded)}"${claim} open="${String(milestone.openCount)}" total="${String(milestone.memberCount)}" verified="${String(milestone.verified)}" canceled="${String(milestone.canceled)}" in-flight="${String(milestone.inFlight)}" blocked="${String(milestone.blocked)}"`;
+}
+
+/**
+ * One milestone with its member nodes — the milestone-review agent's read:
+ * the gate state plus every member it must judge, without the rest of the
+ * graph. Returns null when the graph has no such milestone.
+ */
+export function toMilestoneXml(graph: DerivedGraph, id: string): string | null {
+  const milestone = graph.milestones.find((entry) => entry.id === id);
+  if (milestone === undefined) return null;
+
+  const out = [`<milestone ${milestoneAttrs(milestone)}>`, '  <members>'];
+  for (const entry of graph.nodes) {
+    if (entry.node.milestone === id) out.push(nodeXml(entry));
+  }
+  out.push('  </members>', '</milestone>');
+  return out.join('\n');
 }
 
 /**

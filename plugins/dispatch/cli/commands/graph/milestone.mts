@@ -1,8 +1,19 @@
+import assert from 'node:assert';
+
 import {parseArgsOrUsage} from '../../lib/args.mts';
 import type {Command} from '../../lib/command.mts';
-import {assertUsage} from '../../lib/errors.mts';
+import {assertUsage, DataError} from '../../lib/errors.mts';
+import {toMilestoneXml} from '../../lib/graph/document.mts';
+import {writeLine} from '../../lib/io.mts';
 import {group} from '../../lib/subcommand.mts';
-import {STORE_OPTIONS, STORE_USAGE, withStore} from './store-context.mts';
+import {
+  deriveGraph,
+  resolveStaleAfterMs,
+  STALE_AFTER_USAGE,
+  STORE_OPTIONS,
+  STORE_USAGE,
+  withStore,
+} from './store-context.mts';
 
 /**
  * Upsert one milestone. Milestones carry no order: sequence them with `edge add`
@@ -83,9 +94,57 @@ const rm: Command = {
   },
 };
 
+/**
+ * One milestone's derived view: the gate state plus its member nodes. The
+ * milestone-review agent's read — it judges exactly these members, so the
+ * command hands them over rather than making the caller filter `doc`.
+ */
+const show: Command = {
+  name: 'show',
+  summary: "Print one milestone's gate state and member nodes.",
+  usage: [
+    'dispatch graph milestone show --id M1',
+    '',
+    'options:',
+    '  --id <id>   Milestone identifier (required).',
+    STALE_AFTER_USAGE,
+    STORE_USAGE,
+  ].join('\n'),
+
+  async run(argv, context) {
+    const {values} = parseArgsOrUsage({
+      args: argv,
+      options: {
+        ...STORE_OPTIONS,
+        id: {type: 'string'},
+        'stale-after': {type: 'string'},
+      },
+      allowPositionals: false,
+      strict: true,
+    });
+
+    const id = values.id;
+    assertUsage(id !== undefined && id !== '', 'milestone show needs --id');
+
+    await withStore(values, context, async (store, config) => {
+      const staleAfterMs = resolveStaleAfterMs(values['stale-after'], config);
+      const graph = deriveGraph(store, config, staleAfterMs);
+      const xml = toMilestoneXml(graph, id);
+      assert(
+        xml !== null,
+        new DataError(`no milestone "${id}" in the graph`, {
+          hint: 'write it first (`dispatch graph milestone set`), or refresh the graph from the tracker.',
+        })
+      );
+      await writeLine(context.stdout, xml);
+      await context.log.info('emitted milestone', {milestone: id});
+    });
+  },
+};
+
 export const milestone = group({
   name: 'milestone',
   path: 'graph milestone',
-  summary: 'Create, update, or delete milestones.',
-  children: [set, rm],
+  summary: 'Create, update, show, or delete milestones.',
+  children: [set, rm, show],
 });

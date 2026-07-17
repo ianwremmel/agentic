@@ -123,11 +123,11 @@ of the mode:
 
 ## Actionability
 
-The rules `pr-status` applies when classifying an item
-`actionable="true|false"`. How to consume the flag (sole task source, cache-only
-reads, `pending` semantics) is `SKILL.md`'s cross-cutting behaviors. A
-reviewer's `<reviews>` record walks `pending | commented | changes_requested |
-approved | dismissed`.
+`pr-status` classifies each item `actionable="true|false"` by the rules below;
+how to consume the flag (sole task source, cache-only reads, `pending`
+semantics) is covered by `SKILL.md`'s cross-cutting behaviors. A reviewer's
+`<reviews>` record walks `pending | commented | changes_requested | approved |
+dismissed`.
 
 A comment or thread is **non-actionable** iff any of:
 

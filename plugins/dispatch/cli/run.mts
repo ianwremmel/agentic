@@ -90,16 +90,14 @@ export async function run(
     // A global option written after the command reaches the command as an
     // unknown flag, so name the real problem rather than let it read as a typo.
     const misplaced = misplacedGlobalOptions(commandArgs);
-    const hint =
+    const note =
       misplaced.length === 0
         ? ''
         : `\n\nnote: ${misplaced.join(', ')} — a global option must come before the command: dispatch ${misplaced.join(' ')} ... ${target.name} ...`;
 
-    const usage = error.usage ?? target.usage;
-
-    throw new UsageError(`${error.message}\n\nusage: ${usage}${hint}`, {
+    throw new UsageError(`${error.message}${note}`, {
       cause: error,
-      usage,
+      usage: error.usage ?? target.usage,
       ...(error.hint === undefined ? {} : {hint: error.hint}),
     });
   }

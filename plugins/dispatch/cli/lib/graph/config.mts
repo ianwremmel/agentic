@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 
-import {DataError, describeCause, EnvironmentError} from '../errors.mts';
+import {DataError, EnvironmentError} from '../errors.mts';
 import {DEFAULT_PARKED_ROLES, isRole, ROLE_LIST, type Role} from './roles.mts';
 
 export interface GraphConfig {
@@ -103,12 +103,10 @@ export async function loadConfig(
   } catch (cause) {
     if (explicit === undefined && isNotFound(cause)) return DEFAULT_CONFIG;
 
-    throw new EnvironmentError(
-      `cannot read the graph config at ${path}: ${describeCause(cause)}`,
-      {
-        hint: 'point --config at a readable JSON file, or omit it to use the built-in defaults.',
-      }
-    );
+    throw new EnvironmentError(`cannot read the graph config at ${path}`, {
+      cause,
+      hint: 'point --config at a readable JSON file, or omit it to use the built-in defaults.',
+    });
   }
 
   return parseConfig(raw, path);
@@ -119,10 +117,10 @@ export function parseConfig(raw: string, source: string): GraphConfig {
   try {
     parsed = JSON.parse(raw);
   } catch (cause) {
-    throw new DataError(
-      `${source} is not valid JSON: ${describeCause(cause)}`,
-      {hint: 'fix the config file, or delete it to fall back to the defaults.'}
-    );
+    throw new DataError(`${source} is not valid JSON`, {
+      cause,
+      hint: 'fix the config file, or delete it to fall back to the defaults.',
+    });
   }
 
   assert(

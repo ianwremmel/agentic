@@ -2,7 +2,7 @@ import {mkdir} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 
-import {describeCause, DispatchError, EnvironmentError} from '../errors.mts';
+import {DispatchError, EnvironmentError} from '../errors.mts';
 import {SCHEMA, SCHEMA_VERSION} from './schema.mts';
 
 export type SqlValue = string | number | null;
@@ -32,8 +32,11 @@ export class Database {
         await mkdir(dirname(path), {recursive: true});
       } catch (cause) {
         throw new EnvironmentError(
-          `cannot create the directory for the dispatch database at ${path}: ${describeCause(cause)}`,
-          {hint: 'check the path is writable, or point --db somewhere else.'}
+          `cannot create the directory for the dispatch database at ${path}`,
+          {
+            cause,
+            hint: 'check the path is writable, or point --db somewhere else.',
+          }
         );
       }
     }
@@ -55,8 +58,9 @@ export class Database {
     } catch (cause) {
       if (cause instanceof DispatchError) throw cause;
       throw new EnvironmentError(
-        `cannot open the dispatch database at ${path}: ${describeCause(cause)}`,
+        `cannot open the dispatch database at ${path}`,
         {
+          cause,
           hint: 'check the file is a readable, writable SQLite database and the disk is not full. If it is locked, another dispatch command is mid-write — retry shortly. Deleting the file forces a rebuild.',
         }
       );
@@ -132,8 +136,9 @@ export class Database {
     } catch (cause) {
       if (cause instanceof DispatchError) throw cause;
       throw new EnvironmentError(
-        `the dispatch database rejected an operation: ${describeCause(cause)}`,
+        'the dispatch database rejected an operation',
         {
+          cause,
           hint: 'if the database is locked, another dispatch command is mid-write — retry shortly. Otherwise check the file is a writable SQLite database and the disk is not full.',
         }
       );

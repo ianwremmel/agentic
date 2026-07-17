@@ -1,6 +1,8 @@
+import assert from 'node:assert';
+
 import {requestsHelp} from './args.mts';
 import type {Command} from './command.mts';
-import {assertUsage, UsageError} from './errors.mts';
+import {UsageError} from './errors.mts';
 import {writeLine} from './io.mts';
 
 export interface GroupSpec {
@@ -52,15 +54,15 @@ export function group({name, summary, path, children}: GroupSpec): Command {
         return;
       }
 
-      assertUsage(
+      assert(
         subcommand !== undefined && !subcommand.startsWith('-'),
-        `${name} needs a subcommand\n\n${usage}`
+        new UsageError(`${name} needs a subcommand`, {usage})
       );
 
       const child = byName.get(subcommand);
-      assertUsage(
+      assert(
         child !== undefined,
-        `unknown ${name} subcommand "${subcommand}"\n\n${usage}`
+        new UsageError(`unknown ${name} subcommand "${subcommand}"`, {usage})
       );
 
       const childArgs = argv.slice(1);

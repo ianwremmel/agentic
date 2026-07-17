@@ -27,6 +27,11 @@ export interface DispatchErrorOptions extends ErrorOptions {
   readonly usage?: string;
 }
 
+/** Render a thrown value for the printed failure, whatever it turned out to be. */
+function describe(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 /**
  * A failure the caller can act on, as opposed to a crash.
  *
@@ -43,6 +48,18 @@ export class DispatchError extends Error {
     super(message, options);
     this.hint = options.hint;
   }
+
+  /**
+   * The failure as the CLI prints it on the `error:` line — the message, then
+   * the message of the cause it wraps. Owning the formatting here lets a throw
+   * site pass the underlying error as `cause` instead of splicing its text
+   * into the message.
+   */
+  override toString(): string {
+    return this.cause === undefined
+      ? this.message
+      : `${this.message}: ${describe(this.cause)}`;
+  }
 }
 
 /** The caller invoked the CLI wrong: an unknown flag, a missing argument. */
@@ -55,6 +72,19 @@ export class UsageError extends DispatchError {
   constructor(message: string, options: DispatchErrorOptions = {}) {
     super(message, options);
     this.usage = options.usage;
+  }
+
+  /**
+   * A usage error's cause is the error it re-tags (a subcommand group or the
+   * runner attaching a usage), whose message this one already carries — so
+   * unlike the base class, toString() never appends the cause. It renders the
+   * usage instead, so throw sites tag the error rather than splice usage text
+   * into the message.
+   */
+  override toString(): string {
+    return this.usage === undefined
+      ? this.message
+      : `${this.message}\n\nusage: ${this.usage}`;
   }
 }
 
@@ -91,9 +121,4 @@ export function assertUsage(
   if (!condition) {
     throw new UsageError(message);
   }
-}
-
-/** The message of a thrown value, whatever it turned out to be. */
-export function describeCause(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }

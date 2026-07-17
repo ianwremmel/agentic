@@ -41,6 +41,12 @@ subdirectories exist as scaffolding only.
 - **Plugin layout.** Never put `commands/`, `agents/`, `skills/`, or `hooks/`
   inside `.claude-plugin/`. Only `plugin.json` lives there. All other
   directories go at the plugin root.
+- **Determinism lives in the CLI.** If a step has one correct output for a
+  given input (e.g. slot and ledger bookkeeping, gate evaluation, parsing,
+  formatting), implement it in the plugin's CLI and have the skill call it.
+  Skill markdown is for judgment and orchestration. The exception is a hard
+  runtime constraint: MCP tools exist only in the skill's agent session, so
+  MCP access stays in the skill.
 - **Naming.** Plugin names, skill folder names, and agent file names are
   kebab-case.
 - **No spec references in agent-facing text.** The `docs/spec/` tree is not

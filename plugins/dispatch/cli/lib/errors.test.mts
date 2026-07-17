@@ -85,6 +85,18 @@ describe('TaggedUsageError.toString', () => {
     );
   });
 
+  it('keeps details in the rendered failure', () => {
+    const error = new TaggedUsageError('flag rejected', {
+      details: {flag: '--stale-after'},
+      usage: 'dispatch graph claim <id>',
+    });
+
+    assert.equal(
+      error.toString(),
+      'flag rejected (flag=--stale-after)\n\nusage: dispatch graph claim <id>'
+    );
+  });
+
   it('does not repeat a re-tagged message through its cause', () => {
     // The runner and subcommand groups wrap a UsageError into a
     // TaggedUsageError, keeping the original as the cause. The message already

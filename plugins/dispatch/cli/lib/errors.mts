@@ -77,6 +77,15 @@ export class DispatchError extends Error {
     this.details = options.details;
   }
 
+  /** The message with its details attached — what every toString() builds on. */
+  protected get detailedMessage(): string {
+    if (this.details === undefined) return this.message;
+    const details = Object.entries(this.details)
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(', ');
+    return `${this.message} (${details})`;
+  }
+
   /**
    * The failure as the CLI prints it on the `error:` line — the message, its
    * details, then the messages of the cause chain it wraps. Owning the
@@ -84,15 +93,7 @@ export class DispatchError extends Error {
    * the facts as `details` instead of splicing text into the message.
    */
   override toString(): string {
-    const details =
-      this.details === undefined
-        ? ''
-        : ` (${Object.entries(this.details)
-            .map(([key, value]) => `${key}=${String(value)}`)
-            .join(', ')})`;
-    return [`${this.message}${details}`, ...describeChain(this.cause)].join(
-      ': '
-    );
+    return [this.detailedMessage, ...describeChain(this.cause)].join(': ');
   }
 }
 
@@ -107,7 +108,7 @@ export class UsageError extends DispatchError {
    * the base class, toString() never appends the cause.
    */
   override toString(): string {
-    return this.message;
+    return this.detailedMessage;
   }
 }
 
@@ -135,7 +136,7 @@ export class TaggedUsageError extends UsageError {
   }
 
   override toString(): string {
-    return `${this.message}\n\nusage: ${this.usage}`;
+    return `${this.detailedMessage}\n\nusage: ${this.usage}`;
   }
 }
 

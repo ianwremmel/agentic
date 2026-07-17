@@ -21,6 +21,15 @@ describe('DispatchError.toString', () => {
     assert.equal(error.toString(), 'parse failed: boom');
   });
 
+  it('renders a cause that cannot stringify instead of throwing', () => {
+    // String() throws on a null-prototype object; the failure report must not.
+    const error = new DispatchError('store failed', {
+      cause: Object.create(null) as unknown,
+    });
+
+    assert.equal(error.toString(), 'store failed: [object Object]');
+  });
+
   it('renders every link of a nested cause chain', () => {
     const error = new DispatchError('sync failed', {
       cause: new Error('fetch failed', {cause: new Error('ECONNREFUSED')}),

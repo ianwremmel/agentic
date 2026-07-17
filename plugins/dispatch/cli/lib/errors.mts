@@ -29,7 +29,14 @@ export interface DispatchErrorOptions extends ErrorOptions {
 
 /** Render a thrown value for the printed failure, whatever it turned out to be. */
 function describe(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
+  if (cause instanceof Error) return cause.message;
+  try {
+    return String(cause);
+  } catch {
+    // A value with no path to a primitive (e.g. a null-prototype object) must
+    // not let the failure report itself throw.
+    return Object.prototype.toString.call(cause);
+  }
 }
 
 /**

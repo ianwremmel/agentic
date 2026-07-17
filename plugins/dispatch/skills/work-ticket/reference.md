@@ -5,9 +5,10 @@ Lookup tables for [`SKILL.md`](./SKILL.md).
 ## Actors
 
 - **Coordinator** — this skill; owns one work item end-to-end.
-- **Operator** — the human directing this run; identity is `operator_login`.
+- **Operator** — the human directing this run; identity is the
+  `operator_login` config.
 - **Delivery worker** — a [`deliver`](../deliver/SKILL.md) instance, one per
-  PR; holds the compute slot while building. Read its PR status only via `deliver`.
+  PR; holds the compute slot while building.
 - **Orchestrator** — the agent that dispatches coordinators; owns the graph,
   ranking, the slot ledger, and dispatch. Absent standalone.
 
@@ -53,13 +54,12 @@ operations above to one platform. Resolution — tracker id, and the best-effort
 fallback when no adapter is installed — is in [`SKILL.md`](./SKILL.md);
 authoring guidance is in the plugin README. This section is how to read one.
 
-A more specific adapter skill **replaces** a same-id one wholesale: there is no
-per-row merge — read only the winning adapter. Every ticket read and write this
-skill makes goes through it.
+A more specific same-id adapter **replaces** the other wholesale — read only
+the winning adapter.
 
 The tracker's access mechanism (MCP, CLI, REST) is an adapter's business and is
-**orthogonal** to the Mode A/B communication rules, which follow the credentials
-in use.
+**orthogonal** to the credential-mode communication rules, which come from the
+`credential_mode` config.
 
 ### What an adapter contains
 
@@ -162,10 +162,10 @@ blocker and write them:
 ## Communication recap
 
 Full treatment in [`../deliver/reference.md`](../deliver/reference.md). Essentials:
-**Mode A** (agent) iff the account is a bot/integration or its id matches
-`*copilot*`/`*codex*`/`*claude*`/`*ai-agent*`, else **Mode B** (default on
-ambiguity). Every agent post leads with `<!-- agent-reply:<agent-id> -->` alone;
-Mode B wraps the body in `✨`; sentinels sit inside the body. Terminal signals:
+the credential mode is the `credential_mode` config value stated in
+`SKILL.md`'s environment — never inferred from account names. Every agent post
+leads with `<!-- agent-reply:<agent-id> -->` alone; shared credentials wrap
+the body in `✨`; sentinels sit inside the body. Terminal signals:
 `+1`/`-1`(with reply)/`rocket`, or last-line `Done.`/`Declined.`/`Shipped.`; never
 resolve a thread. Human-input routing: PR → ticket → new ticket, tag a human, then
 `WAIT`.
@@ -187,18 +187,18 @@ All of it is the graph CLI — no files. `<key>` = `ticket_id` (ticket) or
 `<repo>#<pr_number>` (bare PR); the agent id is the claim id (dispatched: the
 one handed over; standalone: the one you minted).
 
-| what     | how                                                                                   |
-| -------- | ------------------------------------------------------------------------------------- |
-| liveness | `dispatch graph claim` / `heartbeat` — stale claims are reclaimed by the next dispatch |
-| outcome  | `dispatch graph outcome set` as the final action (also releases the claim)            |
-| slots    | `dispatch graph slot acquire` / `release` / `heartbeat` around compute                 |
+| what          | how                                                                                    |
+| ------------- | -------------------------------------------------------------------------------------- |
+| liveness      | `dispatch graph claim` / `heartbeat` — stale claims are reclaimed by the next dispatch |
+| outcome       | `dispatch graph outcome set` as the final action (also releases the claim)             |
+| slots         | `dispatch graph slot acquire` / `release` / `heartbeat` around compute                 |
+| working label | while you hold any claim, mirror a "working" label on the tracker where one exists     |
 
 A `pass` on a dispatched re-run scopes it: `resume` — the previous run died;
 re-derive where it got to from the ticket and PRs, then continue. `verify` —
 the PRs landed (`delivered`); validate the aims and post the DoD. `finalize` —
 the decomposed parent's subtasks all resolved; verify the parent's aims.
-`retry` — re-run a failed verification. Mirror a "working" label on the
-tracker where one is available.
+`retry` — re-run a failed verification.
 
 ## Logging
 
@@ -220,7 +220,7 @@ tracker where one is available.
 | `INFO`       | substantive non-state events (subtasks, mapping, reassignment, heartbeat) |
 | `ERROR`      | tracker errors, verification failures                                     |
 
-State-change comment body, exactly (Mode A/B wrapping applies):
+State-change comment body, exactly (credential-mode wrapping applies):
 
 ```text
 State: <prev-role> → <new-role>

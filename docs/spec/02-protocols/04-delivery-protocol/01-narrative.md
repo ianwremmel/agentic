@@ -43,7 +43,7 @@ is left-to-right.
 ### Solo vs team mode
 
 Whether the private review stage appears at all is a per-installation choice
-expressed by the `team_mode` configuration. In **solo mode** (the default), the
+expressed by the `operator_mode` configuration. In **solo mode** (the default), the
 operator is the only human reviewer; the agent clears draft after Copilot and
 the operator is engaged as the public reviewer directly. In **team mode**, the
 operator is one of several human reviewers and gets a private pre-review while

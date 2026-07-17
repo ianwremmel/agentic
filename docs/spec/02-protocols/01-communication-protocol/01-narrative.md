@@ -24,22 +24,22 @@ The protocol solves both problems with two markers: a **machine marker**
 embedded in every agent post (addresses problem 2) and a **visible sparkle
 wrapper** around posts made under human credentials (addresses problem 1).
 
-## Two modes, one simple rule
+## Two modes, one declared rule
 
-Whether an agent needs the sparkle wrapper depends entirely on the credentials
-it is using — not on configuration, not on the environment type, not on how the
-agent was launched.
+Whether an agent needs the sparkle wrapper depends entirely on which kind of
+credentials it holds, and the installation declares that once, as the
+`credential_mode` configuration value — writers never guess it from account
+names at write time.
 
-**Mode A** applies when the platform can tell on its own that the author is not
-human. A GitHub App, a bot-typed account, or any account whose identifier
-matches a well-known agent pattern (`*copilot*`, `*claude*`, `*codex*`,
-`*ai-agent*`) already signals "this is automated" through the byline. Wrapping
-the post in sparkles would be redundant. The machine marker is still required
-so other agents can parse it programmatically.
+**Mode A** (`credential_mode: dedicated`) applies when the agent has its own
+dedicated account — a GitHub App, a bot-typed account, a dedicated agent
+login. The byline already signals "this is automated". Wrapping the post in
+sparkles would be redundant. The machine marker is still required so other
+agents can parse it programmatically.
 
-**Mode B** applies when the account is a real human's account. Nothing in the
-byline tips off readers. The sparkle wrapper makes the distinction unmistakable
-at a glance:
+**Mode B** (`credential_mode: shared`) applies when the agent posts under a
+real human's account. Nothing in the byline tips off readers. The sparkle
+wrapper makes the distinction unmistakable at a glance:
 
 ```text
 <!-- agent-reply:dispatch -->
@@ -51,9 +51,9 @@ for the token-expiry edge case in the follow-up commit.
 ✨
 ```
 
-The rule on uncertainty is: **default to Mode B**. A spurious sparkle wrapper
-on a bot account is mildly redundant; a missing wrapper on a human-credentialed
-account is a protocol violation that misleads readers.
+The rule when nothing is configured is: **default to Mode B**. A spurious
+sparkle wrapper on a bot account is mildly redundant; a missing wrapper on a
+human-credentialed account is a protocol violation that misleads readers.
 
 ## The three comment venues
 

@@ -29,12 +29,11 @@ dispatch create-comment \
 | `--agent-id` | Agent identifier placed in the machine marker. REQUIRED.         |
 
 The command automatically prepends the machine marker (`<!-- agent-reply:<id> -->`)
-and applies the Mode B sparkle wrapper when the authenticated account is
-human-credentialed per §2.1.2 §Mode detection. The caller MUST NOT include the
-marker or sparkle wrapper in `--body`.
+and applies the Mode B sparkle wrapper when `credential_mode` is `shared` per
+§2.1.2 §Mode selection (Mode B when unconfigured). The caller MUST NOT include
+the marker or sparkle wrapper in `--body`.
 
-Exits non-zero if the target does not exist, credentials are insufficient, or
-mode detection fails with no default.
+Exits non-zero if the target does not exist or credentials are insufficient.
 
 ---
 

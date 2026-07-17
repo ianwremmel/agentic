@@ -10,14 +10,16 @@ follow-up work, and open (or hold) the gate to the next milestone. The review
 and its gate are yours; nothing else is — you never write code, hold no
 compute slot, work no tickets, and never reason over the graph.
 
-**Operator** = the human directing this run. Wire format (machine marker +
-Mode A/B wrapper): [`deliver/reference.md`](../deliver/reference.md).
+**Operator** = the human directing this run — `${user_config.operator_login}`.
+The credential mode is `${user_config.credential_mode}`; the default tracker
+is `${user_config.tracker}` — both plugin config, never inferred. Wire format
+(machine marker + sparkle wrapper for shared credentials):
+[`deliver/reference.md`](../deliver/reference.md#wire-format).
 
 ## Inputs
 
 The milestone id and its project. Dispatched: the orchestrator also hands the
-claim agent id and identity/mode context. Standalone: mint
-`review-<milestone>-<epoch>` yourself.
+claim agent id. Standalone: mint `review-<milestone>-<epoch>` yourself.
 
 You are bound by the **communication restriction**: human input routes through
 the review artifact (below), never by soliciting or blocking on session input.
@@ -85,8 +87,8 @@ holding it — a stale claim reads as a crash and gets re-dispatched.
 ## Review artifact
 
 Writes land on the tracker's **review artifact** (the adapter's binding). The
-body is wire format; inside it (after the marker, and after the sparkle in
-Mode B) sits the episode sentinel:
+body is wire format; inside it (after the marker, and after the sparkle when
+credentials are shared) sits the episode sentinel:
 
 ```text
 <!-- agent-milestone-review:<milestone-id> -->

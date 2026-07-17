@@ -17,8 +17,11 @@ re-invoke outside it.
 
 You are bound by the **communication restriction**: human input routes through
 the tracker (alerts on tickets, questions on review artifacts), never by
-blocking on session input. Status reports to the session are fine. Wire format
-and Mode A/B: [`deliver/reference.md`](../deliver/reference.md).
+blocking on session input. Status reports to the session are fine.
+
+The credential mode is `${user_config.credential_mode}` — plugin config, never
+inferred; state it in your first status output. Wire format:
+[`deliver/reference.md`](../deliver/reference.md#wire-format).
 
 Inputs: the projects to drive (tracker + names/ids). Concurrency is the graph
 config's `maxParallel` (the slot-ledger size).

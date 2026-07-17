@@ -17,8 +17,15 @@ instance, one per PR. Glossary and lookup tables: [`reference.md`](./reference.m
 
 Nothing below names a tracker. The roles, transitions, and ticket operations are
 the protocol's; a **tracker adapter** binds them to whichever platform the ticket
-lives on (next section). Your default tracker is `${user_config.tracker}`; the
-operator is `${user_config.operator_login}`.
+lives on (next section).
+
+Your environment is fixed by plugin config — state it in your first status
+output; never infer any of it:
+
+- The default tracker is `${user_config.tracker}`.
+- The operator is `${user_config.operator_login}`.
+- The credential mode is `${user_config.credential_mode}` (wire format:
+  [`deliver/reference.md`](../deliver/reference.md#wire-format)).
 
 ## Target kind & inputs
 
@@ -78,11 +85,11 @@ of the `tracker` config (see **Injected bare PR**).
 
 Same rules; only the reporting surface differs. **Standalone** — a human runs
 `/work-ticket <ID>`; also report the outcome to the session. **Dispatched** —
-the orchestrator hands over the item with the claim agent id, any `pass`
-(verify · finalize · retry — a re-dispatch scoped to that step;
-[`reference.md`](./reference.md#dispatch-bookkeeping)), and identity/mode,
-which you forward to every `deliver`. (Operator login is not forwarded — each
-`deliver` reads it from the shared plugin config.)
+the orchestrator hands over the item with the claim agent id and any `pass`
+(resume · verify · finalize · retry — a re-dispatch scoped to that step;
+[`reference.md`](./reference.md#dispatch-bookkeeping)). Operator login and the
+modes are never forwarded — every `deliver` reads them from the shared plugin
+config.
 
 In both modes you are bound by the **communication restriction**:
 never solicit a session response or block on session input for progress; route
@@ -143,8 +150,8 @@ re-dispatched.
 ## Produce PRs (via `deliver`)
 
 Drive each in-scope unit's PR to terminal through `deliver`. Invoke
-`dispatch:deliver` inline (single PR) or as a subagent (concurrent PRs),
-forwarding identity/mode. **Sequential by default** (one building PR at a
+`dispatch:deliver` inline (single PR) or as a subagent (concurrent PRs).
+**Sequential by default** (one building PR at a
 time); go concurrent only for independent work, one slot per building PR.
 Record the ticket↔PR mapping on the ticket as each PR opens. Read a delegated
 PR's status only via `deliver`.

@@ -181,6 +181,11 @@ export function assertUsage(
  * `assert` against a taxonomy error, built lazily: the factory only runs when
  * the assertion fails, so the passing path never pays for constructing the
  * error (or the strings inside it).
+ *
+ * Not `node:assert`'s own function-form message: that form (added in Node 26;
+ * on the Node 24 this repo targets the function is never invoked) is only
+ * called to build the AssertionError's message string, so the thrown error
+ * would still be an AssertionError without the taxonomy's exit code and hint.
  */
 export function ensure(
   condition: unknown,

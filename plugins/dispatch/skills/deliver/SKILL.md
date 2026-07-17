@@ -11,8 +11,7 @@ actionable concern, then evaluate the gates to decide whether to transition.
 **Operator** = the one human directing this agent; the only human with stop
 authority. Role glossary in [`reference.md`](./reference.md#roles).
 
-**Running `pr-status`.** Run `pr-status <pr>` — it's on `PATH` from the
-plugin's `bin/`.
+**Running `pr-status`.** Run `pr-status <pr>`.
 
 ## Setup
 

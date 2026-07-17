@@ -6,10 +6,9 @@ description: Review one completed milestone — judge its goal against the ticke
 # milestone-review
 
 Review one **milestone**: decide whether its goal was achieved, file any
-follow-up work, and open (or hold) the gate to the next milestone. You never
-write code and hold no compute slot. Tickets are
-[`work-ticket`](../work-ticket/SKILL.md)'s; the graph and dispatch are
-[`orchestrate`](../orchestrate/SKILL.md)'s.
+follow-up work, and open (or hold) the gate to the next milestone. The review
+and its gate are yours; nothing else is — you never write code, hold no
+compute slot, work no tickets, and never reason over the graph.
 
 **Operator** = the human directing this run. Wire format (machine marker +
 Mode A/B wrapper): [`deliver/reference.md`](../deliver/reference.md).

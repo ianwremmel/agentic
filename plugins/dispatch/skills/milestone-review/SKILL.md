@@ -27,12 +27,9 @@ Status to the session is fine; standalone, also report the outcome there.
 ## Tracker adapter
 
 Load the `tracker-adapter-${user_config.tracker}` skill — or
-`tracker-adapter-<id>` when the project lives on a different tracker. Use its
-Identity, Operations, Quirks, and **Review artifact** sections; the last names
-the venue that holds a review outcome and its comment thread. No adapter
-installed → drive the tracker's native MCP server, pick a venue attached to
-the milestone (or its project) that can hold the outcome and a comment
-thread, and log an `INFO` naming your choice.
+`tracker-adapter-<id>` when the project lives on a different tracker. No
+adapter → drive the tracker's native MCP server directly and log an `INFO`
+naming the venue you chose as the review artifact.
 
 ## The algorithm
 
@@ -51,13 +48,12 @@ thread, and log an `INFO` naming your choice.
      ([`build-graph`](../build-graph/SKILL.md)) and retry once; still refused
      → nothing to review, report and stop. Dispatched: the graph moved under
      the dispatch; report and exit.
-2. **Read** — `dispatch graph milestone show --id <milestone>` prints the
-   milestone element and its member nodes. The root's `ready-for-review`
-   attribute *is* the readiness check — the CLI derived it from member roles
-   and transitive dependencies; never re-derive it, and never re-verify
-   members. Through the adapter, fetch the judgment evidence: the milestone's
-   goal (its description), each `verified` member's DoD comment, each
-   `canceled` member's rationale.
+2. **Read**:
+   1. `dispatch graph milestone show --id <milestone>` — the milestone
+      element and its member nodes. `ready-for-review` on the root *is* the
+      readiness check; never re-derive it, never re-verify members.
+   2. Through the adapter: the milestone's goal (its description), each
+      `verified` member's DoD comment, each `canceled` member's rationale.
 3. **Judge** — was the goal achieved, and is follow-up work needed? A DoD's
    deferred items already have tickets; look for the gaps *between* tickets —
    an aim the milestone promised that no ticket delivered or deferred with a
@@ -99,18 +95,20 @@ Mode B) sits the episode sentinel:
 
 ## Human input
 
-Ensure the review artifact exists (post it stating what is pending, without a
-verdict), ask as a comment on it tagging ≥1 human, log `WAIT` (name the
-artifact and the awaited answer), and poll the artifact's thread — lazily
-(minutes, then tens of minutes; never faster than once per minute),
-heartbeating the claim each poll. Ask everything the verdict needs — batch
-related questions into one comment — but scan the thread first and never
-re-ask a question that is already pending (that is what keeps a reclaimed run
-from duplicating it). Don't record the outcome until an addressable response
-(an answer, a directive, an explicit decline) resolves each open question. On
-resolution: react with a terminal signal, log `RESUME`, post a follow-up on
-the thread when the response was substantive, and finish the review. Both
-modes wait here — a review holds no compute slot, so waiting is cheap.
+When the verdict needs a judgment you cannot make:
+
+1. Ensure the review artifact exists — post it stating what is pending, no
+   verdict.
+2. Scan its thread, then ask what is not already pending — batched into one
+   comment, tagging ≥1 human. Never re-ask a pending question.
+3. Log `WAIT`, naming the artifact and the awaited answer.
+4. Poll the thread lazily (minutes, then tens of minutes; never faster than
+   once per minute), heartbeating the claim each poll. Waiting is cheap — a
+   review holds no compute slot.
+5. A question resolves on an addressable response (an answer, a directive,
+   an explicit decline): react with a terminal signal, log `RESUME`, and
+   post a follow-up when the response was substantive.
+6. Every question resolved → record the outcome (never before).
 
 ## Log
 

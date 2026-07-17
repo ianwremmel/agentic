@@ -20,24 +20,15 @@ its subtasks resolved; `retry` — re-run a failed verification.
 
 ## Milestone-review agent
 
-Its lock is the milestone's claim: heartbeat with `dispatch graph heartbeat
---id <milestone> --agent <id>`; `record-review` releases it. A stale claim
-with no recorded review is re-dispatched under a fresh id (the claim
-reclaims). The brief:
+The brief is the [`milestone-review`](../milestone-review/SKILL.md) skill —
+dispatch a subagent running it; never inline the review yourself. Hand it: the
+milestone id and its project, the claim agent id you minted (it heartbeats and
+releases under it), that it is **dispatched**, and the identity/mode context.
 
-1. Read the milestone's tickets and their DoD artifacts from the tracker.
-2. Answer: was the milestone goal achieved, and is follow-up work needed?
-3. File any follow-ups in the **current** milestone (they re-block advancement
-   through the graph; no orchestrator action needed).
-4. Record the outcome as a comment on the milestone's review artifact (Linear:
-   a project update; GitHub: a milestone closure comment) in wire format. Any
-   human input is solicited as comments on that same artifact, tagging a human
-   — never the session — and the outcome is not recorded until it resolves.
-5. Final action: `dispatch graph record-review --id <milestone>`. If it
-   refuses because the milestone regained open work (a follow-up already
-   reached the graph), that is the finished state: release the claim
-   (`dispatch graph release --id <milestone> --agent <id>`) and exit — the
-   gate stays closed, and a fresh review runs when the milestone re-completes.
+Its lock is the milestone's claim: `record-review` releases it on success; the
+agent releases it explicitly when the gate must stay closed (follow-ups
+filed). A stale claim with no recorded review is re-dispatched under a fresh
+id (the claim reclaims).
 
 ## Human alerts
 

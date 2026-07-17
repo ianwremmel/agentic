@@ -50,8 +50,9 @@ the store.
 6. **Milestone gates** — for each `<milestone ready-for-review="true"
    review-recorded="false">` with no live claim: mint
    `review-<milestone>-<epoch>`, take the lock with `dispatch graph claim --id
-   <milestone> --agent <id>`, and dispatch a milestone-review agent
-   ([brief](./reference.md#milestone-review-agent)).
+   <milestone> --agent <id>`, and dispatch a
+   [`milestone-review`](../milestone-review/SKILL.md) subagent
+   ([inputs](./reference.md#milestone-review-agent)).
 7. **Fill** — while `<slots free>` > 0 and the previous call returned an item:
    `dispatch graph next --claim --agent wt-<epoch>-<n>`, a fresh id per call —
    each claim belongs to the coordinator it is handed to. Empty output means

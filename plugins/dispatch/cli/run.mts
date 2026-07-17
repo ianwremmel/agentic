@@ -7,7 +7,7 @@ import {
   requestsHelp,
   splitArgv,
 } from './lib/args.mts';
-import {assertUsage, EXIT_OK, UsageError} from './lib/errors.mts';
+import {ensure, EXIT_OK, TaggedUsageError, UsageError} from './lib/errors.mts';
 import {writeLine} from './lib/io.mts';
 import {createLogger, resolveLogLevel} from './lib/log/logger.mts';
 import {findCommand, helpText} from './lib/registry.mts';
@@ -55,12 +55,15 @@ export async function run(
     return EXIT_OK;
   }
 
-  assertUsage(command !== undefined, `no command given\n\n${helpText()}`);
+  ensure(
+    command !== undefined,
+    () => new UsageError(`no command given\n\n${helpText()}`)
+  );
 
   const target = findCommand(command);
-  assertUsage(
+  ensure(
     target !== undefined,
-    `unknown command "${command}"\n\n${helpText()}`
+    () => new UsageError(`unknown command "${command}"\n\n${helpText()}`)
   );
 
   if (requestsHelp(commandArgs) && target.handlesHelp !== true) {
@@ -95,9 +98,9 @@ export async function run(
         ? ''
         : `\n\nnote: ${misplaced.join(', ')} — a global option must come before the command: dispatch ${misplaced.join(' ')} ... ${target.name} ...`;
 
-    throw new UsageError(`${error.message}${note}`, {
+    throw new TaggedUsageError(`${error.message}${note}`, {
       cause: error,
-      usage: error.usage ?? target.usage,
+      usage: error instanceof TaggedUsageError ? error.usage : target.usage,
       ...(error.hint === undefined ? {} : {hint: error.hint}),
     });
   }

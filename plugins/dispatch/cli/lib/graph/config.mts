@@ -1,9 +1,8 @@
-import assert from 'node:assert';
 import {readFile} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 
-import {DataError, EnvironmentError} from '../errors.mts';
+import {DataError, ensure, EnvironmentError} from '../errors.mts';
 import {DEFAULT_PARKED_ROLES, isRole, ROLE_LIST, type Role} from './roles.mts';
 
 export interface GraphConfig {
@@ -103,8 +102,9 @@ export async function loadConfig(
   } catch (cause) {
     if (explicit === undefined && isNotFound(cause)) return DEFAULT_CONFIG;
 
-    throw new EnvironmentError(`cannot read the graph config at ${path}`, {
+    throw new EnvironmentError('cannot read the graph config', {
       cause,
+      details: {path},
       hint: 'point --config at a readable JSON file, or omit it to use the built-in defaults.',
     });
   }
@@ -117,17 +117,20 @@ export function parseConfig(raw: string, source: string): GraphConfig {
   try {
     parsed = JSON.parse(raw);
   } catch (cause) {
-    throw new DataError(`${source} is not valid JSON`, {
+    throw new DataError('the graph config is not valid JSON', {
       cause,
+      details: {source},
       hint: 'fix the config file, or delete it to fall back to the defaults.',
     });
   }
 
-  assert(
+  ensure(
     typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed),
-    new DataError(`${source} must contain a JSON object`, {
-      hint: 'the config looks like {"states": {...}, "humanInteractiveLabels": [...]}.',
-    })
+    () =>
+      new DataError('the graph config must contain a JSON object', {
+        details: {source},
+        hint: 'the config looks like {"states": {...}, "humanInteractiveLabels": [...]}.',
+      })
   );
   const doc = parsed as Record<string, unknown>;
 
@@ -146,11 +149,13 @@ export function parseConfig(raw: string, source: string): GraphConfig {
 
 function maxParallel(raw: unknown, source: string): number {
   if (raw === undefined || raw === null) return DEFAULT_CONFIG.maxParallel;
-  assert(
+  ensure(
     typeof raw === 'number' && Number.isInteger(raw) && raw >= 1,
-    new DataError(`${source}: "maxParallel" must be a positive integer`, {
-      hint: 'write it as {"maxParallel": 3}.',
-    })
+    () =>
+      new DataError('"maxParallel" must be a positive integer', {
+        details: {source},
+        hint: 'write it as {"maxParallel": 3}.',
+      })
   );
   return raw;
 }
@@ -159,19 +164,23 @@ function claimStaleAfter(raw: unknown, source: string): number {
   if (raw === undefined || raw === null)
     return DEFAULT_CONFIG.claimStaleAfterMs;
 
-  assert(
+  ensure(
     typeof raw === 'string',
-    new DataError(`${source}: "claimStaleAfter" must be a duration string`, {
-      hint: 'write it as {"claimStaleAfter": "10m"} — number plus ms/s/m/h.',
-    })
+    () =>
+      new DataError('"claimStaleAfter" must be a duration string', {
+        details: {source},
+        hint: 'write it as {"claimStaleAfter": "10m"} — number plus ms/s/m/h.',
+      })
   );
 
   const ms = parseDuration(raw);
-  assert(
+  ensure(
     ms !== null,
-    new DataError(`${source}: "claimStaleAfter" is not a duration: "${raw}"`, {
-      hint: 'use a number plus ms/s/m/h, e.g. "10m".',
-    })
+    () =>
+      new DataError('"claimStaleAfter" is not a duration', {
+        details: {source, value: raw},
+        hint: 'use a number plus ms/s/m/h, e.g. "10m".',
+      })
   );
 
   return ms;
@@ -184,11 +193,13 @@ function labels(
 ): readonly string[] | undefined {
   if (raw === undefined || raw === null) return undefined;
 
-  assert(
+  ensure(
     Array.isArray(raw) && raw.every((value) => typeof value === 'string'),
-    new DataError(`${source}: "${key}" must be an array of strings`, {
-      hint: `write it as {"${key}": ["needs-human"]}.`,
-    })
+    () =>
+      new DataError(`"${key}" must be an array of strings`, {
+        details: {source},
+        hint: `write it as {"${key}": ["needs-human"]}.`,
+      })
   );
 
   return raw;
@@ -197,20 +208,26 @@ function labels(
 function parkedRoles(raw: unknown, source: string): readonly Role[] {
   if (raw === undefined || raw === null) return DEFAULT_CONFIG.parkedRoles;
 
-  assert(
+  ensure(
     Array.isArray(raw) && raw.every((value) => typeof value === 'string'),
-    new DataError(`${source}: "parkedRoles" must be an array of strings`, {
-      hint: `write it as {"parkedRoles": ["awaiting-external", "paused"]}.`,
-    })
+    () =>
+      new DataError('"parkedRoles" must be an array of strings', {
+        details: {source},
+        hint: `write it as {"parkedRoles": ["awaiting-external", "paused"]}.`,
+      })
   );
 
   return raw.map((value) => {
-    assert(
+    ensure(
       isRole(value),
-      new DataError(
-        `${source}: "parkedRoles" names "${value}", which is not a protocol role`,
-        {hint: `use one of: ${ROLE_LIST}.`}
-      )
+      () =>
+        new DataError(
+          '"parkedRoles" names a value that is not a protocol role',
+          {
+            details: {source, value},
+            hint: `use one of: ${ROLE_LIST}.`,
+          }
+        )
     );
     return value;
   });

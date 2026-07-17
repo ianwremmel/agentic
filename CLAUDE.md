@@ -123,9 +123,10 @@ Consequences worth remembering:
 
 - Arguments: [`node:util` `parseArgs`](https://nodejs.org/api/util.html#utilparseargsconfig).
 - Persistence: [`node:sqlite`](https://nodejs.org/api/sqlite.html).
-- Assertions: `node:assert`. Prefer `assert` over `if (…) throw`, and assert
-  against a real error — `assert(cond, new DataError(msg, {hint}))` — so the
-  failure carries its own remedy.
+- Assertions: `node:assert` for invariants. When the failure is a taxonomy
+  error, use the function form — `ensure(cond, () => new DataError(msg,
+  {hint}))` from `cli/lib/errors.mts` — so the failure carries its own remedy
+  and the error is only constructed when the assertion fails.
 
 ### Errors are read by an agent
 

@@ -4,10 +4,11 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
+import {EnvironmentError} from '../errors.mts';
 import {Database} from './database.mts';
 
 describe('schema version', () => {
-  it('refuses a database another schema version wrote', async () => {
+  it('refuses a database another schema version wrote, naming the version found', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-db-'));
     const file = path.join(dir, 'dispatch.db');
 
@@ -15,7 +16,15 @@ describe('schema version', () => {
     db.run("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
     await db.close();
 
-    await assert.rejects(() => Database.open(file), /uses schema version 1/);
+    await assert.rejects(
+      () => Database.open(file),
+      (error: unknown) => {
+        assert.ok(error instanceof EnvironmentError);
+        assert.match(error.message, /another schema version/u);
+        assert.equal(error.details?.found, '1');
+        return true;
+      }
+    );
   });
 });
 

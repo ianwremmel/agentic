@@ -32,9 +32,10 @@ export class Database {
         await mkdir(dirname(path), {recursive: true});
       } catch (cause) {
         throw new EnvironmentError(
-          `cannot create the directory for the dispatch database at ${path}`,
+          'cannot create the directory for the dispatch database',
           {
             cause,
+            details: {path},
             hint: 'check the path is writable, or point --db somewhere else.',
           }
         );
@@ -57,13 +58,11 @@ export class Database {
       return database;
     } catch (cause) {
       if (cause instanceof DispatchError) throw cause;
-      throw new EnvironmentError(
-        `cannot open the dispatch database at ${path}`,
-        {
-          cause,
-          hint: 'check the file is a readable, writable SQLite database and the disk is not full. If it is locked, another dispatch command is mid-write — retry shortly. Deleting the file forces a rebuild.',
-        }
-      );
+      throw new EnvironmentError('cannot open the dispatch database', {
+        cause,
+        details: {path},
+        hint: 'check the file is a readable, writable SQLite database and the disk is not full. If it is locked, another dispatch command is mid-write — retry shortly. Deleting the file forces a rebuild.',
+      });
     }
   }
 
@@ -83,8 +82,9 @@ export class Database {
 
     if (row !== undefined && row.value !== String(SCHEMA_VERSION)) {
       throw new EnvironmentError(
-        `the dispatch database at ${path} uses schema version ${String(row.value)}; this CLI needs ${String(SCHEMA_VERSION)}`,
+        'the dispatch database was written by another schema version',
         {
+          details: {path, found: String(row.value), needs: SCHEMA_VERSION},
           hint: 'delete the file and re-run a full sync. Claims and recorded reviews go with it — release or re-record what still matters first.',
         }
       );

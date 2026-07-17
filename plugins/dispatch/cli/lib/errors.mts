@@ -20,11 +20,11 @@ export interface DispatchErrorOptions extends ErrorOptions {
   /** What to do about it, written for the agent that ran the command. */
   readonly hint?: string;
   /**
-   * The usage to print with this error, when it is not the invoked command's.
-   * A subcommand group sets it, so that `graph ingest --bogus` answers with
-   * ingest's flags rather than the list of graph subcommands.
+   * Facts about the failure — a path, a config key, a rejected value — rendered
+   * by toString() after the message, so throw sites pass them as data instead
+   * of splicing them into the message string.
    */
-  readonly usage?: string;
+  readonly details?: Readonly<Record<string, string | number>>;
 }
 
 /** Render a thrown value for the printed failure, whatever it turned out to be. */
@@ -69,46 +69,73 @@ export class DispatchError extends Error {
   override readonly name: string = 'DispatchError';
   readonly exitCode: number = EXIT_FAILURE;
   readonly hint: string | undefined;
+  readonly details: Readonly<Record<string, string | number>> | undefined;
 
   constructor(message: string, options: DispatchErrorOptions = {}) {
     super(message, options);
     this.hint = options.hint;
+    this.details = options.details;
   }
 
   /**
-   * The failure as the CLI prints it on the `error:` line — the message, then
-   * the messages of the cause chain it wraps. Owning the formatting here lets
-   * a throw site pass the underlying error as `cause` instead of splicing its
-   * text into the message.
+   * The failure as the CLI prints it on the `error:` line — the message, its
+   * details, then the messages of the cause chain it wraps. Owning the
+   * formatting here lets a throw site pass the underlying error as `cause` and
+   * the facts as `details` instead of splicing text into the message.
    */
   override toString(): string {
-    return [this.message, ...describeChain(this.cause)].join(': ');
+    const details =
+      this.details === undefined
+        ? ''
+        : ` (${Object.entries(this.details)
+            .map(([key, value]) => `${key}=${String(value)}`)
+            .join(', ')})`;
+    return [`${this.message}${details}`, ...describeChain(this.cause)].join(
+      ': '
+    );
   }
 }
 
 /** The caller invoked the CLI wrong: an unknown flag, a missing argument. */
 export class UsageError extends DispatchError {
-  override readonly name = 'UsageError';
+  override readonly name: string = 'UsageError';
   override readonly exitCode = EXIT_USAGE;
-  /** Whose usage to print, when it is not the invoked command's. */
-  readonly usage: string | undefined;
 
-  constructor(message: string, options: DispatchErrorOptions = {}) {
+  /**
+   * A usage error's cause is the error it re-tags (a subcommand group or the
+   * runner wrapping it), whose message this one already carries — so unlike
+   * the base class, toString() never appends the cause.
+   */
+  override toString(): string {
+    return this.message;
+  }
+}
+
+export interface TaggedUsageErrorOptions extends DispatchErrorOptions {
+  /**
+   * The usage to print with this error. A subcommand group tags its child's,
+   * so that `graph ingest --bogus` answers with ingest's flags rather than the
+   * list of graph subcommands.
+   */
+  readonly usage: string;
+}
+
+/**
+ * A usage error tagged with the usage block to print. Only the layers that
+ * know which usage applies construct it — the runner and the subcommand
+ * groups — wrapping the {@link UsageError} a command threw.
+ */
+export class TaggedUsageError extends UsageError {
+  override readonly name = 'TaggedUsageError';
+  readonly usage: string;
+
+  constructor(message: string, options: TaggedUsageErrorOptions) {
     super(message, options);
     this.usage = options.usage;
   }
 
-  /**
-   * A usage error's cause is the error it re-tags (a subcommand group or the
-   * runner attaching a usage), whose message this one already carries — so
-   * unlike the base class, toString() never appends the cause. It renders the
-   * usage instead, so throw sites tag the error rather than splice usage text
-   * into the message.
-   */
   override toString(): string {
-    return this.usage === undefined
-      ? this.message
-      : `${this.message}\n\nusage: ${this.usage}`;
+    return `${this.message}\n\nusage: ${this.usage}`;
   }
 }
 
@@ -135,8 +162,7 @@ export class DataError extends DispatchError {
  * caller cannot violate, but its AssertionError carries a stack trace and reads
  * as a crash; a bad flag is a usage error, so it gets its own assertion.
  *
- * Where the failure deserves a hint, assert against the error itself:
- * `assert(condition, new DataError(message, {hint}))`.
+ * Where the failure deserves a hint or details, use {@link ensure}.
  */
 export function assertUsage(
   condition: unknown,
@@ -144,5 +170,19 @@ export function assertUsage(
 ): asserts condition {
   if (!condition) {
     throw new UsageError(message);
+  }
+}
+
+/**
+ * `assert` against a taxonomy error, built lazily: the factory only runs when
+ * the assertion fails, so the passing path never pays for constructing the
+ * error (or the strings inside it).
+ */
+export function ensure(
+  condition: unknown,
+  error: () => DispatchError
+): asserts condition {
+  if (!condition) {
+    throw error();
   }
 }

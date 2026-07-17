@@ -1,8 +1,6 @@
-import assert from 'node:assert';
-
 import {requestsHelp} from './args.mts';
 import type {Command} from './command.mts';
-import {UsageError} from './errors.mts';
+import {ensure, TaggedUsageError, UsageError} from './errors.mts';
 import {writeLine} from './io.mts';
 
 export interface GroupSpec {
@@ -54,15 +52,18 @@ export function group({name, summary, path, children}: GroupSpec): Command {
         return;
       }
 
-      assert(
+      ensure(
         subcommand !== undefined && !subcommand.startsWith('-'),
-        new UsageError(`${name} needs a subcommand`, {usage})
+        () => new TaggedUsageError(`${name} needs a subcommand`, {usage})
       );
 
       const child = byName.get(subcommand);
-      assert(
+      ensure(
         child !== undefined,
-        new UsageError(`unknown ${name} subcommand "${subcommand}"`, {usage})
+        () =>
+          new TaggedUsageError(`unknown ${name} subcommand "${subcommand}"`, {
+            usage,
+          })
       );
 
       const childArgs = argv.slice(1);
@@ -80,8 +81,11 @@ export function group({name, summary, path, children}: GroupSpec): Command {
         // usage. Only the group knows which child ran, so it tags the error here;
         // otherwise the CLI would answer a bad `graph ingest` flag with the list
         // of graph subcommands, which says nothing about the flag.
-        if (error instanceof UsageError && error.usage === undefined) {
-          throw new UsageError(error.message, {
+        if (
+          error instanceof UsageError &&
+          !(error instanceof TaggedUsageError)
+        ) {
+          throw new TaggedUsageError(error.message, {
             cause: error,
             usage: child.usage,
             ...(error.hint === undefined ? {} : {hint: error.hint}),

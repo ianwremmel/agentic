@@ -3,10 +3,14 @@
 #
 # Usage: pr-status <pr>
 #
-# Config comes from the plugin's userConfig, which the harness exports to this
-# subprocess as CLAUDE_PLUGIN_OPTION_* — the invoking skill never forwards it.
-# Only CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN is required (the operator sets it in
-# the plugin config); the script errors, pointing at the plugin config, if unset.
+# Config comes from the plugin's userConfig. The harness exports
+# CLAUDE_PLUGIN_OPTION_* to hook processes only — commands the model runs via
+# the Bash tool never receive them — so when
+# CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN is absent from the environment, the
+# script reads the option from Claude Code's own settings files (managed →
+# project local → project → user; first match wins). operator_login is the
+# only required option; the script errors, pointing at the plugin config, if
+# it can't be resolved either way.
 #
 # Requires: gh + jq (hard — the script exits if either is missing). git and
 # claude are optional: content_present (terminal resolution) and summarize
@@ -25,12 +29,64 @@ for _tool in gh jq; do
     || { echo "pr-status: required tool not found on PATH: $_tool" >&2; exit 3; }
 done
 
-# Required plugin option. If unset, the operator hasn't configured the dispatch
-# plugin — surface that (the agent must NOT invent a login or fall back to the
-# ticket assigner; it's the operator's to set). §2.2.2 Operator identity.
-: "${CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN:?the dispatch plugin option operator_login is not set; the operator must configure it in the plugin config — pr-status cannot classify reviews without it}"
+# Required plugin option (§2.2.2 Operator identity). The env var wins when set
+# (hook processes get it injected; a caller may also export it). Otherwise read
+# it from the settings files Claude Code itself reads, in Claude Code's
+# precedence order. The plugin key is matched as `dispatch` or `dispatch@<any
+# marketplace>` — the marketplace name is chosen at install time, so it can't
+# be hardcoded. If nothing resolves, the operator hasn't configured the
+# dispatch plugin — surface that (the agent must NOT invent a login or fall
+# back to the ticket assigner; it's the operator's to set).
+resolve_operator_login() {
+  if [[ -n "${CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN:-}" ]]; then
+    printf '%s' "$CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN"
+    return 0
+  fi
+  # CLAUDE_PROJECT_DIR is only injected into hook processes; fall back to the
+  # enclosing git worktree, or the current directory outside one (the script
+  # requires a worktree anyway and fails later in gh if there isn't one).
+  local project_root
+  project_root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+  # ${HOME:-} keeps `set -u` from aborting the whole lookup when HOME is unset;
+  # the resulting /.claude/... path simply fails the -f test.
+  local -a settings_files=(
+    '/etc/claude-code/managed-settings.json'
+    '/Library/Application Support/ClaudeCode/managed-settings.json'
+    "$project_root/.claude/settings.local.json"
+    "$project_root/.claude/settings.json"
+    "${HOME:-}/.claude/settings.json"
+  )
+  local f login
+  for f in "${settings_files[@]}"; do
+    [[ -f "$f" ]] || continue
+    # A file that exists but doesn't parse is warned about and skipped rather
+    # than treated as "no login found" silently — otherwise a corrupt
+    # higher-precedence file invisibly hands the answer to a lower one.
+    if ! login="$(jq -r '
+      [ (.pluginConfigs // {})
+        | to_entries[]
+        | select(.key == "dispatch" or (.key | startswith("dispatch@")))
+        | .value.options.operator_login // empty
+        | select(. != "")
+      ] | first // empty
+    ' "$f" 2>/dev/null)"; then
+      echo "pr-status: warning: could not parse $f; skipping it for operator_login resolution" >&2
+      continue
+    fi
+    if [[ -n "$login" ]]; then
+      printf '%s' "$login"
+      return 0
+    fi
+  done
+  return 1
+}
 
-OPERATOR_LC="$(printf '%s' "$CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
+OPERATOR_LOGIN="$(resolve_operator_login)" || {
+  echo "pr-status: the dispatch plugin option operator_login is not set; the operator must configure it in the dispatch plugin config (or export CLAUDE_PLUGIN_OPTION_OPERATOR_LOGIN) — pr-status cannot classify reviews without it" >&2
+  exit 3
+}
+
+OPERATOR_LC="$(printf '%s' "$OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
 
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 SLUG="${REPO/\//__}"

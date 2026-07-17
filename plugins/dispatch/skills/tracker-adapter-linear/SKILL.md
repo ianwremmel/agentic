@@ -5,11 +5,6 @@ description: Linear tracker adapter for dispatch — binds work-ticket's roles a
 
 # tracker-adapter-linear
 
-[`work-ticket`](../work-ticket/SKILL.md) reads Identity, Role map, Operations,
-and Quirks; [`build-graph`](../build-graph/SKILL.md) reads Role map, Quirks,
-and Graph fetch; [`milestone-review`](../milestone-review/SKILL.md) reads
-Identity, Operations, Quirks, and Review artifact.
-
 ## Identity
 
 | Field        | Value                                 |

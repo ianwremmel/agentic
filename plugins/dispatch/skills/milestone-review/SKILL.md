@@ -29,14 +29,17 @@ Status to the session is fine; standalone, also report the outcome there.
 
 ## Tracker adapter
 
-Resolve and load the `tracker-adapter-<id>` skill exactly as
-[`work-ticket`](../work-ticket/SKILL.md#tracker) does (URL shape, then id
-shape, then `${user_config.tracker}`; most specific same-id skill wins,
-wholesale). You read its Identity, Operations, Quirks, and **Review artifact**
-sections — the last names the venue that holds a review outcome and its
-comment thread. With no adapter, best effort: drive the tracker's native MCP
-server, pick a venue attached to the milestone (or its project) that can hold
-the outcome and a comment thread, and log an `INFO` naming your choice.
+Tracker reads and writes run through a **tracker adapter** — a skill named
+`tracker-adapter-<id>`, the one place that knows the platform's tool calls.
+Pick it: the installed adapter whose ticket-URL shape matches the project's
+tracker; failing that, `${user_config.tracker}`. When several skills carry
+the same id, the most specific wins (repo, then personal, then plugin),
+wholesale — read only the winner. You use its Identity, Operations, Quirks,
+and **Review artifact** sections — the last names the venue that holds a
+review outcome and its comment thread. With no adapter, best effort: drive
+the tracker's native MCP server, pick a venue attached to the milestone (or
+its project) that can hold the outcome and a comment thread, and log an
+`INFO` naming your choice.
 
 ## Claim
 
@@ -45,15 +48,15 @@ The milestone's claim is your lock — take it before reading anything:
 
 - `claimed` / `refreshed` → proceed.
 - `reclaimed` → sanctioned takeover of a dead run. A reclaim does not re-check
-  eligibility, so first confirm the milestone is still ready-for-review and
-  unreviewed (`dispatch graph summary`) — the graph may have moved under the
-  dead run; if it isn't, release and exit. Then scan the review-artifact venue
-  for this episode's sentinel (below): an artifact that already records the
-  outcome for the current member set only needs the `record-review`; anything
-  less, review afresh.
+  eligibility, so first confirm the milestone is still ready for review and
+  unreviewed (`dispatch graph milestone show --id <milestone>`) — the graph
+  may have moved under the dead run; if it isn't, release and exit. Then scan
+  the review-artifact venue for this episode's sentinel (below): an artifact
+  that already records the outcome for the current member set only needs the
+  `record-review`; anything less, review afresh.
 - `held` (exit 3) → another review is live; stop.
-- not claimable (exit 4) → the milestone is not ready-unreviewed, or the graph
-  doesn't know it. Standalone: refresh the graph
+- not claimable (exit 4) → the milestone is not ready for review, its review
+  is already recorded, or the graph doesn't know it. Standalone: refresh the graph
   ([`build-graph`](../build-graph/SKILL.md)) and retry once; still refused →
   nothing to review, report and stop. Dispatched: the graph moved under the
   dispatch; report and exit.
@@ -67,8 +70,8 @@ re-dispatched.
 
 ## The review
 
-1. **Members** — the milestone's tickets from the graph (`dispatch graph doc`,
-   nodes with this milestone's id). Readiness means every member is already
+1. **Members** — `dispatch graph milestone show --id <milestone>` prints the
+   gate state and the member nodes. Readiness means every member is already
    `verified` or `canceled` and every transitive dependency of the milestone
    is resolved — don't re-verify members; judge their evidence.
 2. **Evidence** — through the adapter: the milestone's goal (its description),
@@ -77,8 +80,8 @@ re-dispatched.
 3. **Judge** — was the goal achieved, and is follow-up work needed? A DoD's
    deferred items already have follow-up tickets; what you are looking for is
    the gaps *between* tickets — an aim the milestone promised that no ticket
-   delivered or deferred-with-a-ticket, or member evidence that contradicts
-   the goal.
+   delivered or deferred with a follow-up ticket, or member evidence that
+   contradicts the goal.
 
 ## Follow-ups — the gate stays closed
 
@@ -115,12 +118,14 @@ artifact exists (post it stating what is pending, without recording a
 verdict), solicit the question as a comment on it tagging ≥1 human, log `WAIT`
 (name the artifact and the awaited answer), and poll the artifact's thread —
 lazily (minutes, then tens of minutes; never faster than once per minute),
-heartbeating the claim each poll. Keep ≤1 open question; never record the
-outcome until an addressable response (an answer, a directive, an explicit
-decline) resolves it. On resolution: react with a terminal signal, log
-`RESUME`, post a follow-up on the thread when the response was substantive,
-and finish the review. Both modes wait here — a review holds no compute slot,
-so waiting is cheap.
+heartbeating the claim each poll. Ask everything the verdict needs — batch
+related questions into one comment — but scan the thread first and never
+re-ask a question that is already pending (that is what keeps a reclaimed run
+from duplicating it). Don't record the outcome until an addressable response
+(an answer, a directive, an explicit decline) resolves each open question. On
+resolution: react with a terminal signal, log `RESUME`, post a follow-up on
+the thread when the response was substantive, and finish the review. Both
+modes wait here — a review holds no compute slot, so waiting is cheap.
 
 ## Log
 

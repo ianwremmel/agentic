@@ -77,6 +77,29 @@ describe('building and reading the graph', () => {
     assert.match(stdout, /<ticket id="T2" rank="1"/u);
   });
 
+  it('milestone show prints one milestone and only its members', async () => {
+    const db = await graphDb();
+    await seed(db);
+
+    const {code, stdout} = await run(db, ['milestone', 'show', '--id', 'M1']);
+    assert.equal(code, 0);
+    assert.match(
+      stdout,
+      /<milestone id="M1"[^>]*ready-for-review="true" review-recorded="false"/u
+    );
+    assert.match(stdout, /<node id="T1"/u);
+    assert.doesNotMatch(stdout, /<node id="T2"/u);
+  });
+
+  it('milestone show exits 4 on a milestone the graph does not hold', async () => {
+    const db = await graphDb();
+    await seed(db);
+
+    const {code, stderr} = await run(db, ['milestone', 'show', '--id', 'M9']);
+    assert.equal(code, 4);
+    assert.match(stderr, /no milestone "M9"/u);
+  });
+
   it('refuses to record a review of a milestone with open work', async () => {
     const db = await graphDb();
     await seed(db);

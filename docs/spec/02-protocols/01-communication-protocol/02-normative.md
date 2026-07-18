@@ -33,6 +33,9 @@ infer its own mode from its account's type or name.
 ### Default
 
 **If no `credential_mode` is configured, the writer MUST default to Mode B.**
+A `credential_mode` set to any value other than `dedicated` or `shared` is a
+configuration error: the writer MUST surface it to the operator rather than
+guess a mode.
 
 ## Account classification (read side)
 

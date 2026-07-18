@@ -146,5 +146,5 @@ format to the PR this run drives; a ticket-level transition (the aggregate
 
 ```text
 State: <prev-role> → <new-role>
-Rationale: <one line; required for corrective and cancel transitions>
+Rationale: <one line; required for corrective, park, and cancel transitions>
 ```

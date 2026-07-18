@@ -169,7 +169,7 @@ PR's status only via `deliver`.
 
 Intermediate merges are recorded, not promoted to `delivered`. No `finished`
 where the adapter leaves it unmapped (collapse `in-review → delivered`).
-Corrective transitions carry a rationale.
+Corrective transitions, parks, and cancels carry a rationale.
 Emit no unenumerated transition; every change → a `TRANSITION` log **and** a
 state-change comment on the primary venue.
 

@@ -226,5 +226,5 @@ State-change comment body, exactly (credential-mode wrapping applies):
 
 ```text
 State: <prev-role> → <new-role>
-Rationale: <one line; required for corrective and cancel transitions>
+Rationale: <one line; required for corrective, park, and cancel transitions>
 ```

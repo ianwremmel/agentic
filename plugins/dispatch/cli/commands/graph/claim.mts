@@ -224,19 +224,26 @@ function claimArgs(
     strict: true,
   });
 
+  // An explicitly empty flag is an error, never a silent fallback: `--id ""`
+  // must not widen a heartbeat to agent scope, and `--agent ""` must not mint.
+  if (values.id !== undefined) {
+    assertUsage(values.id.trim() !== '', `${where}: --id must not be empty`);
+  }
+  if (values.agent !== undefined) {
+    assertUsage(
+      values.agent.trim() !== '',
+      `${where}: --agent must not be empty`
+    );
+  }
   assertUsage(
-    modes.optionalId === true || (values.id !== undefined && values.id !== ''),
+    modes.optionalId === true || values.id !== undefined,
     `${where} needs --id`
   );
   assertUsage(
-    modes.mintAgent === true ||
-      (values.agent !== undefined && values.agent !== ''),
+    modes.mintAgent === true || values.agent !== undefined,
     `${where} needs --agent (the agent's session id)`
   );
-  const agent =
-    values.agent !== undefined && values.agent !== ''
-      ? values.agent
-      : mintAgentId('wt');
+  const agent = values.agent ?? mintAgentId('wt');
 
   const checkout: CheckoutInfo = {};
   if (values.worktree !== undefined) {
@@ -255,7 +262,7 @@ function claimArgs(
   }
 
   return {
-    id: values.id === '' ? undefined : values.id,
+    id: values.id,
     agent,
     staleFlag: values['stale-after'],
     checkout:

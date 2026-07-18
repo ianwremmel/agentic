@@ -97,7 +97,7 @@ From any state: PR closed, or operator "stop" → read `<terminal>` from
   advance the ticket. Surface any `error=` breadcrumb — never claim delivery on
   a guess.
 
-Worktree cleanup happens on any closure.
+On any closure, remove any worktree you created.
 
 ## Per-concern handling
 

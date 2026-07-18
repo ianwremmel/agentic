@@ -239,8 +239,20 @@ function claimArgs(
       : mintAgentId('wt');
 
   const checkout: CheckoutInfo = {};
-  if (values.worktree !== undefined) checkout.worktree = values.worktree;
-  if (values.branch !== undefined) checkout.branch = values.branch;
+  if (values.worktree !== undefined) {
+    assertUsage(
+      values.worktree.trim() !== '',
+      `${where}: --worktree must name a path, not be empty`
+    );
+    checkout.worktree = values.worktree;
+  }
+  if (values.branch !== undefined) {
+    assertUsage(
+      values.branch.trim() !== '',
+      `${where}: --branch must name a branch, not be empty`
+    );
+    checkout.branch = values.branch;
+  }
 
   return {
     id: values.id === '' ? undefined : values.id,

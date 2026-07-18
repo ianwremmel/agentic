@@ -5,13 +5,34 @@ description: Drive a code change to merge through a draft PR — CI, reviews, it
 
 # deliver
 
-Land a code change via a PR. Each tick: run `pr-status`, address every
+Land a code change via a PR. Each tick: run `pr-status <pr>`, address every
 actionable concern, then evaluate the gates to decide whether to transition.
 
 **Operator** = the one human directing this agent; the only human with stop
 authority. Role glossary in [`reference.md`](./reference.md#roles).
 
-**Running `pr-status`.** Run `pr-status <pr>`.
+## Environment
+
+Fixed by plugin config. State these in your first status output; never infer
+any of them:
+
+- The operator is `${user_config.operator_login}`.
+- The operator mode is `${user_config.operator_mode}`.
+- The credential mode is `${user_config.credential_mode}`.
+- Copilot review available: `${user_config.copilot_available}`.
+- The worktree base is `${user_config.worktree_base}`.
+
+Before any other work, read the two files for this environment — and only
+these two; the other mode files describe environments you are not in:
+
+- `mode-${user_config.operator_mode}.md` — the lifecycle, states, and review
+  gates for this operator mode.
+- `credentials-${user_config.credential_mode}.md` — the wire format,
+  notification venue, and review rules for this credential mode.
+
+If either file does not exist, the config value is invalid — stop and ask the
+operator to set `operator_mode` (`solo` or `team`) and `credential_mode`
+(`dedicated` or `shared`) in the dispatch plugin config.
 
 ## Setup
 
@@ -39,18 +60,17 @@ Seven binary signals read from each `pr-status` XML:
 3. **No actionable annotations** — zero `<annotation actionable="true">`.
 4. **No actionable comments** — zero `<comment actionable="true">`.
 5. **No actionable threads** — zero `<thread actionable="true">`.
-6. **Operator-approved** (always required). Any of:
-   - `<review mode="human" role="operator" state="approved">` (Mode A), or
+6. **Operator-approved** (always required). Which signal forms are available —
+   and the lifecycle stage where it's satisfied — come from your credentials
+   and operator-mode files. The full set:
+   - `<review mode="human" role="operator" state="approved">` (dedicated
+     credentials only), or
    - `<reaction emoji="+1">` from the operator on the engagement comment, or
    - a "go ahead"/"lgtm"/"ready" reply from the operator (on the
      engagement comment, the ticket, or out-of-band), or
    - a ticket-side approval (e.g. operator status transition).
-
-   Satisfied during `private_review_*` (team) or `public_review_*` (solo).
-7. **Team-approved** (team mode only). At least one `<review mode="human"
-   role="team" state="approved">` from a non-self reviewer and no current
-   `changes_requested`. Satisfied during `public_review_*`. Trivially satisfied
-   in solo mode.
+7. **Team-approved** (team operator mode only; trivially satisfied in solo).
+   Defined in your operator-mode file.
 
 Gates 1–5 are evaluated every tick outside `starting`/`done`. **Gate failures
 are fixed in place — they don't change state.** Only the conditions on a
@@ -58,73 +78,15 @@ transition edge change state.
 
 ## Lifecycle
 
-States are named by **PR visibility**: `private_review_*` is while still draft
-(team mode, operator audience); `public_review_*` is after draft clears
-(operator in solo mode; team reviewers in team mode).
+**Coding only happens in `draft`** — and in any other state only as the fix to
+a gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
+"addressing concerns in place," not advancing the lifecycle.
 
-```mermaid
-stateDiagram-v2
-    [*] --> starting
+### Universal terminal
 
-    starting --> draft: worktree + empty commit + draft PR + plan comment
-
-    draft --> ready_for_copilot_review: ready · gates 1-5 · Copilot available
-    draft --> ready_for_public_review: ready · gates 1-5 · Copilot unavailable · solo mode (draft cleared)
-    draft --> ready_for_private_review: ready · gates 1-5 · Copilot unavailable · team mode (still draft)
-
-    ready_for_copilot_review --> copilot_review_requested: review requested
-
-    copilot_review_requested --> copilot_commented: Copilot left actionable items
-    copilot_review_requested --> ready_for_public_review: Copilot reviewed · zero actionable · solo mode (draft cleared)
-    copilot_review_requested --> ready_for_private_review: Copilot reviewed · zero actionable · team mode (still draft)
-
-    copilot_commented --> ready_for_copilot_review: addressed · gates 1-5 · re-request
-
-    ready_for_private_review --> private_review_requested: operator engagement sent (Mode A request, or Mode B ticket/out-of-band)
-
-    private_review_requested --> private_review_commented: operator commented (non-binding)
-    private_review_requested --> private_review_requested_changes: operator changes_requested
-    private_review_requested --> private_review_approved: gate 6 satisfied
-
-    private_review_commented --> ready_for_private_review: addressed · gates 1-5 · re-request
-    private_review_requested_changes --> ready_for_private_review: addressed · gates 1-5 · re-request (required to unblock)
-
-    private_review_approved --> ready_for_public_review: operator cleared draft
-
-    ready_for_public_review --> public_review_requested: review requested (operator excluded in team mode)
-    ready_for_public_review --> public_review_requested: no eligible non-self reviewer (skip request)
-
-    public_review_requested --> public_review_commented: reviewer commented (non-binding)
-    public_review_requested --> public_review_requested_changes: reviewer changes_requested
-    public_review_requested --> public_review_approved: review approval (Gate 6 solo, Gate 7 team)
-
-    public_review_commented --> ready_for_public_review: addressed · gates 1-5 · re-request
-    public_review_requested_changes --> ready_for_public_review: addressed · gates 1-5 · re-request (required to unblock merge)
-
-    public_review_approved --> ready_for_merge: gates 1-5 still hold
-
-    ready_for_merge --> merged: PR closed (terminal resolved by pr-status)
-
-    merged --> done: worktree removed
-
-    done --> [*]
-```
-
-Copilot review is `${user_config.copilot_available}` on this install — when
-`false`, take the `Copilot unavailable` edges and skip the `copilot_*` states
-entirely.
-
-`private_review_*` is unreachable in solo mode. **Who clears draft depends on
-mode.** In solo mode the agent clears draft on the edge into
-`ready_for_public_review` (out of `copilot_review_requested`, or `draft` when
-Copilot is unavailable). In team mode the agent **never** clears draft — the
-operator moves the PR from draft to ready themselves; the agent observes the PR
-is no longer a draft and proceeds into `ready_for_public_review`. (In solo mode,
-if the operator clears draft first, the agent likewise just proceeds.)
-
-**Universal terminal** (from any state): PR closed, or operator "stop" → read
-`<terminal>` from `pr-status` → acknowledge with a terminal signal → `merged` →
-`done`. `<terminal state>` is binary — *did the change ship*, not *how*:
+From any state: PR closed, or operator "stop" → read `<terminal>` from
+`pr-status` → acknowledge with a terminal signal → `merged` → `done`.
+`<terminal state>` is binary — *did the change ship*, not *how*:
 
 - **`shipped`** — change present in base (merged, fast-forward, or squash/rebase
   by external tooling). Acknowledge delivered (`Shipped.`/`rocket`). For a
@@ -135,63 +97,7 @@ if the operator clears draft first, the agent likewise just proceeds.)
   advance the ticket. Surface any `error=` breadcrumb — never claim delivery on
   a guess.
 
-This covers the team-mode sole-reviewer case (merge fires this edge directly out
-of `public_review_requested`). Worktree cleanup happens on any closure.
-
-## States
-
-| State                              | Do                                                                                                              | Poll?    |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
-| `starting`                         | Create or locate the worktree (see Setup).                                                                      | no       |
-| `draft`                            | **Coding happens here.** Edit; pre-push review; push. When ready, check gates 1–5.                              | no       |
-| `ready_for_copilot_review`         | Request Copilot review.                                                                                         | no       |
-| `copilot_review_requested`         | Await Copilot's review.                                                                                         | CI       |
-| `copilot_commented`                | Address each actionable Copilot item; push fix(es).                                                             | no       |
-| `ready_for_private_review`         | (Team.) Engage the operator while in draft: post the engagement comment (agent-reply marker + `<!-- agent-engagement:<agent-id> -->` sentinel) and notify — Mode A: PR review request to `operator_login`; Mode B: ticket/out-of-band ([reference.md](./reference.md#review-rules)). | no       |
-| `private_review_requested`         | (Team.) Await the operator's signal.                                                                            | reviewer |
-| `private_review_commented`         | (Team.) Address each item; push; re-request.                                                                    | no       |
-| `private_review_requested_changes` | (Team.) Address; push; **re-request required** — blocks public review.                                          | no       |
-| `private_review_approved`          | (Team.) **Don't clear draft** — the operator does. Poll until the PR is no longer a draft, then → `ready_for_public_review`. | reviewer |
-| `ready_for_public_review`          | Request public review. Solo: post the engagement comment (agent-reply + `agent-engagement` sentinel) and engage the operator. Team: request team reviewer(s), **excluding the operator**. Never self-request. Mode A/B per reference. | no       |
-| `public_review_requested`          | Await the public reviewer.                                                                                      | reviewer |
-| `public_review_commented`          | Address each item; push; re-request.                                                                            | no       |
-| `public_review_requested_changes`  | Address; push; **re-request required** — blocks merge.                                                          | no       |
-| `public_review_approved`           | Confirm gates 1–5 still hold; else fix in place.                                                                | no       |
-| `ready_for_merge`                  | Await merge. **Don't self-merge unless instructed.**                                                            | merge    |
-| `merged`                           | Read `<terminal>`. **shipped** → acknowledge delivered; advance a linked ticket only if this PR completes it. **abandoned** → acknowledge not-delivered, leave the ticket (surface any `error=`). Either way, remove any worktree you created. | no       |
-| `done`                             | Terminal.                                                                                                       | —        |
-
-**Coding only happens in `draft`** — and in any other state only as the fix to a
-gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
-"addressing concerns in place," not advancing the lifecycle.
-
-### Solo vs team mode
-
-**`team_mode` is `${user_config.team_mode}` — never infer it.** Mode picks which states are
-reachable and who clears draft (the agent in solo, the operator in team).
-
-- **Solo** (default). Operator is the only human reviewer. After Copilot, the
-  agent clears draft and engages the operator as the public reviewer.
-  `private_review_*` unreachable. Gate 6 satisfied during `public_review_*`;
-  Gate 7 trivial.
-- **Team.** Operator gets a private pre-review while still draft. After the
-  operator approves (Gate 6 during `private_review_*`), the operator — **not**
-  the agent — clears draft (moves the PR to ready); the agent observes it's
-  non-draft and engages the rest of the team (Gate 7 during `public_review_*`).
-  Operator is **excluded** from the public reviewer set.
-
-  *Early clear.* If the operator clears draft **before** Gate 6 is satisfied,
-  draft-clear alone is not approval — stay in `private_review_*` and keep
-  awaiting the operator's Gate 6 signal (re-engage if needed). Advance to
-  `ready_for_public_review` only once Gate 6 holds; the draft is already clear.
-
-**No eligible reviewer.** If no non-self human reviewer exists in
-`ready_for_public_review`, skip the request but still transition to
-`public_review_requested` and keep polling on the reviewer cadence. Solo: the
-operator is still the binding reviewer (Gate 6 via non-formal signals). Team: if
-no non-self, non-operator reviewer exists, Gate 7 is unreachable — the PR merges
-out-of-band, the agent observes closure on a poll, `merged → done` fires.
-"Nobody to ask" never terminates.
+Worktree cleanup happens on any closure.
 
 ## Per-concern handling
 
@@ -271,7 +177,6 @@ poll faster than once per minute.**
 | -------------------------------------- | ---------------------------------------------------------------------------------------- |
 | CI (`<checks state="pending">`)        | 60 s; lengthen to ~5 min once past the project's typical CI duration.                    |
 | Reviewer reply after a request         | 5 min for the first hour; then 30 min.                                                    |
-| Operator to clear draft (team)         | 5 min for the first hour; then 30 min.                                                    |
 | Merge after `ready_for_merge`          | 5 min for the first hour; then 30 min.                                                    |
 
 ### Mechanism
@@ -317,6 +222,6 @@ CI; lengthen the tail for slow reviewers).
 
 ## References
 
-Mode A/B detection, the machine marker + sparkle wrapper, terminal signals,
+The machine marker + sparkle wrapper, terminal signals, engagement mechanics,
 actionability, and the log-line format live in
 [`reference.md`](./reference.md).

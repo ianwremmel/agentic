@@ -83,19 +83,22 @@ load-bearing role terms are agent, operator, and reviewer.
 ### Agent identity and modes
 
 An agent session runs under credentials that identify either a dedicated
-bot/service account or a human user's account. This single fact about the
-account — "who does the platform think is writing?" — determines the **mode**
-for all writes the agent makes in that session:
+bot/service account or a human user's account. The installation declares
+which kind the agent holds via the `credential_mode` configuration value, and
+that declaration determines the **mode** for all writes the agent makes:
 
-- **Mode A** — the account is recognized as a bot or service. The byline
-  already tells readers the author is not human; no additional visual marker
-  is needed.
-- **Mode B** — the account belongs to a human. The byline is
-  indistinguishable from a human comment; a visible sparkle wrapper is
-  required so humans can tell the agent's words from their own.
+- **Mode A** (`credential_mode: dedicated`) — the agent has its own dedicated
+  bot or service account. The byline already tells readers the author is not
+  human; no additional visual marker is needed.
+- **Mode B** (`credential_mode: shared`) — the agent uses the operator's own
+  account. The byline is indistinguishable from a human comment; a visible
+  sparkle wrapper is required so humans can tell the agent's words from their
+  own.
 
-Mode is determined at write time from credentials, not from configuration. On
-uncertainty, default to Mode B. §2.1 defines the full detection predicate.
+A writer's own mode is configuration, never inferred from its account. When
+nothing is configured, default to Mode B. §2.1 also defines the read-side
+predicate for classifying *other* participants' accounts (e.g. review
+authors), which necessarily remains inference-based.
 
 ### Comment venues
 

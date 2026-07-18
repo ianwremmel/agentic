@@ -26,7 +26,7 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | File                                                                      | Contents                                                     |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | [01-narrative.md](02-protocols/01-communication-protocol/01-narrative.md) | Why it exists, modes, venues, review challenge               |
-| [02-normative.md](02-protocols/01-communication-protocol/02-normative.md) | Wire format, mode detection, marker syntax, terminal signals |
+| [02-normative.md](02-protocols/01-communication-protocol/02-normative.md) | Wire format, mode selection, marker syntax, terminal signals |
 
 ### §2.2 — PR Status Protocol
 

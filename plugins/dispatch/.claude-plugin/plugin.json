@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -31,16 +31,22 @@
       "description": "Root directory under which the `deliver` skill creates per-PR worktrees. Layout: <base>/<owner>/<repo>/<branch>.",
       "default": "~/.worktrees"
     },
-    "team_mode": {
-      "type": "boolean",
-      "title": "Team mode",
-      "description": "When true, /deliver adds a private review stage in draft (operator only) before clearing draft for public review (team). When false (default), /deliver clears draft after Copilot and the operator is the public reviewer — no separate private stage.",
-      "default": false
+    "operator_mode": {
+      "type": "string",
+      "title": "Operator mode",
+      "description": "One of `solo` or `team`. `team`: /deliver adds a private review stage in draft (operator only) before clearing draft for public review (team). `solo` (default): /deliver clears draft after Copilot and the operator is the public reviewer \u2014 no separate private stage.",
+      "default": "solo"
+    },
+    "credential_mode": {
+      "type": "string",
+      "title": "Credential mode",
+      "description": "One of `dedicated` or `shared`. `dedicated`: the agent acts under its own dedicated account (bot or agent identity), separate from the operator's. `shared` (default): the agent shares the operator's platform credentials \u2014 agent posts are sparkle-wrapped and review requests can't target the operator. Skills read this value; they never infer it from account names.",
+      "default": "shared"
     },
     "operator_login": {
       "type": "string",
       "title": "Operator GitHub login",
-      "description": "GitHub login of the operator directing this agent. Required — the deliver skill and pr-status script always assume it is set. Targets the operator with PR review requests (Mode A) and classifies <review> elements in pr-status XML; the agent never falls back to the ticket assigner. In Mode B (shared credentials) set this to the shared/authenticated account.",
+      "description": "GitHub login of the operator directing this agent. Required \u2014 the deliver skill and pr-status script always assume it is set. Targets the operator with PR review requests (credential_mode=dedicated) and classifies <review> elements in pr-status XML; the agent never falls back to the ticket assigner. With credential_mode=shared set this to the shared/authenticated account.",
       "required": true
     },
     "tracker": {

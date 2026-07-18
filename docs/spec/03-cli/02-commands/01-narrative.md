@@ -43,7 +43,7 @@ and §2.2 (PR status protocol) at the CLI layer. Specifically:
 - `dispatch ack-annotation` writes the `.ack` marker described in §2.2.
 
 An agent session that uses these commands for all platform writes is guaranteed
-to conform to §2.1 and §2.2 without needing to re-implement mode detection,
+to conform to §2.1 and §2.2 without needing to re-implement mode selection,
 marker syntax, or cache layout.
 
 ## Daemon vs interaction: who calls what

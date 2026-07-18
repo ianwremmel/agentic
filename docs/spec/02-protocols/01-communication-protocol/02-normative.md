@@ -2,16 +2,18 @@
 
 ## Runtime environments
 
-The mode an agent operates in is determined solely by the credentials it holds
-at write time. Environment type, launch mechanism, and configuration do not
-affect mode.
+The mode an agent operates in is declared by the installation's
+`credential_mode` configuration value: `dedicated` ⇒ Mode A
+(agent-credentialed), `shared` ⇒ Mode B (human-credentialed). The declaration
+describes the credentials the agent holds at write time; environment type and
+launch mechanism do not affect mode. Typical declarations:
 
-| # | Environment                 | Typical auth                  | Mode                   |
-| - | --------------------------- | ----------------------------- | ---------------------- |
-| 1 | Claude Code CLI on laptop   | User's platform credentials   | B (human-credentialed) |
-| 2 | Claude Code on the web      | User's platform credentials   | B (human-credentialed) |
-| 3 | Claude Code in a sandbox    | Dedicated `ai-agent` identity | A (agent-credentialed) |
-| 4 | Claude Code iOS / macOS app | User's platform credentials   | B (human-credentialed) |
+| # | Environment                 | Typical auth                  | `credential_mode`    |
+| - | --------------------------- | ----------------------------- | -------------------- |
+| 1 | Claude Code CLI on laptop   | User's platform credentials   | `shared` (Mode B)    |
+| 2 | Claude Code on the web      | User's platform credentials   | `shared` (Mode B)    |
+| 3 | Claude Code in a sandbox    | Dedicated `ai-agent` identity | `dedicated` (Mode A) |
+| 4 | Claude Code iOS / macOS app | User's platform credentials   | `shared` (Mode B)    |
 
 ### Hosted Claude Code clients
 
@@ -22,20 +24,33 @@ venue this specification covers — most notably ticket comments on non-GitHub
 trackers — hosted clients MUST follow this specification the same way the CLI
 does.
 
-## Mode detection
+## Mode selection
 
-Every writer MUST implement a predicate "is this human-credentialed?" and apply
-it at write time. The predicate returns **Mode B** (human-credentialed) or
-**Mode A** (agent-credentialed).
+Every writer MUST resolve its own mode from the `credential_mode`
+configuration value — `dedicated` → Mode A, `shared` → Mode B — and MUST NOT
+infer its own mode from its account's type or name.
 
-### Mode A signals
+### Default
 
-An account is Mode A if **either** of the following holds:
+**If no `credential_mode` is configured, the writer MUST default to Mode B.**
+A `credential_mode` set to any value other than `dedicated` or `shared` is a
+configuration error: the writer MUST surface it to the operator rather than
+guess a mode.
+
+## Account classification (read side)
+
+A reader classifying *other* participants' accounts — e.g. labeling a review's
+author human or bot in §2.2.2 pr-status XML — has no configuration to consult
+and MUST use the following predicate.
+
+### Agent-account signals
+
+An account is agent-credentialed if **either** of the following holds:
 
 1. **Platform-typed identity.** The platform explicitly classifies the account
    as a bot, integration, or service account (e.g. GitHub's `type: "Bot"`
-   field on a user object). Any such classification is Mode A regardless of the
-   account name.
+   field on a user object). Any such classification is agent-credentialed
+   regardless of the account name.
 
 2. **Name matching.** The account identifier (login, display name, or email
    local-part — whichever the platform surfaces) matches at least one of the
@@ -51,10 +66,10 @@ An account is Mode A if **either** of the following holds:
    Name matching applies on every platform, including those that do not support
    typed identities.
 
-### Default
+### Classification default
 
-**If the identity lookup fails or the result is ambiguous, the writer MUST
-default to Mode B.**
+**If the identity lookup fails or the result is ambiguous, the reader MUST
+classify the account as human.**
 
 ## Wire format
 

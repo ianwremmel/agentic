@@ -398,7 +398,8 @@ implementation-defined.
 
 ## Mode classification
 
-The `mode` attribute on `<review>` follows the §2.1.2 Mode A predicate:
+The `mode` attribute on `<review>` follows the §2.1.2 account-classification
+predicate:
 
 - `bot` iff the platform classifies the account as a bot or service identity,
   OR the account identifier matches at least one of the following patterns

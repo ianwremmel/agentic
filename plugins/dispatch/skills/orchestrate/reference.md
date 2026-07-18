@@ -11,7 +11,7 @@ A coordinator gets identifiers and hints, never ticket content:
   `agent` — the CLI-minted claim id the coordinator heartbeats and reports
   under;
 - that it is **dispatched** (final report via `dispatch graph outcome set`
-  expected), plus the identity/mode context it forwards to every `deliver`.
+  expected).
 
 A `pass` scopes the run: `resume` — pick up a crashed run's item (re-derive
 its state from the ticket and PRs); `verify` — validate the aims and post the
@@ -23,8 +23,7 @@ its subtasks resolved; `retry` — re-run a failed verification.
 The brief is the [`milestone-review`](../milestone-review/SKILL.md) skill —
 dispatch a subagent running it; never inline the review yourself. Hand it: the
 `milestone` and `project` from the fill `<review>` element, its `agent` id (it
-heartbeats and releases under it), that it is **dispatched**, and the
-identity/mode context.
+heartbeats and releases under it), and that it is **dispatched**.
 
 Its lock is the milestone's claim: `record-review` releases it on success; the
 agent releases it explicitly when the gate must stay closed (follow-ups
@@ -35,8 +34,9 @@ under a fresh id (the claim reclaims).
 
 One per ticket awaiting a human (a `<human-blocked>` park or a surfaced
 `<failures>` entry), as a ticket comment: leading
-`<!-- agent-reply:dispatch -->` marker, then (inside the body, after any Mode B
-sparkle) the sentinel `<!-- agent-human-alert:dispatch -->`, then what is
+`<!-- agent-reply:dispatch -->` marker, then (inside the body, after the
+sparkle when credentials are shared) the sentinel
+`<!-- agent-human-alert:dispatch -->`, then what is
 needed, why an agent cannot do it, and a request to move the ticket back to an
 available state when done. Scan the ticket's comments for the sentinel first;
 an alert is resolved when a human has responded with addressable content. When

@@ -312,7 +312,7 @@ describe('agent lifecycle bookkeeping', () => {
     const {code, stdout} = await run(db, ['claim', '--id', 'T2']);
     assert.equal(code, 0);
     const match =
-      /<claim id="T2" agent="(wt-\d+-[0-9a-f]{4})" outcome="claimed"\/>/u.exec(
+      /<claim id="T2" agent="(wt-\d+-[0-9a-f]{8})" outcome="claimed"\/>/u.exec(
         stdout
       );
     assert.ok(match, stdout);

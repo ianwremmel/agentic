@@ -44,7 +44,7 @@ describe('fill', () => {
       stdout,
       /<dispatches slots-free="3" tickets="3" reviews="0">/u
     );
-    assert.match(stdout, /<ticket id="T1" agent="wt-\d+-[0-9a-f]{4}"/u);
+    assert.match(stdout, /<ticket id="T1" agent="wt-\d+-[0-9a-f]{8}"/u);
     assert.match(stdout, /<ticket id="T3"/u);
     assert.doesNotMatch(stdout, /<ticket id="T4"/u);
 
@@ -87,7 +87,7 @@ describe('fill', () => {
     const first = await run(db, ['fill']);
     assert.match(
       first.stdout,
-      /<review milestone="M1" project="P" name="M1" agent="review-M1-\d+-[0-9a-f]{4}"\/>/u
+      /<review milestone="M1" project="P" name="M1" agent="review-M1-\d+-[0-9a-f]{8}"\/>/u
     );
 
     // The lock is held live now, so the next tick must not re-dispatch it.

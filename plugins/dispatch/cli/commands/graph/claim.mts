@@ -22,7 +22,7 @@ const CHECKOUT_USAGE =
 
 /** A fresh agent id, unique across concurrent minters on one host. */
 export function mintAgentId(prefix: string): string {
-  return `${prefix}-${String(Date.now())}-${randomBytes(2).toString('hex')}`;
+  return `${prefix}-${String(Date.now())}-${randomBytes(4).toString('hex')}`;
 }
 
 /**

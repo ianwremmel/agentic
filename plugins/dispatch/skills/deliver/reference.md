@@ -138,10 +138,11 @@ Kinds `deliver` emits:
 | `WAIT`       | Entering a poll; message names the venue and awaited outcome.                           |
 | `RESUME`     | The awaited condition is met and work resumes.                                          |
 | `ERROR`      | Errors surfaced but not immediately fatal.                                              |
-| `TRANSITION` | (Ticket-driven runs) a ticket role change.                                             |
+| `TRANSITION` | (Ticket-driven runs) a ticket role change.                                              |
 
-When a linked ticket's role changes, also post a state-change comment to the PR
-(or ticket) in wire format, body exactly:
+When a linked ticket's role changes, also post a state-change comment in wire
+format to the PR this run drives; a ticket-level transition (the aggregate
+`delivered`, `verified`) goes on the ticket instead. Body exactly:
 
 ```text
 State: <prev-role> → <new-role>

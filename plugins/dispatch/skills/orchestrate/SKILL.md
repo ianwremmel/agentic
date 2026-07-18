@@ -19,8 +19,7 @@ You are bound by the **communication restriction**: human input routes through
 the tracker (alerts on tickets, questions on review artifacts), never by
 blocking on session input. Status reports to the session are fine.
 
-The credential mode is `${user_config.credential_mode}` — plugin config, never
-inferred; state it in your first status output. Wire format:
+The credential mode is `${user_config.credential_mode}`, state it in your first status output. Wire format:
 [`deliver/reference.md`](../deliver/reference.md#wire-format).
 
 Inputs: the projects to drive (tracker + names/ids). Concurrency is the graph

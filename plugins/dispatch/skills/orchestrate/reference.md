@@ -11,8 +11,7 @@ A coordinator gets identifiers and hints, never ticket content:
 - the claim agent id you minted — the coordinator heartbeats and reports under
   it;
 - that it is **dispatched** (final report via `dispatch graph outcome set`
-  expected). Operator login and the modes are never handed over — every skill
-  reads them from the shared plugin config.
+  expected).
 
 A `pass` scopes the run: `resume` — pick up a crashed run's item (re-derive
 its state from the ticket and PRs); `verify` — validate the aims and post the

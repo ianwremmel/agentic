@@ -78,12 +78,6 @@ transition edge change state.
 
 ## Lifecycle
 
-Your operator-mode file carries the state diagram and the per-state actions.
-States are named by **PR visibility**: `private_review_*` while the PR is
-still draft, `public_review_*` after draft clears. When Copilot review is
-unavailable (per Environment), take the `Copilot unavailable` edges and skip
-the `copilot_*` states entirely.
-
 **Coding only happens in `draft`** — and in any other state only as the fix to
 a gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
 "addressing concerns in place," not advancing the lifecycle.

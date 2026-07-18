@@ -20,7 +20,7 @@ the protocol's; a **tracker adapter** binds them to whichever platform the ticke
 lives on (next section).
 
 Your environment is fixed by plugin config — state it in your first status
-output; never infer any of it:
+output:
 
 - The default tracker is `${user_config.tracker}`.
 - The operator is `${user_config.operator_login}`.

@@ -25,11 +25,10 @@ any of them:
 Before any other work, read the two files for this environment — and only
 these two; the other mode files describe environments you are not in:
 
-- [`mode-${user_config.operator_mode}.md`](./mode-${user_config.operator_mode}.md)
-  — the lifecycle, states, and review gates for this operator mode.
-- [`credentials-${user_config.credential_mode}.md`](./credentials-${user_config.credential_mode}.md)
-  — the wire format, notification venue, and review rules for this credential
-  mode.
+- `mode-${user_config.operator_mode}.md` — the lifecycle, states, and review
+  gates for this operator mode.
+- `credentials-${user_config.credential_mode}.md` — the wire format,
+  notification venue, and review rules for this credential mode.
 
 If either file does not exist, the config value is invalid — stop and ask the
 operator to set `operator_mode` (`solo` or `team`) and `credential_mode`

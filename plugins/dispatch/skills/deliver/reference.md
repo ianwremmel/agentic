@@ -4,21 +4,14 @@
 
 - **Agent** — the agentic coding assistant doing the work (this skill).
 - **Operator** — the one individual directing the agent; almost certainly
-  human; the only human with stop authority. May share platform credentials
-  with the agent (Mode B).
+  human; the only human with stop authority. Shares platform credentials with
+  the agent when `credential_mode` is `shared`.
 - **Reviewer** — any participant leaving review feedback (Copilot, another agent,
   or a human). The operator may also be a reviewer.
 
-## Mode detection
-
-Determined by the credentials held at write time.
-
-- **Mode A** (agent-credentialed) iff the platform types the account a
-  bot/integration/service account, OR the identifier (login, display name, or
-  email local-part) matches `*copilot*`, `*codex*`, `*claude*`, or `*ai-agent*`
-  case-insensitively.
-- **Mode B** (human-credentialed) otherwise. **On any ambiguity, default to Mode
-  B.**
+The credential mode is plugin config (`credential_mode`: `dedicated` — the
+agent has its own account; `shared` — the agent uses the operator's), stated
+in each skill's Environment section. Never infer it from account names.
 
 ## Wire format
 
@@ -29,8 +22,8 @@ machine marker as its **first line**, alone, no leading whitespace:
 <!-- agent-reply:<agent-id> -->
 ```
 
-In **Mode B**, the body is additionally wrapped in a sparkle block after the
-marker:
+With **shared credentials**, the body is additionally wrapped in a sparkle
+block after the marker:
 
 ```text
 <!-- agent-reply:dispatch -->
@@ -42,9 +35,9 @@ marker:
 ```
 
 The sparkle (U+2728) sits alone, one blank line in from the body each side.
-Never in Mode A. The plan-comment sentinel `<!-- agent-plan:<agent-id> -->` goes
-**inside** the body (after the marker in Mode A, after the opening sparkle in
-Mode B), never as the leading line.
+Never with dedicated credentials. The plan-comment sentinel
+`<!-- agent-plan:<agent-id> -->` goes **inside** the body (after the marker,
+and after the opening sparkle where one applies), never as the leading line.
 
 ## Terminal signals
 
@@ -74,52 +67,27 @@ Text tokens (platforms without reactions) — must be the **last non-empty line*
 ## Review rules
 
 - An agent MUST NOT request review from the account it is authenticated as.
-- A Mode A agent MAY use alternative human credentials to request a
-  human-restricted review type (e.g. Copilot review on GitHub).
-- **Mode B inverse:** on a PR the agent authored under shared credentials, the
-  absence of a formal `changes_requested` does NOT mean "no changes requested" —
-  every operator comment is a question to answer or an implicit change request.
+- Per-credential-mode rules are in your credentials file.
 - The self-request prohibition constrains the *request*, not the loop — the
-  no-eligible-reviewer handling in `SKILL.md` (skip the request, keep polling)
-  still applies.
+  no-eligible-reviewer handling in the operator-mode files (skip the request,
+  keep polling) still applies.
 
-### Operator engagement (deliver-specific)
+### Operator engagement
 
-`deliver` engages the operator on two edges: `ready_for_private_review →
-private_review_requested` (team) and `ready_for_public_review →
-public_review_requested` (solo). Each engagement is two parts:
+`deliver` engages the operator on the edge your operator-mode file marks. Each
+engagement is two parts:
 
-1. **Notification** — the Mode-specific venue below.
+1. **Notification** — the venue your credentials file prescribes.
 2. **Engagement comment** — a top-level PR comment carrying the
    `<!-- agent-reply:<agent-id> -->` marker AND, inside the wrapped body, an
    engagement sentinel `<!-- agent-engagement:<agent-id> -->`. Posted in both
-   Modes (the notification venues aren't PR comments the operator can react to).
-   It anchors reaction-/reply-based Gate 6 signals.
+   credential modes (the notification venues aren't PR comments the operator
+   can react to). It anchors reaction-/reply-based Gate 6 signals.
 
 The sentinel makes the comment classify **non-actionable** (like the plan
 comment) — without it, the agent's own soliciting comment stays actionable
 forever, failing Gate 4 and blocking draft-clear/merge. Do **not** terminal-tag
 it instead: the agent is awaiting approval, not finished.
-
-Notification venue by Mode:
-
-- **Mode A** (separate bot account) — the platform's PR review-request API,
-  targeting `operator_login` (required; the agent fails if it's unset).
-- **Mode B** (shared credentials) — the review-request API can't target the
-  authenticated account, so use the Mode B human-review venues: a ticket comment
-  tagging the operator first, then an implementation-defined out-of-band channel.
-  Operator identity is `operator_login`, which here is the shared/authenticated
-  account.
-
-### Audience by visibility stage
-
-The lifecycle names states by **visibility**, not audience; audience falls out
-of the mode:
-
-| State family       | Visibility          | Audience (solo) | Audience (team)              |
-| ------------------ | ------------------- | --------------- | ---------------------------- |
-| `private_review_*` | draft (not cleared) | unreachable     | operator                     |
-| `public_review_*`  | draft cleared       | operator        | non-operator team reviewer(s) |
 
 ## Actionability
 

@@ -221,13 +221,13 @@ Stage 3 in solo mode, where Stage 2 is also skipped).
 ### Mode selection: solo vs team
 
 The Delivery Protocol supports two delivery shapes selected by a per-installation
-`team_mode` configuration value:
+`operator_mode` configuration value (`solo` or `team`):
 
-- **Solo mode** (default — `team_mode=false`). The operator is the only human
+- **Solo mode** (default — `operator_mode=solo`). The operator is the only human
   reviewer. After Copilot, the agent clears draft and engages the operator as
   the public reviewer directly. The private review stage (Stage 2 below) is
   skipped; Stage 3 (Public review) targets the operator.
-- **Team mode** (`team_mode=true`). The operator is one of several human
+- **Team mode** (`operator_mode=team`). The operator is one of several human
   reviewers. After Copilot, the agent runs Stage 2 (Private review) with the
   PR still in draft, targeting the operator. Only after the operator approves,
   the operator — not the agent — clears draft (the agent MUST NOT); the agent
@@ -242,12 +242,12 @@ in draft (`private_review_*` states); Stage 3 happens after draft is cleared
 
 Reached when ALL of the following hold:
 
-1. `team_mode=true`.
+1. `operator_mode=team`.
 2. The current PR head has a green CI rollup.
 3. No Copilot thread on the PR is actionable per §2.2.
 4. The PR is still in draft (NOT cleared).
 
-When `team_mode=false`, Stage 2 is skipped entirely and the agent proceeds
+When `operator_mode=solo`, Stage 2 is skipped entirely and the agent proceeds
 directly to Stage 3 after the same CI/Copilot conditions.
 
 When Stage 1 was skipped (Copilot unavailable), condition 3 is trivially

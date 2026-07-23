@@ -34,7 +34,8 @@ export const next: Command = {
     'options:',
     '  --project <id>  Restrict to one project.',
     '  --claim         Claim the task atomically as it is picked.',
-    "  --agent <id>    Required with --claim: the claiming agent's session id.",
+    "  --agent <id>    Required with --claim: the claiming agent's session id;",
+    '                  echoed on the claimed <ticket> as agent="…".',
     STALE_AFTER_USAGE,
     STORE_USAGE,
   ].join('\n'),
@@ -87,7 +88,7 @@ export const next: Command = {
 
       await writeLine(
         context.stdout,
-        availableTicket(claimed.entry, undefined, claimed.pass)
+        availableTicket(claimed.entry, undefined, claimed.pass, agent)
       );
       await context.log.info('claimed next task', {
         task: claimed.entry.node.id,

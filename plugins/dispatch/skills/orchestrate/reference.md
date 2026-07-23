@@ -6,10 +6,10 @@ Lookup tables for [`SKILL.md`](./SKILL.md).
 
 A coordinator gets identifiers and hints, never ticket content:
 
-- from the `next --claim` output: the item id (a `<repo>#<n>` id is a bare PR),
-  `url`, `target-kind`, any `branch-hint`, any `pass`;
-- the claim agent id you minted — the coordinator heartbeats and reports under
-  it;
+- from the `fill` output's `<ticket>` element: the item id (a `<repo>#<n>` id
+  is a bare PR), `url`, `target-kind`, any `branch-hint`, any `pass`, and
+  `agent` — the CLI-minted claim id the coordinator heartbeats and reports
+  under;
 - that it is **dispatched** (final report via `dispatch graph outcome set`
   expected).
 
@@ -22,13 +22,13 @@ its subtasks resolved; `retry` — re-run a failed verification.
 
 The brief is the [`milestone-review`](../milestone-review/SKILL.md) skill —
 dispatch a subagent running it; never inline the review yourself. Hand it: the
-milestone id and its project, the claim agent id you minted (it heartbeats and
-releases under it), and that it is **dispatched**.
+`milestone` and `project` from the fill `<review>` element, its `agent` id (it
+heartbeats and releases under it), and that it is **dispatched**.
 
 Its lock is the milestone's claim: `record-review` releases it on success; the
 agent releases it explicitly when the gate must stay closed (follow-ups
-filed). A stale claim with no recorded review is re-dispatched under a fresh
-id (the claim reclaims).
+filed). A stale claim with no recorded review is re-emitted by a later `fill`
+under a fresh id (the claim reclaims).
 
 ## Human alerts
 

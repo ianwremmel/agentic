@@ -192,6 +192,8 @@ classified AS (
     t.updated_at_ms,
     c.agent AS claim_agent,
     c.heartbeat_at_ms AS claim_heartbeat_at_ms,
+    c.worktree AS claim_worktree,
+    c.branch AS claim_branch,
     CASE
       WHEN c.node_id IS NULL THEN NULL
       WHEN lc.node_id IS NOT NULL THEN 1
@@ -365,6 +367,8 @@ export function milestoneStates(
        ms.review_recorded,
        c.agent AS claim_agent,
        c.heartbeat_at_ms AS claim_heartbeat_at_ms,
+       c.worktree AS claim_worktree,
+       c.branch AS claim_branch,
        CASE
          WHEN c.node_id IS NULL THEN NULL
          WHEN lc.node_id IS NOT NULL THEN 1
@@ -632,6 +636,8 @@ function toClaim(row: Row): ClaimView | null {
         agent: text(row.claim_agent) ?? '',
         live: integer(row.claim_live) === 1,
         heartbeatAt: new Date(integer(row.claim_heartbeat_at_ms)).toISOString(),
+        worktree: text(row.claim_worktree),
+        branch: text(row.claim_branch),
       };
 }
 

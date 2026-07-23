@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -22,7 +22,7 @@
     "copilot_available": {
       "type": "boolean",
       "title": "Copilot review available",
-      "description": "Whether GitHub Copilot review is expected to work on this installation. Set to false on GitHub Enterprise installations without Copilot review \u2014 the `deliver` skill will skip the Copilot phase and go straight to human review.",
+      "description": "Whether GitHub Copilot review is expected to work on this installation. Set to false on GitHub Enterprise installations without Copilot review — the `deliver` skill will skip the Copilot phase and go straight to human review.",
       "default": true
     },
     "worktree_base": {

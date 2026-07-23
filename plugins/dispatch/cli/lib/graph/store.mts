@@ -49,6 +49,16 @@ export interface ClaimResult {
   classification?: Classification;
 }
 
+/**
+ * Where a claim's holder checked the work out. Recorded on the claim so other
+ * agents can discover in-flight work's location through the store. A field left
+ * undefined is not touched; the holder reports what it knows when it knows it.
+ */
+export interface CheckoutInfo {
+  worktree?: string;
+  branch?: string;
+}
+
 interface NodeRow {
   id: number;
   kind: 'task' | 'milestone' | 'unknown';
@@ -271,14 +281,35 @@ export class GraphStore {
   async claim(
     id: string,
     agent: string,
-    options: DeriveOptions
+    options: DeriveOptions,
+    checkout?: CheckoutInfo
   ): Promise<ClaimResult> {
     return this.#db.transaction(() => {
       const node = this.#node(id);
       if (node === null || node.kind === 'unknown')
         return {outcome: 'unknown-task'};
-      return this.#claimLocked(node, id, agent, options);
+      const result = this.#claimLocked(node, id, agent, options);
+      if (result.outcome !== 'held' && result.outcome !== 'not-available') {
+        this.#recordCheckout(node.id, checkout);
+      }
+      return result;
     });
+  }
+
+  /** Write whatever checkout facts the caller provided onto a claim row. */
+  #recordCheckout(nodeId: number, checkout: CheckoutInfo | undefined): void {
+    if (checkout?.worktree !== undefined) {
+      this.#db.run('UPDATE claim SET worktree = ? WHERE node_id = ?', [
+        checkout.worktree,
+        nodeId,
+      ]);
+    }
+    if (checkout?.branch !== undefined) {
+      this.#db.run('UPDATE claim SET branch = ? WHERE node_id = ?', [
+        checkout.branch,
+        nodeId,
+      ]);
+    }
   }
 
   /**
@@ -394,7 +425,12 @@ export class GraphStore {
     return {outcome: 'not-available'};
   }
 
-  async heartbeat(id: string, agent: string, nowMs: number): Promise<boolean> {
+  async heartbeat(
+    id: string,
+    agent: string,
+    nowMs: number,
+    checkout?: CheckoutInfo
+  ): Promise<boolean> {
     return this.#db.transaction(() => {
       const changed = this.#db.run(
         `UPDATE claim SET heartbeat_at_ms = ?
@@ -402,7 +438,48 @@ export class GraphStore {
            AND agent = ?`,
         [nowMs, id, agent]
       );
+      if (changed > 0) {
+        const node = this.#node(id);
+        if (node !== null) this.#recordCheckout(node.id, checkout);
+      }
       return changed > 0;
+    });
+  }
+
+  /**
+   * Refresh everything an agent holds — every claim and any compute slot — in
+   * one write, so a worker keeps its whole footprint alive with one command
+   * instead of remembering each piece. Checkout facts, when given, land on all
+   * of the agent's claims (a worker holds one).
+   */
+  async heartbeatAgent(
+    agent: string,
+    nowMs: number,
+    checkout?: CheckoutInfo
+  ): Promise<{claims: number; slot: boolean}> {
+    return this.#db.transaction(() => {
+      const claims = this.#db.run(
+        'UPDATE claim SET heartbeat_at_ms = ? WHERE agent = ?',
+        [nowMs, agent]
+      );
+      if (claims > 0 && checkout?.worktree !== undefined) {
+        this.#db.run('UPDATE claim SET worktree = ? WHERE agent = ?', [
+          checkout.worktree,
+          agent,
+        ]);
+      }
+      if (claims > 0 && checkout?.branch !== undefined) {
+        this.#db.run('UPDATE claim SET branch = ? WHERE agent = ?', [
+          checkout.branch,
+          agent,
+        ]);
+      }
+      const slot =
+        this.#db.run('UPDATE slot SET heartbeat_at_ms = ? WHERE agent = ?', [
+          nowMs,
+          agent,
+        ]) > 0;
+      return {claims, slot};
     });
   }
 
@@ -429,7 +506,8 @@ export class GraphStore {
 
   /**
    * Record a coordinator's final report on a node, releasing the recorder's
-   * claim in the same transaction — the artifact proves its writer exited. One
+   * claim and compute slot in the same transaction — the artifact proves its
+   * writer exited. One
    * row per node: a later pass's report replaces it, which is how a `verify`
    * pass consumes the `delivered` it was dispatched for.
    */
@@ -457,6 +535,17 @@ export class GraphStore {
           hint: 'an outcome is recorded on a task the graph already holds.',
         })
       );
+      // A reporter whose claim was reclaimed no longer owns the item; letting
+      // it record would overwrite the outcome of the run that took over.
+      const holder = this.#db.get('SELECT agent FROM claim WHERE node_id = ?', [
+        node.id,
+      ]);
+      assert(
+        holder === undefined || holder.agent === agent,
+        new DataError(`${id} is claimed by another agent, not ${agent}`, {
+          hint: 'your claim was reclaimed — that run owns the item now; stop without recording an outcome.',
+        })
+      );
       this.#db.run(
         `INSERT INTO outcome (node_id, outcome, retryable, detail, recorded_at_ms)
          VALUES (?, ?, ?, ?, ?)
@@ -475,6 +564,10 @@ export class GraphStore {
         node.id,
         agent,
       ]);
+      // The outcome is the reporter's exit, so any compute slot it still holds
+      // goes back in the same write — a crashed-out slot would otherwise sit
+      // until the staleness sweep.
+      this.#db.run('DELETE FROM slot WHERE agent = ?', [agent]);
     });
   }
 

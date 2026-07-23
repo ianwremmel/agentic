@@ -4,7 +4,7 @@ import {ROLES, TARGET_KINDS} from '../graph/roles.mts';
  * Bumped on any change an existing database file cannot absorb. `Database.open`
  * refuses a file whose recorded version differs — see `database.mts`.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const quoted = (values: readonly string[]): string =>
   values.map((value) => `'${value}'`).join(', ');
@@ -39,6 +39,12 @@ const quoted = (values: readonly string[]): string =>
  * - `slot` is the compute-slot ledger (§2.6): one row per held slot, bounded by
  *   the config's maxParallel at acquire time, reclaimed when its heartbeat goes
  *   stale.
+ * - `claim.worktree` / `claim.branch` record where the holder checked the work
+ *   out, when the holder reports it — so any agent can ask the store what is in
+ *   flight and where, instead of scanning the filesystem.
+ * - `wait_sample` is per-repo wait history (CI, reviewer, merge), the memory a
+ *   delivery agent tunes its polling schedule from. Capped per (repo, kind) at
+ *   write time; medians are computed by the CLI, never by an agent.
  */
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -91,7 +97,9 @@ CREATE TABLE IF NOT EXISTS edge (
 CREATE TABLE IF NOT EXISTS claim (
   node_id         INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
   agent           TEXT NOT NULL,
-  heartbeat_at_ms INTEGER NOT NULL
+  heartbeat_at_ms INTEGER NOT NULL,
+  worktree        TEXT,
+  branch          TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS review (
@@ -123,6 +131,17 @@ CREATE TABLE IF NOT EXISTS cursor (
   source TEXT PRIMARY KEY,
   value  TEXT NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS wait_sample (
+  id             INTEGER PRIMARY KEY,
+  repo           TEXT NOT NULL,
+  kind           TEXT NOT NULL CHECK (kind IN ('ci', 'reviewer', 'merge')),
+  elapsed_s      INTEGER NOT NULL CHECK (elapsed_s >= 0),
+  outcome        TEXT,
+  recorded_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS wait_sample_key ON wait_sample (repo, kind);
 
 CREATE INDEX IF NOT EXISTS task_project ON task (project_id);
 CREATE INDEX IF NOT EXISTS task_milestone ON task (milestone_id);

@@ -24,6 +24,11 @@ export const summary: Command = {
   usage: [
     'dispatch graph summary [--stale-after 10m]',
     '',
+    'The root element carries the orchestrator exit condition, pre-computed:',
+    '<summary terminal="true"> means every non-partial project is terminal,',
+    'nothing is queued in any pass, and no live claim remains — stop the loop.',
+    'terminal="false" means keep ticking, even when the queue is empty.',
+    '',
     'options:',
     STALE_AFTER_USAGE,
     STORE_USAGE,

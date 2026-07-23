@@ -132,18 +132,22 @@ export function toJson(graph: DerivedGraph): string {
  * One `<ticket>` element for the available frontier. Shared by the document and
  * by `graph next`, so an agent picking work parses the same XML shape wherever it
  * comes from. `rank` is omitted when there is nothing to rank against (a lone
- * `next` result); `pass` marks a follow-up dispatch on already-reported work.
+ * `next` result); `pass` marks a follow-up dispatch on already-reported work;
+ * `agent` is the claim's holder when the claim was taken as part of the print
+ * (`next --claim`, `fill`).
  */
 export function availableTicket(
   entry: ClassifiedNode,
   rank?: number,
-  pass?: Pass | null
+  pass?: Pass | null,
+  agent?: string
 ): string {
   const rankAttr = rank === undefined ? '' : ` rank="${String(rank)}"`;
   const passAttr =
     pass === undefined || pass === null ? '' : ` pass="${attr(pass)}"`;
+  const agentAttr = agent === undefined ? '' : ` agent="${attr(agent)}"`;
   return (
-    `<ticket id="${attr(entry.node.id)}"${rankAttr}${passAttr} ` +
+    `<ticket id="${attr(entry.node.id)}"${rankAttr}${passAttr}${agentAttr} ` +
     `target-kind="${attr(entry.node.targetKind)}" url="${attr(entry.node.url)}"${branchAttr(entry)}/>`
   );
 }
@@ -196,7 +200,23 @@ export function toSummaryXml(
   slots: {max: number; held: {agent: string; live: boolean}[]}
 ): string {
   const live = slots.held.filter((slot) => slot.live).length;
-  const out: string[] = ['<summary>'];
+  // The orchestrator's exit condition, computed here so no consumer re-derives
+  // it: every non-partial project terminal, nothing queued in any pass, no
+  // live claim (work or review lock) still owned, and no milestone gate still
+  // awaiting its review.
+  const terminal =
+    graph.counts.every((count) => count.partial || count.terminal) &&
+    queue.available +
+      queue.resume +
+      queue.verify +
+      queue.finalize +
+      queue.retry ===
+      0 &&
+    queue.liveClaims === 0 &&
+    graph.milestones.every(
+      (milestone) => !milestone.readyForReview || milestone.reviewRecorded
+    );
+  const out: string[] = [`<summary terminal="${String(terminal)}">`];
 
   out.push('  <counts>');
   for (const count of graph.counts) {
@@ -269,6 +289,10 @@ function nodeXml(entry: ClassifiedNode): string {
   if (entry.claim !== null) {
     attrs.push(`claimed-by="${attr(entry.claim.agent)}"`);
     attrs.push(`claim-live="${String(entry.claim.live)}"`);
+    if (entry.claim.worktree !== null)
+      attrs.push(`claim-worktree="${attr(entry.claim.worktree)}"`);
+    if (entry.claim.branch !== null)
+      attrs.push(`claim-branch="${attr(entry.claim.branch)}"`);
   }
   if (entry.outcome !== null) {
     attrs.push(`outcome="${attr(entry.outcome.outcome)}"`);
@@ -295,7 +319,8 @@ function branchAttr(entry: ClassifiedNode): string {
     : ` branch-hint="${attr(entry.node.branchHint)}"`;
 }
 
-function attr(value: string): string {
+/** Escape a value for an XML attribute. */
+export function attr(value: string): string {
   return text(value).replace(/"/g, '&quot;');
 }
 

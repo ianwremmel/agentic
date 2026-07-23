@@ -65,21 +65,21 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 
 ---
 
-## §3 — CLI and Daemon
+## §3 — CLI and Channel Server
 
-### §3.1 — Daemon
+### §3.1 — Channel Server
 
-| File                                                | Contents                                                       |
-| --------------------------------------------------- | -------------------------------------------------------------- |
-| [01-narrative.md](03-cli/01-daemon/01-narrative.md) | Why a daemon, process model, event system, prompt system       |
-| [02-normative.md](03-cli/01-daemon/02-normative.md) | Process model, spawn contract, event taxonomy, state directory |
+| File                                                        | Contents                                                          |
+| ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| [01-narrative.md](03-cli/01-channel-server/01-narrative.md) | Why a channel server, process model, event system, mode selection, multi-session |
+| [02-normative.md](03-cli/01-channel-server/02-normative.md) | Process model, channel message protocol, event sourcing, multi-session, lifecycle |
 
 ### §3.2 — Commands
 
 | File                                                                    | Contents                                                   |
 | ----------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [01-narrative.md](03-cli/02-commands/01-narrative.md)                   | Role of the command layer; interaction vs daemon commands   |
-| [02-normative.md](03-cli/02-commands/02-normative.md)                   | Daemon, prompt, and task management commands               |
+| [01-narrative.md](03-cli/02-commands/01-narrative.md)                   | Role of the command layer; interaction vs server commands   |
+| [02-normative.md](03-cli/02-commands/02-normative.md)                   | Server and work-registration commands                      |
 | [03-interaction-commands.md](03-cli/02-commands/03-interaction-commands.md) | Interaction primitives (create-comment, react, etc.)   |
 
 ---
@@ -93,3 +93,4 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | 2026-05-13 | Added §2.1–§2.4, §3.1–§3.2; retired all pre-spec source docs  |
 | 2026-05-14 | Review feedback: §2.2 adds comments channel, checks precedence; §2.3 fixes milestones and Asana; §2.4 fixes review gating; §3 refactors commands |
 | 2026-06-07 | Added §2.5 Ticket Coordination + §2.6 Orchestration          |
+| 2026-07-23 | §3.1 reframed from Daemon to per-session Channel Server; added the channel message protocol; §3.2 reframed to server + work-registration commands |

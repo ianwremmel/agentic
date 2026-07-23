@@ -35,26 +35,29 @@ CLI does not yet own.
 - The CLI holds the waits. The session is woken only when there is something to
   react to.
 - Skills stop containing poll loops. `deliver` and `orchestrate` become **event
-  handlers**, not loops.
+  handlers**, not loops — while keeping a non-channel fallback (see
+  [Channel mode vs fallback mode](#channel-mode-vs-fallback-mode)).
 - The CLI decides cadence once, centrally, with the dynamic intervals §3.1
   already specifies — not scattered across skills.
 - Preserve the trust boundary: the CLI never gains an MCP client; the session
   keeps it. MCP-only work is delegated back to the session, not pulled into the
   CLI.
-- Keep the session's write path unchanged: the session still acts through the
-  existing `dispatch graph …` commands against the shared SQLite graph.
+- Keep the session's write path unchanged: the session still acts through
+  ordinary `dispatch …` commands against the shared SQLite graph, which is also
+  how it signals the server.
+- Support the concurrency the CLI already allows: multiple sessions working
+  different projects at once, without stepping on each other (see
+  [Multi-session](#multi-session-many-servers-one-database)).
 
 ## Non-goals
 
-- Machine-wide, multi-session orchestration (many independent sessions, a
-  global concurrency cap, cross-session crash recovery). That was §3.1's
-  cold-spawn territory; it is explicitly deferred (see
-  [Deferred](#deferred-multi-session-orchestration)).
-- Replacing `pr-status` or the `dispatch graph` command surface. They are the
-  session's read/write paths and stay as they are.
-- A token/REST tracker adapter. The delegation pattern removes the need for one.
+- A token/REST tracker adapter. The delegation pattern removes the need for one:
+  the session's existing MCP client does tracker work when asked.
+- Two-way channel features beyond push — reply tools and permission relay. The
+  first cut is push-only; session→server signalling rides the shared DB. These
+  stay available as a later option if DB-poll latency proves too slow.
 
-## Background: what a channel is, and the one constraint that shapes everything
+## Background: what a channel is
 
 A [Claude Code channel](https://code.claude.com/docs/en/channels) is an MCP
 server that Claude Code spawns as a **stdio subprocess** and that can *push*
@@ -64,43 +67,37 @@ events into the running session. The server declares
 session as a tag:
 
 ```text
-<channel source="dispatch" kind="ci_finished" repo="o/r" pr="7" state="failure">
-CI finished on PR 7: 1 failing check (build). Read pr-status for detail.
+<channel source="dispatch" kind="ci_finished" repo="o/r" pr="7" rollup="failure">
+…pr-status payload…
 </channel>
 ```
 
-`content` is the tag body; each `meta` key becomes an attribute. Events **queue
-and coalesce**: several pushed while the agent is busy arrive together on the
-next turn, in order. The server can also expose ordinary MCP **tools** (a
-`tools: {}` capability) for the session to call back.
+`content` is the tag body; each `meta` key becomes an attribute (values are
+always strings). Events **queue and coalesce**: several pushed while the agent
+is busy arrive together on the next turn, in order. A channel can be push-only
+(notifications) or also expose MCP tools; this design uses push-only.
 
-The one constraint that shapes the whole design:
+### Constraints to design within
 
-> **A channel is an MCP *server*, not a client.** It can push events and offer
-> tools, but it cannot *call* other MCP servers.
-
-So a poll loop living inside the channel server can watch anything reachable
-from a plain process — GitHub via `gh`, CI via its provider CLI, git, its own
-SQLite graph — but it **cannot** reach a tracker that is only exposed over MCP,
-which is exactly how Linear is reached today (`tracker-adapter-linear` drives
-the Linear MCP server from inside the skill). This is not a limitation to
-engineer around; it is the boundary the design is built on.
-
-### Channel constraints to design within
+Channels come with several constraints. None is fatal; each shapes a specific
+decision.
 
 | Constraint                    | Consequence for this design                                                        |
 | ----------------------------- | ---------------------------------------------------------------------------------- |
-| Server, not client (no MCP)   | MCP-only sources are delegated back to the session, never polled in-CLI.           |
-| Session-scoped lifetime       | The server lives and dies with one open session; always-on = a persistent session. |
-| Research preview              | Flags/protocol may change; custom channels need `--dangerously-load-development-channels` until allowlisted. |
-| Anthropic-auth only           | Not available on Bedrock / Vertex / Foundry; org policy (`channelsEnabled`) gates it. |
-| Injected, untrusted content   | Event bodies are attacker-influenced (comment authors); push minimal structured events, never raw bodies. |
+| Server, not client (no MCP)   | The watch loop can't reach MCP-only sources (Linear); that work is delegated back to the session, which has the MCP client. |
+| Session-scoped lifetime       | Each session spawns its own server; the server lives and dies with it. Always-on = a persistent session. |
+| Not always available          | Research preview (flags/protocol may change; custom channels need `--dangerously-load-development-channels`), Anthropic-auth only (no Bedrock / Vertex / Foundry), org `channelsEnabled` gate. The skills therefore need a non-channel fallback mode. |
+| Injected content              | Event bodies enter the agent's context; the body is the same `dispatch pr status` payload the agent already consumes, so its trust properties are unchanged (see [Injection safety](#injection-safety)). |
+
+The no-MCP boundary is the most interesting of these — it's what makes
+delegation a load-bearing pattern rather than a convenience — but it is one
+constraint among several, not the whole design.
 
 ## The design
 
-### One process: `dispatch serve`
+### `dispatch mcp`: the server
 
-A new long-running CLI mode, `dispatch serve`, speaks the channel protocol over
+A new long-running CLI mode, `dispatch mcp`, speaks the channel protocol over
 stdio. It is registered like any MCP server (plugin `.mcp.json` /
 `--channels plugin:dispatch@…`). Claude Code spawns it as a subprocess when the
 session starts; it exits when the session ends. Inside it runs:
@@ -109,134 +106,206 @@ session starts; it exits when the session ends. Inside it runs:
   reach directly (§3.1's interval table, now centralized here).
 - **The channel emitter** — turns observed changes into `notifications/claude/channel`
   events, coalescing per tick.
-- **A small tool surface** — callbacks the session uses to steer the loop
-  (below).
 
-It shares the **same SQLite graph database** the `dispatch graph` commands
-already read and write (`$XDG_STATE_HOME/dispatch/graph.db`, WAL,
-`busy_timeout`). That shared DB is the backbone of the whole design: the server
-watches it, the session writes to it, and neither needs a bespoke channel back
-to the other for state.
+It is **push-only**: it exposes no MCP tools. The session steers it the same way
+it does everything else — by running `dispatch …` commands that write the
+**shared SQLite graph database** the `dispatch graph` commands already use
+(`$XDG_STATE_HOME/dispatch/graph.db`, WAL, `busy_timeout`). The server polls
+that DB on its tick. So the shared DB is the backbone in both directions: the
+server watches it and pushes; the session writes it and is watched. There is no
+second control channel to build or keep consistent.
 
-### Two directions, three message kinds
-
-```
-                 push: notifications/claude/channel
-   ┌────────────────────────────────────────────────────────┐
-   │  1. notify     "CI finished on PR 7"                    │
-   │  2. delegate   "refresh graph from tracker"   ─────►    │
-   │                                                          ▼
-┌───────────────┐                                    ┌─────────────────┐
-│ dispatch serve│                                    │  the session    │
-│  (watch loop, │  ◄─────────────────────────────    │  (agent + MCP   │
-│   shared DB)  │   session acts via dispatch graph  │   client + skills)│
-└───────────────┘   commands → same SQLite DB        └─────────────────┘
-        ▲                  3. steer (MCP tools)              │
-        └────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    gh["GitHub / CI<br/>(dispatch pr status, gh)"] --> server
+    db[("shared graph.db")] --> server
+    server["dispatch mcp<br/>watch loop · push-only"] -->|"channel events (triggers)"| session["session<br/>agent · skills · MCP client"]
+    session -->|"dispatch … writes"| db
+    session -.->|"MCP, on delegation"| linear["Linear"]
+    linear -.-> session
 ```
 
-**1. Notify (CLI → session).** A structured event about a change the CLI
-observed directly. The body is a one-line summary plus routing attributes; the
-session pulls detail through its existing deterministic read path (`dispatch
-graph doc`, `pr-status <pr>`). Examples: `ci_finished`, `pr_review`,
-`pr_state_change`, `ticket_frontier_changed`, `milestone_gate_open`,
-`slot_available`.
+The server reads GitHub/CI and the shared DB and pushes triggers into its
+session; the session acts through `dispatch …` writes (which the server then
+observes) and reaches the tracker over MCP only when a delegation asks it to.
 
-**2. Delegate (CLI → session).** The move that resolves the MCP boundary. When
-the watch loop needs data or an action that only the session's MCP client can
-perform, it pushes a delegation event and the session does the work through its
-skills, writing results back via `dispatch graph …`. The canonical case:
+### Multi-session: many servers, one database
 
-> The CLI cannot see Linear. On a tracker-refresh interval (or when it suspects
-> the graph is stale) it pushes
-> `<channel kind="delegate" action="refresh_graph" ...>`. The session runs
-> `build-graph` (Linear MCP + `tracker-adapter-linear`), writes tasks / edges /
-> milestones through `dispatch graph`, and advances the `linear` cursor. The
-> server sees the cursor move and the rows change on its next DB poll — no reply
-> needed.
+The CLI already lets an operator run several sessions on different projects at
+once. That must keep working, and it does so naturally here: **each session
+spawns its own `dispatch mcp` server** (channels are per-session subprocesses),
+and all servers and sessions share the one graph DB.
 
-`start ticket X` is the same shape from the other end: the CLI computes the
-ready frontier deterministically from the graph DB and pushes
-`<channel kind="delegate" action="dispatch_ticket" ticket="CLC-945" ...>`; the
-session claims it (`dispatch graph next --claim`) and runs `work-ticket`.
+Overlap is prevented where it already is — in the DB, not in a coordinator:
 
-**3. Steer (session → CLI).** A few MCP tools the server exposes so the session
-can shape the watch loop directly rather than only through DB state:
+- **Atomic claims.** `dispatch graph next --claim` claims under `BEGIN
+  IMMEDIATE`, so two sessions can't take the same ticket. A session watches only
+  what it has claimed.
+- **The slot ledger.** `dispatch graph slot acquire` enforces the machine-wide
+  compute cap (`maxParallel`) across all sessions, whichever server they belong
+  to. This is the global concurrency limit §3.1 put in a singleton daemon —
+  already implemented, already shared.
+- **Stale-claim recovery.** Claim heartbeats plus `claimStaleAfter` reclaim work
+  abandoned by a crashed session. Cross-session crash recovery is the existing
+  stale-claim path, not new machinery.
 
-| Tool                    | Purpose                                                                     |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `watch_pr`              | Start/adjust watching a PR (repo, number, lifecycle stage → cadence).       |
-| `unwatch_pr`            | Stop watching a merged/closed PR.                                           |
-| `ack`                   | Acknowledge a delegation so the CLI stops re-pushing it (idempotency key).  |
-| `request_refresh_soon`  | Ask the CLI to tighten the tracker-refresh cadence (a review just landed).  |
+So multi-session is a first-class property that falls out of per-session servers
+plus the shared DB. There is no single-daemon-per-machine rule and nothing about
+concurrency is deferred.
 
-The DB-as-backchannel handles most session→CLI signalling for free; these tools
-cover the cases where the server needs an explicit poke or an idempotency ack.
-Whether `ack` is a tool or just a DB row is an [open question](#open-questions).
+### Channel mode vs fallback mode
+
+Channels are not always available (research preview, non-Anthropic auth, org
+policy off). The skills therefore keep their current foreground-loop behaviour as
+a **fallback mode**, and select between the two the same way they already select
+team vs solo behaviour — dynamic loading of a mode variant:
+
+| Mode         | Selected when                              | Waiting behaviour                                             |
+| ------------ | ------------------------------------------ | ------------------------------------------------------------ |
+| `channel`    | a `dispatch mcp` server is attached        | Skill yields after each unit of work; the CLI wakes it with events. |
+| `polling`    | no channel (unavailable / not enabled)     | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself. |
+
+Mode is detected from whether a channel server is attached to the session — the
+server sets a marker on spawn (env var and/or a `dispatch mcp status` the skill
+can query). The judgment content of each skill (what counts as actionable, the
+gates, the §2.4 sequence) is identical across modes; only the *waiting* section
+differs. This keeps the two modes from diverging into two behaviours.
+
+### Events are triggers
+
+An event is a **trigger**, not a payload to be trusted or acted on in isolation.
+Whatever the event says, the session responds by running a `dispatch` command
+that reads the canonical state — from the graph DB, or from `dispatch pr status`
+— and acts on that. Because [`pr-status` is integrated into the CLI](#dispatch-pr-status-integrating-pr-status),
+a PR event can carry *exactly* the `dispatch pr status` payload as its body: the
+same bytes the agent would fetch anyway, so there is no separate summary to
+craft and no divergence between "what the event said" and "what the CLI returns."
+When events coalesce, the agent re-reads for freshness rather than trusting a
+possibly-stale body.
+
+Two families of trigger, plus delegation:
+
+- **Observed triggers** — the CLI saw a change in a source it can reach (a PR, a
+  CI rollup, the graph). It pushes the trigger; the session reacts through the
+  matching `dispatch` read.
+- **Delegation triggers** — the CLI needs work only the session's MCP client can
+  do (reach Linear). It pushes the request; the session does it through its
+  skills and writes results back with `dispatch graph …`, which the server then
+  observes. Nothing is polled over MCP by the CLI.
+
+### Event catalog
+
+Every event carries `source` (set automatically to the server name), a `kind`,
+and a monotonic `seq` for ordering/coalescing. Meta values are strings; meta
+keys are `snake_case` identifiers (`[A-Za-z0-9_]` — the channel layer silently
+drops keys with hyphens, so it is `pr`, never `pr-number`). Bodies are either
+the canonical `dispatch pr status` payload or a short instruction; never raw
+external text assembled by the server.
+
+**PR / CI triggers** — body is the `dispatch pr status` payload for `repo`/`pr`.
+
+| kind              | meta (beyond source/kind/seq)                     | fires when                                        |
+| ----------------- | ------------------------------------------------- | ------------------------------------------------- |
+| `ci_finished`     | `repo`, `pr`, `rollup` = success\|failure\|error  | the check rollup reaches a terminal state         |
+| `pr_review`       | `repo`, `pr`, `state` = approved\|changes\|comment, `reviewer` | a review is submitted                 |
+| `pr_comment`      | `repo`, `pr`, `thread`                            | a new top-level comment or inline reply lands     |
+| `pr_state_change` | `repo`, `pr`, `state` = ready\|draft\|merged\|closed | the PR changes lifecycle state                 |
+
+**Graph triggers** — body is a one-line pointer; the session reads `dispatch
+graph doc`/`summary`.
+
+| kind                      | meta (beyond source/kind/seq)      | fires when                                            |
+| ------------------------- | ---------------------------------- | ---------------------------------------------------- |
+| `ticket_frontier_changed` | `project`, `ready_count`           | the ranked available frontier changes (new unblocked work) |
+| `milestone_gate_open`     | `project`, `milestone`             | a milestone's members complete and its review gate opens |
+| `slot_available`          | `free_slots`                       | a compute slot frees up under `maxParallel`          |
+
+**Delegation triggers** — body is a short instruction naming the skill to run.
+
+| kind              | meta (beyond source/kind/seq)      | asks the session to                                  |
+| ----------------- | ---------------------------------- | ---------------------------------------------------- |
+| `refresh_graph`   | `tracker`, `reason`                | run `build-graph` (tracker MCP) and write the delta, advancing the cursor |
+| `dispatch_ticket` | `project`, `ticket`                | claim (`graph next --claim`) and run `work-ticket` for that ticket |
+
+New kinds may be added; renaming a kind is a breaking change (as in §3.1).
 
 ### What the CLI watches directly
 
-| Source              | Mechanism (no MCP)                          | Emits                                     |
-| ------------------- | ------------------------------------------- | ----------------------------------------- |
-| GitHub PR / review  | `gh api` / `gh pr view` (as `pr-status` does today) | `pr_review`, `pr_comment`, `pr_state_change` |
-| CI rollup           | `gh pr checks --watch` / `bk build wait`    | `ci_finished`                             |
-| Graph DB (own state)| SQLite reads on a tick                       | `ticket_frontier_changed`, `milestone_gate_open`, `slot_available` |
-| Tracker (Linear …)  | **cannot** — delegated to the session        | `delegate action="refresh_graph"`         |
+| Source              | Mechanism (no MCP)                                   | Emits                                            |
+| ------------------- | ---------------------------------------------------- | ------------------------------------------------ |
+| GitHub PR / CI      | `dispatch pr status` internals (the integrated `pr-status` logic + `gh pr checks --watch` / `bk build wait`) | `ci_finished`, `pr_review`, `pr_comment`, `pr_state_change` |
+| Graph DB (own state)| SQLite reads on a tick, via the existing derivation layer | `ticket_frontier_changed`, `milestone_gate_open`, `slot_available` |
+| Tracker (Linear …)  | **cannot** — pushed as a `refresh_graph` delegation   | `refresh_graph`                                  |
 
 The frontier and gate events are computed from the same derivation layer
-(`derive.mts` / `queries.mts`) the `graph` commands already use, so the CLI and
-the session always agree on what is ready.
+(`derive.mts` / `queries.mts`) the `graph` commands use, so the CLI and the
+session always agree on what is ready.
+
+### `dispatch pr status`: integrating pr-status
+
+`pr-status` today is a standalone ~710-line bash script that does far more than
+`gh pr view`: it drives `gh api graphql` + REST, classifies actionability,
+applies the §2.2 wire format, and maintains a disk cache. This design **moves it
+into the CLI as `dispatch pr status`** (a port from bash to the `.mts` CLI). One
+payload implementation then serves two surfaces:
+
+- **CLI output** — the session runs `dispatch pr status --pr 7` and gets the §2.2
+  document, exactly as `deliver` reads it today.
+- **Channel event body** — the watch loop emits the *same* payload as the body of
+  `ci_finished` / `pr_review` / `pr_comment` / `pr_state_change`.
+
+Because the watch loop already computes this payload to decide whether anything
+changed, emitting it costs nothing extra, and the agent never sees a PR
+representation that disagrees with the CLI. Porting `pr-status` is a prerequisite
+for the PR/CI phase, not an afterthought.
 
 ### How the two loops become event handlers
 
-**`orchestrate`.** The `/loop`-driven tick loop goes away. The session opens,
-optionally does one bootstrap tick, then yields. Thereafter each `<channel>`
-event is one tick's worth of work: on `ticket_frontier_changed` or
-`slot_available`, dispatch the newly-ready coordinators; on `milestone_gate_open`,
-run `milestone-review`; on `delegate refresh_graph`, refresh from the tracker.
-The dynamic cadence table moves from `orchestrate/reference.md` into the CLI.
+**`orchestrate`** (in `channel` mode). The `/loop`-driven tick loop goes away.
+The session opens, does one bootstrap tick, then yields. Thereafter each event is
+one tick's worth of work: on `ticket_frontier_changed` or `slot_available`,
+dispatch the newly-ready coordinators; on `milestone_gate_open`, run
+`milestone-review`; on `refresh_graph`, refresh from the tracker. The dynamic
+cadence table moves from `orchestrate/reference.md` into the CLI.
 
-**`deliver`.** The `sleep`+`pr-status` loop goes away. When the session opens a
-PR it calls `watch_pr`; then it yields. The CLI watches CI and reviewers and
-pushes `ci_finished` / `pr_review` / `pr_state_change`. Each event wakes the
-session to run deliver's existing per-tick judgment **once** — address
-actionable concerns, evaluate gates — then yield again. On merge/close the
-session calls `unwatch_pr`. Deliver's judgment (§2.4) is unchanged; only the
-waiting is relocated.
+**`deliver`** (in `channel` mode). The `sleep`+`pr-status` loop goes away. When
+the session opens a PR it records it (a `dispatch` write the server observes),
+then yields. The CLI watches CI and reviewers and pushes `ci_finished` /
+`pr_review` / `pr_state_change`. Each event wakes the session to run deliver's
+existing per-tick judgment **once** — address actionable concerns, evaluate
+gates — then yield again. On merge/close it clears the watch. Deliver's judgment
+(§2.4) is unchanged; only the waiting is relocated.
 
-This is the same intent as §3.1 — hold the wait outside the agent — but
-delivered by pushing into a warm session rather than cold-spawning a runner per
-event.
+In `polling` mode both skills behave exactly as they do today.
 
 ### Injection safety
 
-Channel content is injected into the session and is influenced by whoever can
-comment on a PR or ticket. The rule: **the CLI pushes minimal, structured
-events, never raw external text.** An event carries IDs, states, and counts —
-"1 failing check (build)", "review: changes_requested by @x" — and the session
-reads the actual bodies through `pr-status`, which is already the sanctioned,
-sole PR read path. Delegation events carry only an action and identifiers. Meta
-keys are `snake_case` identifiers (`[A-Za-z0-9_]`; hyphens are silently dropped
-by the channel layer, so `pr-number` would vanish — use `pr`).
-
-If two-way permission relay is ever enabled (the channel forwarding tool-approval
-prompts to a remote device), the sender-gating and untrusted-field rules from
-the channel reference apply; that is out of scope for the first cut.
+Channel content enters the agent's context and is influenced by whoever can
+comment on a PR or ticket. The key point: the event body is the **same `dispatch
+pr status` payload the agent already consumes** as its sole PR read path, so
+pushing it introduces no exposure the agent didn't already have when it pulled
+it. The server never assembles a bespoke body out of raw external strings; graph
+and delegation events carry only identifiers and a short instruction. Meta keys
+are `snake_case` per the channel layer's rules. If two-way features (reply tool,
+permission relay) are added later, the channel reference's sender-gating and
+untrusted-field rules apply.
 
 ## Deployment and lifecycle
 
 - **Always-on = a persistent session.** Channels deliver only while a session is
-  open. The orchestrator runs in a long-lived session (persistent terminal,
-  `tmux`, or a background `claude` process). When it exits, `dispatch serve`
-  exits with it and waiting stops until it is restarted.
-- **Restart is cheap and stateless-in-the-server.** All durable state is in the
-  shared SQLite DB and on the platforms. On restart the server rehydrates its
-  watch set from the graph DB (open claims, un-merged PRs) — it stores no
-  conversation history and needs no event spool of its own.
-- **Preview flags.** Until `dispatch` is allowlisted, the session starts with
-  `--dangerously-load-development-channels`. Org `channelsEnabled` must be on.
-  Document both in the plugin README; fail loudly at `serve` startup if the
-  channel capability is refused.
+  open. A participating session runs in a long-lived context (persistent
+  terminal, `tmux`, or a background `claude` process). When it exits, its
+  `dispatch mcp` server exits with it and its waiting stops until it restarts;
+  other sessions' servers are unaffected.
+- **Restart is cheap; the server holds no durable state.** All durable state is
+  in the shared graph DB and on the platforms. On restart a server rehydrates
+  its watch set from the DB (this session's open claims and un-merged PRs) — no
+  conversation history, no event spool of its own.
+- **Preview flags.** Until `dispatch` is allowlisted, sessions start with
+  `--dangerously-load-development-channels`; org `channelsEnabled` must be on.
+  Document both in the plugin README. If the channel capability is refused at
+  startup, the server says so and the skills fall back to `polling` mode rather
+  than failing.
 
 ## Relationship to §3.1
 
@@ -246,70 +315,57 @@ event** (`--resume <session-id>`, prompt templates, PID lock, `events/` spool,
 crash recovery). This design keeps §3.1's *analysis* and discards its *delivery
 mechanism*:
 
-**Kept (moved into `dispatch serve`):** the event taxonomy, coalescing,
-mutable-follow-up accumulation, the dynamic polling-interval table, and the
-per-source strategy ladder (SDK watch → watch subprocess → polling).
+**Kept:** the event taxonomy, coalescing, the dynamic polling-interval table, and
+the per-source strategy ladder (SDK watch → watch subprocess → polling) — now
+running inside each session's `dispatch mcp` server.
 
 **Dropped:** cold-spawn-per-event, prompt-template resolution, the runner spawn
-contract, the PID lock and single-daemon-per-machine rule, and the on-disk
-event spool. A warm session replaces all of it: no prompt templates (the session
-already has its skills loaded), no session-id capture/resume (the session is
-continuous), no runner binary abstraction.
+contract, the on-disk event spool, and — crucially — the **single-daemon-per-
+machine** model. A warm session replaces the runner (no prompt templates or
+session-id resume; the session already has its skills). Machine-wide concurrency
+and crash recovery, which the daemon centralised, are handled by the shared DB's
+slot ledger and stale-claim recovery across independently-launched per-session
+servers. Nothing here is deferred to a future daemon.
 
-The spec change: §3.1 is reframed from "Daemon" to the channel server, and a new
-normative subsection specifies the **channel message protocol** (the three
-message kinds, meta-field vocabulary, and coalescing rules). That spec work is
-tracked separately from this design doc; this doc is the implementation-facing
-rationale.
-
-### Deferred: multi-session orchestration
-
-§3.1's genuinely harder concerns — many independent sessions on one machine, a
-global live-runner cap, FIFO admission, cross-session crash recovery — only
-arise when work is spread across *separate* sessions. The first cut runs one
-long-lived orchestrator session that drives coordinators and deliver as
-subagents within it, so a single `dispatch serve` serves everything and those
-concerns do not apply. If the model later fans out to independent sessions, the
-old daemon's machine-wide bookkeeping is the reference for what returns — which
-is why the analysis is preserved, not deleted.
+The spec change (tracked on this branch): §3.1 is reframed from "Daemon" to the
+per-session channel server, and a new normative subsection specifies the
+**channel message protocol** — the event catalog above, the meta-field
+vocabulary, coalescing, and the shared-DB signalling contract.
 
 ## Phased plan
 
-1. **Channel skeleton.** `dispatch serve` speaks the channel protocol; declares
-   the capability; pushes a hand-triggered test event. Prove delivery into a
-   session end-to-end behind the dev flag.
-2. **Graph-DB events + orchestrate.** Watch the shared graph DB; emit
-   `ticket_frontier_changed` / `milestone_gate_open` / `slot_available`. Convert
-   `orchestrate` from a `/loop` ticker to an event handler. Add `dispatch_ticket`
-   delegation and the `request_refresh_soon` steer tool.
-3. **Tracker delegation.** Emit `refresh_graph` delegation on the tracker
-   cadence; `build-graph` becomes the delegation's handler. Retire
-   `orchestrate`'s self-timed tracker reads.
-4. **PR/CI events + deliver.** `watch_pr` / `unwatch_pr` tools; watch CI and
-   reviewers; emit `ci_finished` / `pr_review` / `pr_state_change`. Convert
-   `deliver` from a `sleep` loop to an event handler. This is the largest slice
-   and retires the heaviest poller.
-5. **Cadence + hardening.** Port the dynamic-interval table; coalescing;
-   restart-rehydration from the graph DB; startup checks for the channel
-   capability and org policy.
+1. **Channel skeleton.** `dispatch mcp` speaks the channel protocol; declares the
+   capability; sets the mode marker; pushes a hand-triggered test event. Prove
+   delivery into a session end-to-end behind the dev flag.
+2. **Mode selection.** Add `channel`/`polling` dynamic loading to `orchestrate`
+   and `deliver`, with `polling` = today's behaviour and `channel` a stub that
+   yields. No behaviour change when no channel is attached.
+3. **Graph-DB events + orchestrate.** Watch the shared graph DB; emit the graph
+   triggers. Wire `orchestrate`'s `channel` mode to them. Add the `dispatch_ticket`
+   delegation.
+4. **Tracker delegation.** Emit `refresh_graph` on the tracker cadence;
+   `build-graph` becomes its handler. Retire `orchestrate`'s self-timed tracker
+   reads in `channel` mode.
+5. **Port `pr-status` → `dispatch pr status`.** Move the bash logic into the CLI;
+   keep byte-for-byte output parity so `deliver`'s reads are unaffected.
+6. **PR/CI events + deliver.** Watch CI and reviewers; emit the PR triggers with
+   the `dispatch pr status` payload as the body; wire `deliver`'s `channel` mode.
+   The heaviest poller retires.
+7. **Cadence + hardening.** Port the dynamic-interval table; coalescing;
+   restart-rehydration from the graph DB; multi-session soak (two sessions, one
+   DB, no overlap).
 
 ## Open questions
 
-- **Command name.** `dispatch serve` vs `dispatch mcp` vs a reframed `dispatch
-  daemon`. `serve` reads as "long-running process"; `mcp` mirrors the user's
-  framing ("available over MCP").
-- **`ack` as tool vs DB row.** Delegation idempotency could ride entirely on the
-  graph DB (a delegation row the session clears) instead of an MCP tool. Fewer
-  tools is better if the DB can carry it.
-- **Coordinators: subagents vs sessions.** The first cut assumes coordinators and
-  deliver run as subagents inside the one orchestrator session. If a coordinator
-  should be its own session, it needs its own `dispatch serve` — reopening the
-  multi-session concerns deferred above. Worth deciding before phase 4.
-- **Delegation liveness.** If the session is mid-task when a delegation is pushed,
-  it coalesces to the next turn — fine. But if the session has exited, the
-  delegation is dropped silently (channel notifications are not acknowledged).
-  The restart path must re-derive outstanding delegations from DB state rather
-  than trusting delivery.
-- **Buildkite vs GitHub Actions CI.** `ci_finished` needs a provider abstraction;
-  `gh pr checks --watch` and `bk build wait` are different subprocesses with
-  different terminal signals.
+- **Delegation liveness.** A delegation pushed while the session is mid-task
+  coalesces to the next turn (fine), but one pushed after the session has exited
+  is dropped silently (channel notifications aren't acknowledged). The server
+  must re-derive outstanding delegations from DB state on restart rather than
+  trusting delivery — what's the DB representation of "a refresh is owed"?
+- **CI provider abstraction.** `ci_finished` spans `gh pr checks --watch` and
+  `bk build wait`, which are different subprocesses with different terminal
+  signals; the watch loop needs a provider seam.
+- **Signalling latency.** Push-only + DB-poll means a session's "start watching
+  this PR" is seen on the server's next tick, not instantly. If that lag ever
+  matters, a minimal two-way tool surface is the fallback — kept out of the first
+  cut deliberately.

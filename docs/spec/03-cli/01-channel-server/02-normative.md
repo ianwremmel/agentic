@@ -20,15 +20,18 @@ and exits when the session ends. There is no out-of-band start or stop.
 ### Orchestrator session and routed subagents
 
 Channel events reach only the top-level session the runner spawned the server for,
-and a subagent cannot be woken directly by an event delivered to its parent. So a
-project runs as one **orchestrator session** that owns the server; the server
-watches the graph and every in-flight ticket's PRs and pushes all events to the
-orchestrator, which routes them to subagents — a coordinator subagent per
-`dispatch_ticket`, and the deliver subagent handling a PR for each PR/CI trigger
-(matched by `repo`/`pr`). Subagents MUST be per-event handlers over externalized
-state (the graph DB and `dispatch pr-status`), not separate sessions and not
-foreground loops. This reconceives §2.6's continuously-running nested actors and is
-subject to reconciliation with §2.6.
+and a subagent cannot be woken directly by a channel event. So a project runs as one
+**orchestrator session** that owns the server; the server watches the graph and every
+in-flight ticket's PRs and pushes all events to the orchestrator, which relays each
+to a subagent — a coordinator subagent per `dispatch_ticket`, and the subagent
+handling a PR for each PR/CI trigger (matched by `repo`/`pr`). A subagent MAY be
+long-lived, going idle after each event and resumed by the orchestrator's message
+when the next arrives, or short-lived, spawned per event. Either way the graph DB and
+`dispatch pr-status` remain the source of truth: a subagent MUST be able to
+reconstruct its state from them (this is also the recovery path after an orchestrator
+restart), and the waiting MUST stay in the server — a subagent MUST NOT run a
+foreground poll loop. This reconceives §2.6's continuously-running nested actors and
+is subject to reconciliation with §2.6.
 
 ### Channel capability
 

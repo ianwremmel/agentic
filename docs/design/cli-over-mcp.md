@@ -136,33 +136,39 @@ the DB backbone would reintroduce the very latency channels exist to remove.
 ### Execution topology: one orchestrator session, routed subagents
 
 Channel events reach only the **top-level** session — the one Claude Code spawned
-the server for. A subagent can't be woken directly by an event delivered to its
-parent, and the orchestrator has no way to launch a wholly new session per ticket
-(that would need a session-spawning supervisor the runtime doesn't provide). But
-the parent can **route**. So channel mode runs a single **orchestrator session**
-that owns the channel server; its server watches everything the session is working
-— the graph and every in-flight ticket's PRs — and pushes every event to the
-orchestrator, which dispatches the work to subagents:
+the server for. A subagent can't be woken directly by a channel event, and the
+orchestrator can't launch a wholly new session per ticket (that would need a
+session-spawning supervisor the runtime doesn't provide). But the parent can
+**route**. So channel mode runs a single **orchestrator session** that owns the
+channel server; its server watches everything the session is working — the graph and
+every in-flight ticket's PRs — and pushes every event to the orchestrator, which
+relays it to a subagent:
 
-- a `dispatch_ticket` work order spawns a **coordinator subagent** for that ticket;
-- a PR/CI trigger is routed by its `repo`/`pr` to the subagent handling that ticket,
-  which runs one `deliver` tick and returns.
+- a `dispatch_ticket` work order starts a **coordinator subagent** for that ticket;
+- a PR/CI trigger is routed by its `repo`/`pr` to the subagent handling that ticket.
 
-The subagents are **event handlers, not sleep-loopers and not separate sessions**:
-each does one unit of work against canonical state (the graph DB, `dispatch pr
-status`) and returns, re-dispatched when the next event for it arrives. Because all
-durable state lives in the DB and on the platforms, a subagent needs only the
-ticket/PR identity to pick up where the last left off — no session to launch, no
-context to keep warm across a wait. The orchestrator stays responsive by running
-these as background subagents rather than blocking on them, and per-project fan-out
-(§2.6's `maxParallel`) is the number it runs at once, capped by the slot ledger.
+A subagent handles one event and then **goes idle**, waiting for the orchestrator to
+send it the next one; the orchestrator wakes it with a message when its server
+delivers a relevant event. This keeps a coordinator's context warm across its
+ticket's lifecycle — closer to §2.6's persistent coordinator than a fresh agent each
+time — while the *waiting* still lives in the server, never in a subagent sleep loop.
+Subagents run in the background so the orchestrator stays responsive; per-project
+fan-out (§2.6's `maxParallel`) is how many it keeps active, capped by the slot
+ledger.
 
-This still reconceives §2.6's actor model — coordinators and delivery workers were
-continuously-running nested agents; here they are per-event subagents over
-externalized state — so it needs reconciling with §2.6 (see
-[Open decisions](#open-decisions-and-questions)). It depends on the runner being
-able to dispatch/resume subagents from the orchestrator turn that a channel event
-wakes; that is the one runtime capability the model rests on.
+Idle-and-resume is preferred where the runner supports it, but it is **not
+load-bearing for correctness**: because all durable state lives in the graph DB and
+on the platforms, a subagent needs only the ticket/PR identity to reconstruct where
+the last left off. So a subagent MAY instead be **short-lived** — spawned per event,
+reconstructing from state, returning — and that reconstruct-from-DB path is also the
+recovery path when the orchestrator restarts and its idle subagents are gone. The DB
+stays the source of truth either way.
+
+The model rests on one runtime capability: the orchestrator being able to start a
+background subagent and later resume it with a message from the turn a channel event
+wakes. It reconceives §2.6's continuously-running nested workers as event-driven
+(idle or short-lived) subagents, which needs reconciling with §2.6 (see
+[Open decisions](#open-decisions-and-questions)).
 
 ### Multi-session: many orchestrators, one database
 
@@ -344,13 +350,13 @@ lived in `orchestrate` move into the CLI, along with the dynamic cadence table f
 dispatches what the CLI hands it.
 
 **`deliver`** (in `channel` mode). The `sleep`+`pr-status` loop goes away. deliver
-runs as a subagent the orchestrator dispatches per PR event: it reads the PR's
+runs as a subagent the orchestrator relays PR events to: on each, it reads the PR's
 canonical state (`dispatch pr status`), runs its per-tick judgment **once** —
-address actionable concerns, evaluate gates — and returns, to be re-dispatched when
-the next event for that PR arrives. On merge/close the orchestrator clears the
-watch. Deliver's judgment (§2.4) is unchanged; only the waiting is relocated — and
-it works only because deliver is a per-event subagent over externalized state, not a
-nested sleep loop (see
+address actionable concerns, evaluate gates — and then goes idle until the
+orchestrator sends the next event for that PR (or returns to be re-dispatched — the
+DB carries its state either way). On merge/close the orchestrator clears the watch.
+Deliver's judgment (§2.4) is unchanged; only the waiting is relocated — into the
+server, not a nested sleep loop (see
 [Execution topology](#execution-topology-one-orchestrator-session-routed-subagents)).
 
 In `polling` mode both skills behave exactly as they do today.
@@ -438,11 +444,12 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 
 ## Open decisions and questions
 
-- **Subagent dispatch/resume capability.** The topology rests on the orchestrator
-  being able to dispatch (and, if context matters, resume) subagents from the turn a
-  channel event wakes, running them in the background so it stays responsive. Confirm
-  that capability in the target runner before the deliver phase; without it, deliver
-  falls back to its foreground loop.
+- **Subagent dispatch/resume capability.** The preferred model rests on the
+  orchestrator starting background subagents and later resuming an idle one with a
+  message from the turn a channel event wakes. Confirm that in the target runner
+  before the deliver phase. If only one-shot subagents are available, the short-lived
+  reconstruct-from-DB variant still works; if neither, deliver falls back to its
+  foreground loop.
 - **§2.6 reconciliation.** Fold the work-order model, the producer-vs-CLI
   derivation split, the tick-duty kinds (`park_human_blocked`, `alert_failure`,
   `project_complete`), and the actor-model shift (continuously-running workers →

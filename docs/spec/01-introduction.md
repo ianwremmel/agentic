@@ -24,8 +24,9 @@ covers six conformance protocols and one operational layer:
   whole project (or several) by fanning out §2.5 coordinators over a merged
   dependency graph: the project-graph document, the producer/cursor contract,
   the stateless tick, slot accounting, the milestone-review gate, and injection.
-- **§3.1 Daemon** — the daemon process model, spawn contract for agent
-  sessions, event taxonomy, and prompt template system.
+- **§3.1 Channel Server** — the per-session channel server that pushes events
+  into a live session: process model, the channel message protocol, event
+  sourcing, and multi-session coordination.
 - **§3.2 Commands** — the full `dispatch` CLI command reference, including the
   interaction commands the protocols depend on (e.g., `create-comment`,
   `request-review`).
@@ -37,8 +38,8 @@ covers six conformance protocols and one operational layer:
   protocol requirement.
 - Non-GitHub PR platforms (GitLab, Gitea, Bitbucket) and non-Linear ticket
   trackers beyond the mappings explicitly defined in §2.3.
-- Agent runner internals — the spec treats the runner as a black box invoked
-  by the daemon.
+- Agent runner internals — the spec treats the session runner as a black box
+  that the channel server attaches to.
 
 ## How to read this spec
 
@@ -120,18 +121,20 @@ shared vocabulary of **roles** and **groups** so protocol rules can be written
 once and applied to any tracker. §2.3 defines the full vocabulary and the
 per-tracker default mappings.
 
-### The daemon
+### The channel server
 
-Agent sessions are transient. Engineering work spans hours and days — CI runs,
-human reviewers, tracker state transitions. The `dispatch` daemon is a
-long-running process that keeps tasks alive across those gaps: it subscribes to
-event sources, resumes the appropriate agent session when an event arrives, and
-holds tasks in persistent state on disk between events. §3 defines the daemon
-in full.
+Engineering work spans hours and days — CI runs, human reviewers, tracker state
+transitions — but the waiting for those is not the agent's job. The `dispatch`
+channel server is the CLI running as a Claude Code channel: one per session, it
+watches the event sources it can reach and pushes events into the live session so
+the agent reacts once and yields rather than sitting in a loop. Work that only an
+MCP client can reach (an MCP-only tracker) is delegated back to the session.
+Multiple sessions each run their own server and coordinate through the shared
+graph database. §3 defines the channel server in full.
 
 ## Architecture overview
 
-The diagram below shows how the six protocols relate and where the daemon
+The diagram below shows how the six protocols relate and where the channel server
 sits. Arrows indicate "depends on" / "references."
 
 ```mermaid
@@ -142,7 +145,7 @@ graph TD
     DWP["§2.4 Delivery Protocol<br/><i>worktree → draft PR → CI → merge</i>"]
     TCP["§2.5 Ticket Coordination Protocol<br/><i>one ticket → one or more PRs</i>"]
     ORC["§2.6 Orchestration Protocol<br/><i>graph-frontier dispatcher</i>"]
-    DMN["§3.1 Daemon<br/><i>operational driver</i>"]
+    DMN["§3.1 Channel Server<br/><i>event driver</i>"]
     CMD["§3.2 Commands<br/><i>CLI primitives</i>"]
 
     DWP --> ACP

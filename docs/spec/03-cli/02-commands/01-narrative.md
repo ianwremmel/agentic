@@ -4,9 +4,10 @@
 
 The `dispatch` CLI has two distinct roles.
 
-**Daemon commands** manage the daemon process: starting, stopping, checking
-status, and managing prompt template overrides. These are the commands a
-developer runs from the terminal.
+**Server and work-registration commands** run and inspect the channel server
+(§3.1) and register work into the graph for it to monitor. These are commands a
+developer runs from the terminal; the session runner spawns `dispatch mcp`
+itself.
 
 **Interaction commands** are the primitives the protocols depend on for every
 platform write the agent makes — posting a comment, reacting to a thread,
@@ -25,9 +26,9 @@ APIs directly — achieves three things:
    command handles whether the platform uses a REST API, a GraphQL mutation, or a
    CLI invocation. The agent's prompt never contains platform-specific branching.
 
-3. **Auditability.** Because every write goes through a known command, the daemon
-   can log platform interactions centrally. Session logs show `dispatch
-   create-comment` calls, not raw API calls that could vary across implementations.
+3. **Auditability.** Because every write goes through a known command, platform
+   interactions are logged centrally. Session logs show `dispatch create-comment`
+   calls, not raw API calls that could vary across implementations.
 
 ## Interaction commands and the protocols
 
@@ -46,11 +47,12 @@ An agent session that uses these commands for all platform writes is guaranteed
 to conform to §2.1 and §2.2 without needing to re-implement mode selection,
 marker syntax, or cache layout.
 
-## Daemon vs interaction: who calls what
+## Server vs interaction: who calls what
 
-Daemon commands (`daemon start`, `daemon stop`, `daemon status`, `prompts *`,
-`tasks *`) are invoked by the operator from the terminal. They manage process
-state and configuration.
+Server and work-registration commands (`mcp status`, the `graph` surface,
+`graph pr add`) are invoked by the operator from the terminal, or by a skill to
+register work; the session runner spawns `dispatch mcp` itself. They manage the
+server and the graph.
 
 Interaction commands (`create-comment`, `reply-to-thread`, `react`,
 `request-review`, `pr-status`, `ack-annotation`) are invoked by an agent session

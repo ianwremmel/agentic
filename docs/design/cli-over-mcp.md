@@ -47,7 +47,7 @@ CLI does not yet own.
   how it signals the server.
 - Support the concurrency the CLI already allows: multiple sessions working
   different projects at once, without stepping on each other (see
-  [Multi-session](#multi-session-many-servers-one-database)).
+  [Multi-session](#multi-session-many-orchestrators-one-database)).
 
 ## Non-goals
 

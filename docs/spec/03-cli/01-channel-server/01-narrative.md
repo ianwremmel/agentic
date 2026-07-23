@@ -82,21 +82,20 @@ waiting differs, so the two modes cannot drift into two different behaviors.
 
 ## Multi-session
 
-Channel events reach only a top-level session, so each unit that must wait and
-react — the orchestrator, and each in-flight ticket — runs as its own top-level
-session with its own server; a `dispatch_ticket` launches a ticket session. The
-CLI has long supported several sessions on different projects at once, and this is
-that model. All servers and sessions share the one graph DB, and overlap is
-prevented where it already is — in the DB. The CLI claims a ticket (and a slot)
-atomically before handing it to its session, so two servers cannot dispatch the
-same ticket, and the slot ledger enforces the machine-wide compute cap. A server
-heartbeats while alive so a crashed session's claims can be reclaimed; but because
-a wedged agent's server keeps heartbeating, §2.6's per-owner heartbeats stay as the
-agent-progress signal, and a claim is reclaimable when its session's process is
-gone or its per-owner heartbeat lapses. Clearing the claim is a DB write any server
-can do; the tracker-side unpark is left to the next dispatch to reconcile.
-Concurrency and recovery are thus provided by the shared DB, not a singleton
-process.
+Channel events reach only a top-level session, and a subagent can't be woken
+directly, so a project runs as one orchestrator session that owns the server and
+routes events to per-event subagents (a coordinator per ticket, deliver per PR
+event) — no per-ticket sessions to launch. The CLI has long supported several such
+sessions on different projects at once; each owns a server watching its own
+tickets' PRs, all sharing the one graph DB. Overlap is prevented in the DB: the CLI
+claims a ticket and a slot atomically before dispatching a coordinator, so two
+orchestrators can't take the same ticket, and the slot ledger enforces the
+machine-wide cap. A server heartbeats while its session is alive, so a crashed
+orchestrator's claims go stale and another server reclaims them; event-driven
+subagents are dormant between events by design, so there is no per-worker
+heartbeat, and a wedged-but-alive orchestrator is a residual case for a watchdog,
+not the DB. Clearing a reclaimed claim is a DB write any server can do; the
+tracker-side unpark is left to the next dispatch's coordinator to reconcile.
 
 ## Relationship to §2.4
 

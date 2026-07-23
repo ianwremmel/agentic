@@ -133,69 +133,66 @@ change (a SQLite update hook or file watch), not only on a fixed interval — so
 just-opened PR is watched within a second, not a poll cycle later. Without that,
 the DB backbone would reintroduce the very latency channels exist to remove.
 
-### Execution topology: a session per active unit
+### Execution topology: one orchestrator session, routed subagents
 
 Channel events reach only the **top-level** session — the one Claude Code spawned
-the server for. A `Task` subagent runs to completion and returns; it cannot yield
-and be re-woken later by an event delivered to its parent. So anything that must
-wait for an external event and then act has to be a top-level session with its own
-server, not a nested subagent.
+the server for. A subagent can't be woken directly by an event delivered to its
+parent, and the orchestrator has no way to launch a wholly new session per ticket
+(that would need a session-spawning supervisor the runtime doesn't provide). But
+the parent can **route**. So channel mode runs a single **orchestrator session**
+that owns the channel server; its server watches everything the session is working
+— the graph and every in-flight ticket's PRs — and pushes every event to the
+orchestrator, which dispatches the work to subagents:
 
-Channel mode therefore runs **one top-level session per active unit of work**,
-each with its own `dispatch mcp` server:
+- a `dispatch_ticket` work order spawns a **coordinator subagent** for that ticket;
+- a PR/CI trigger is routed by its `repo`/`pr` to the subagent handling that ticket,
+  which runs one `deliver` tick and returns.
 
-- an **orchestrator session** whose server does the graph scheduling and pushes
-  work orders into it; and
-- one **ticket session** per in-flight ticket, launched when the orchestrator
-  session receives a `dispatch_ticket`, running `work-ticket` (and `deliver` for
-  its PRs) and woken by its own server's PR/CI events.
+The subagents are **event handlers, not sleep-loopers and not separate sessions**:
+each does one unit of work against canonical state (the graph DB, `dispatch pr
+status`) and returns, re-dispatched when the next event for it arrives. Because all
+durable state lives in the DB and on the platforms, a subagent needs only the
+ticket/PR identity to pick up where the last left off — no session to launch, no
+context to keep warm across a wait. The orchestrator stays responsive by running
+these as background subagents rather than blocking on them, and per-project fan-out
+(§2.6's `maxParallel`) is the number it runs at once, capped by the slot ledger.
 
-Launching a ticket session is the one spawn that remains — but it starts a warm
-channel session that keeps its skills and context, not a cold prompt-templated
-runner. Per-project fan-out (§2.6's `maxParallel`) is the number of concurrent
-ticket sessions, capped by the slot ledger — the "several sessions, each with a
-server" model of the next section.
+This still reconceives §2.6's actor model — coordinators and delivery workers were
+continuously-running nested agents; here they are per-event subagents over
+externalized state — so it needs reconciling with §2.6 (see
+[Open decisions](#open-decisions-and-questions)). It depends on the runner being
+able to dispatch/resume subagents from the orchestrator turn that a channel event
+wakes; that is the one runtime capability the model rests on.
 
-This reconceives §2.6's actor model: coordinators and delivery workers were nested
-sub-agents holding slots; here each is a top-level session. That needs to be
-reconciled with §2.6 (see [Open decisions](#open-decisions-and-questions)). The
-leaner alternative — a single session running everything as one-shot subagents per
-event — keeps `deliver` as a foreground loop inside its subagent (a subagent can't
-be woken) and event-drives only the orchestrator tier, which does *not* retire
-deliver's sleep loop, the design's biggest win.
-
-### Multi-session: many servers, one database
+### Multi-session: many orchestrators, one database
 
 The CLI already lets an operator run several sessions on different projects at
-once. That must keep working, and it does so naturally here: **each session
-spawns its own `dispatch mcp` server** (channels are per-session subprocesses),
-and all servers and sessions share the one graph DB.
+once. That keeps working: an orchestrator session per project (or per operator),
+each owning one server that watches its own tickets' PRs, all sharing the one graph
+DB. Overlap is prevented where it already is — in the DB, not in a coordinator:
 
-Overlap is prevented where it already is — in the DB, not in a coordinator:
-
-- **Atomic claims.** Before emitting a `dispatch_ticket`, a server claims the
-  ticket (and a slot) under `BEGIN IMMEDIATE`, so two servers can't hand the same
-  ticket to their sessions. Claiming is a pure DB write — no MCP — so the CLI owns
-  it end to end.
+- **Atomic claims.** Before dispatching a coordinator subagent, the server claims
+  the ticket (and a slot) under `BEGIN IMMEDIATE`, so two orchestrators can't take
+  the same ticket. Claiming is a pure DB write — no MCP — so the CLI owns it end to
+  end.
 - **The slot ledger.** `dispatch graph slot acquire` enforces the machine-wide
-  compute cap (`maxParallel`) across all sessions, whichever server they belong
-  to — the global concurrency limit, in the DB rather than a coordinator process.
-- **Liveness, at two levels.** The server registers itself on spawn (session id,
-  pid, `started_at`) and heartbeats while alive — but a server is a subprocess that
-  keeps heartbeating even if the agent loop wedges, so its heartbeat only proves the
-  *session process* is up. It dies with the session, giving fast crash detection;
-  detecting a *wedged-but-alive* agent still needs an agent-written progress signal,
-  so §2.6's per-owner claim heartbeats stay. A claim is stale when its owning
-  session's process is gone **or** its per-owner heartbeat has lapsed; the registry
-  lets any server attribute a claim to a session and reclaim it on either condition.
+  compute cap (`maxParallel`) across all orchestrators — the global concurrency
+  limit, in the DB rather than a coordinator process.
+- **Liveness is session-level.** The server heartbeats while its orchestrator
+  session is alive and dies with the session, so a crashed orchestrator's claims go
+  stale and any other server can reclaim them via the registry. Event-driven
+  subagents are dormant between events by design, so there is no per-worker progress
+  heartbeat to lean on; the residual gap is an orchestrator whose process lives but
+  whose agent loop wedges — its server keeps beating. That case is left to a
+  watchdog or the operator, not solved by the DB.
 - **Reclamation is split.** Clearing the claim in the DB is something any server can
   do, but the tracker-side unpark (clearing §2.6's mirrored "working" label) is a
   write the no-MCP server can't make. So the reclaiming server clears the DB claim
-  and the ticket returns to the frontier; the next `dispatch_ticket` session
-  reconciles the tracker state as it starts.
+  and the ticket returns to the frontier; the coordinator subagent of the next
+  `dispatch_ticket` reconciles the tracker state as it starts.
 
-So multi-session is a first-class property that falls out of per-session servers
-plus the shared DB. Nothing about concurrency is deferred.
+So multi-session is a first-class property that falls out of one server per
+orchestrator session plus the shared DB. Nothing about concurrency is deferred.
 
 ### Channel mode vs fallback mode
 
@@ -273,7 +270,7 @@ has already done the scheduling (ranked, gated, slotted, and — for
 
 | kind                       | meta (beyond source/kind/seq) | asks the session to                                              |
 | -------------------------- | ----------------------------- | --------------------------------------------------------------- |
-| `dispatch_ticket`          | `project`, `ticket`           | run `work-ticket` for the ticket (already claimed for this session, with a slot held) |
+| `dispatch_ticket`          | `project`, `ticket`           | spawn a coordinator subagent running `work-ticket` for the ticket (already claimed, slot held) |
 | `perform_milestone_review` | `project`, `milestone`        | run `milestone-review` — the milestone's gate is open           |
 | `refresh_graph`            | `tracker`, `reason`           | run `build-graph` against the tracker and write the delta (the CLI can't read the tracker itself) |
 | `park_human_blocked`       | `project`, `ticket`           | move a human-blocked ticket to its parked state and post the handoff (a tracker write) |
@@ -336,24 +333,25 @@ for the PR/CI phase, not an afterthought.
 
 **`orchestrate`** (in `channel` mode). The `/loop`-driven tick loop goes away, and
 with it the session's need to read `graph summary` to decide what to run — the CLI
-does the scheduling. The orchestrator session opens, then yields. Its server emits
-a work order per unit of work: `dispatch_ticket` (which launches a ticket session),
+does the scheduling. The orchestrator session opens, then yields. Its server emits a
+work order per unit of work: `dispatch_ticket` (spawn a coordinator subagent),
 `perform_milestone_review`, `refresh_graph`, and the tick-duty orders
 (`park_human_blocked`, `alert_failure`, `project_complete`) that carry §2.6's
-surface/park/alert/complete duties. The ranking, gating, slot accounting, and
-claiming that lived in `orchestrate` move into the CLI, along with the dynamic
-cadence table from `orchestrate/reference.md`. The session still never *derives*
-the schedule; it executes what the CLI hands it.
+surface/park/alert/complete duties; it also routes PR/CI triggers to the right
+subagent by `repo`/`pr`. The ranking, gating, slot accounting, and claiming that
+lived in `orchestrate` move into the CLI, along with the dynamic cadence table from
+`orchestrate/reference.md`. The orchestrator never *derives* the schedule; it
+dispatches what the CLI hands it.
 
-**`deliver`** (in `channel` mode). Inside its ticket session the `sleep`+`pr-status`
-loop goes away. The session opens its PR, records it (a `dispatch` write the server
-observes), then yields. The ticket's own server watches CI and reviewers and pushes
-`ci_finished` / `pr_review` / `pr_state_change`; each event wakes the session to run
-deliver's per-tick judgment **once** — address actionable concerns, evaluate gates —
-then yield. On merge/close it clears the watch and the session ends. Deliver's
-judgment (§2.4) is unchanged; only the waiting is relocated — and only because
-deliver runs in a top-level ticket session, not a nested subagent (see
-[Execution topology](#execution-topology-a-session-per-active-unit)).
+**`deliver`** (in `channel` mode). The `sleep`+`pr-status` loop goes away. deliver
+runs as a subagent the orchestrator dispatches per PR event: it reads the PR's
+canonical state (`dispatch pr status`), runs its per-tick judgment **once** —
+address actionable concerns, evaluate gates — and returns, to be re-dispatched when
+the next event for that PR arrives. On merge/close the orchestrator clears the
+watch. Deliver's judgment (§2.4) is unchanged; only the waiting is relocated — and
+it works only because deliver is a per-event subagent over externalized state, not a
+nested sleep loop (see
+[Execution topology](#execution-topology-one-orchestrator-session-routed-subagents)).
 
 In `polling` mode both skills behave exactly as they do today.
 
@@ -422,7 +420,7 @@ vocabulary, coalescing, and the shared-DB signalling contract.
    and `deliver`, with `polling` = today's behaviour and `channel` a stub that
    yields. No behaviour change when no channel is attached.
 3. **Graph scheduling + orchestrate.** Move ranking, gating, slot accounting, and
-   claiming into the CLI; add the two-level liveness registry for stale-claim
+   claiming into the CLI; add the session-level liveness registry for stale-claim
    recovery. Emit `dispatch_ticket` / `perform_milestone_review` and the tick-duty
    orders (`park_human_blocked`, `alert_failure`, `project_complete`); wire the
    orchestrator session's `channel` mode to execute them.
@@ -431,31 +429,28 @@ vocabulary, coalescing, and the shared-DB signalling contract.
    reads in `channel` mode.
 5. **Port `pr-status` → `dispatch pr status`.** Move the bash logic into the CLI;
    keep byte-for-byte output parity so `deliver`'s reads are unaffected.
-6. **Ticket-session launch + deliver.** Add the mechanism that launches a ticket
-   session on `dispatch_ticket` (see [Open decisions](#open-decisions-and-questions));
-   watch CI and reviewers; emit the PR triggers; wire `deliver`'s `channel` mode.
-   The heaviest poller retires.
+6. **Event routing + deliver.** Route PR triggers to per-ticket subagents; watch CI
+   and reviewers; emit the PR triggers; wire `deliver`'s `channel` mode as a
+   per-event subagent. The heaviest poller retires.
 7. **Cadence + hardening.** Port the dynamic-interval table; per-PR/per-kind
    coalescing; wake-on-DB-change; restart-rehydration; multi-session soak (two
    sessions, one DB, no overlap).
 
 ## Open decisions and questions
 
-- **Execution topology (needs sign-off).** This design takes the session-per-
-  active-unit model — an orchestrator session plus a ticket session per in-flight
-  ticket, each with its own server — because it is the only one that retires
-  deliver's sleep loop and it matches the "multiple sessions launch servers
-  concurrently" direction. It reconceives §2.6's nested coordinator/worker actors
-  as top-level sessions and needs reconciling with §2.6. The leaner single-session
-  alternative keeps deliver as a foreground subagent loop. Confirm before the
-  deliver phase.
-- **Session-launch mechanism.** Something must start a ticket session on
-  `dispatch_ticket` — the orchestrator session shelling out `claude`, or a thin
-  supervisor process. Which, and how it passes the session-id marker and the
-  ticket, is an implementation detail to pin down in the scheduling phase.
+- **Subagent dispatch/resume capability.** The topology rests on the orchestrator
+  being able to dispatch (and, if context matters, resume) subagents from the turn a
+  channel event wakes, running them in the background so it stays responsive. Confirm
+  that capability in the target runner before the deliver phase; without it, deliver
+  falls back to its foreground loop.
 - **§2.6 reconciliation.** Fold the work-order model, the producer-vs-CLI
-  derivation split, and the tick-duty kinds (`park_human_blocked`, `alert_failure`,
-  `project_complete`) back into §2.6 so the two specs agree.
+  derivation split, the tick-duty kinds (`park_human_blocked`, `alert_failure`,
+  `project_complete`), and the actor-model shift (continuously-running workers →
+  per-event subagents over externalized state) back into §2.6 so the two specs
+  agree.
+- **Wedged-orchestrator liveness.** Session-level heartbeats catch a crashed
+  orchestrator but not one whose process lives while its agent loop hangs; that
+  residual case needs a watchdog or operator, and its shape is open.
 - **CI provider abstraction.** `ci_finished` spans `gh pr checks --watch` and
   `bk build wait`, which are different subprocesses with different terminal
   signals; the watch loop needs a provider seam.

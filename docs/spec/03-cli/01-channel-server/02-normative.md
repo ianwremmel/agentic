@@ -17,15 +17,18 @@ session — MUST be able to run concurrently against the shared graph DB (see
 The server's lifetime is bound to its session: it starts when the session starts
 and exits when the session ends. There is no out-of-band start or stop.
 
-### One session per waiting unit
+### Orchestrator session and routed subagents
 
-Channel events reach only the top-level session the runner spawned the server for;
-a nested subagent cannot be woken by an event delivered to its parent. Therefore
-any unit of work that must wait for an external event and then act — the
-orchestrator, and each in-flight ticket — MUST run as its own top-level session
-with its own server. A `dispatch_ticket` work order causes a new ticket session to
-be launched. This reconceives §2.6's nested coordinator/worker actors as top-level
-sessions and is subject to reconciliation with §2.6.
+Channel events reach only the top-level session the runner spawned the server for,
+and a subagent cannot be woken directly by an event delivered to its parent. So a
+project runs as one **orchestrator session** that owns the server; the server
+watches the graph and every in-flight ticket's PRs and pushes all events to the
+orchestrator, which routes them to subagents — a coordinator subagent per
+`dispatch_ticket`, and the deliver subagent handling a PR for each PR/CI trigger
+(matched by `repo`/`pr`). Subagents MUST be per-event handlers over externalized
+state (the graph DB and `dispatch pr-status`), not separate sessions and not
+foreground loops. This reconceives §2.6's continuously-running nested actors and is
+subject to reconciliation with §2.6.
 
 ### Channel capability
 
@@ -178,16 +181,18 @@ the shared graph DB, not on a coordinating process:
    NOT be able to hand the same node to their sessions.
 2. **Machine-wide compute cap.** The slot ledger (§2.6) enforces the global
    parallelism limit across all sessions and servers.
-3. **Two-level liveness.** Each server MUST register itself in the DB on spawn
-   (session id, pid, start time) and heartbeat while alive. The server heartbeat
-   detects a crashed session (the server dies with it) but not a wedged-yet-alive
-   agent, so §2.6's per-owner claim heartbeats MUST remain as the agent-progress
-   signal. Every claim MUST record its owning session; a claim is reclaimable when
-   its owning session's process is gone OR its per-owner heartbeat has lapsed.
+3. **Liveness.** Each server MUST register itself in the DB on spawn (session id,
+   pid, start time) and heartbeat while its orchestrator session is alive; the
+   server dies with the session, so a crashed orchestrator's claims go stale and any
+   other server MAY reclaim them via the registry. In channel mode workers are
+   event-driven and dormant between events, so there is no per-worker progress
+   heartbeat; §2.6's per-owner heartbeats apply only where workers run continuously
+   (polling mode). Detecting an orchestrator whose process lives while its agent loop
+   wedges is out of scope for the registry.
 4. **Split reclamation.** Reclaiming a claim clears it in the DB, which any server
    MAY do. The tracker-side unpark (clearing §2.6's mirrored working label) is a
-   tracker write the server cannot make, so it MUST be left to the next
-   `dispatch_ticket` session to reconcile.
+   tracker write the server cannot make, so it MUST be left to the coordinator
+   subagent of the next `dispatch_ticket` to reconcile.
 
 ## Fallback mode
 

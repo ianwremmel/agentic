@@ -138,20 +138,23 @@ and all servers and sessions share the one graph DB.
 
 Overlap is prevented where it already is — in the DB, not in a coordinator:
 
-- **Atomic claims.** `dispatch graph next --claim` claims under `BEGIN
-  IMMEDIATE`, so two sessions can't take the same ticket. A session watches only
-  what it has claimed.
+- **Atomic claims.** Before emitting a `dispatch_ticket`, a server claims the
+  ticket (and a slot) under `BEGIN IMMEDIATE`, so two servers can't hand the same
+  ticket to their sessions. Claiming is a pure DB write — no MCP — so the CLI owns
+  it end to end.
 - **The slot ledger.** `dispatch graph slot acquire` enforces the machine-wide
   compute cap (`maxParallel`) across all sessions, whichever server they belong
-  to. This is the global concurrency limit §3.1 put in a singleton daemon —
-  already implemented, already shared.
-- **Stale-claim recovery.** Claim heartbeats plus `claimStaleAfter` reclaim work
-  abandoned by a crashed session. Cross-session crash recovery is the existing
-  stale-claim path, not new machinery.
+  to — the global concurrency limit, in the DB rather than a coordinator process.
+- **Liveness-based stale-claim recovery.** Each server registers itself in the DB
+  on spawn (session id, pid, `started_at`) and heartbeats a liveness row while
+  alive; every claim records the session that owns it. Any server can then tell
+  which other sessions are still running and reclaim the claims of ones that are
+  not — staleness is "the owning session's server stopped heartbeating," with a
+  time threshold as a backstop. One server heartbeat covers all that session's
+  claims, and heartbeating moves out of the skills into the server.
 
 So multi-session is a first-class property that falls out of per-session servers
-plus the shared DB. There is no single-daemon-per-machine rule and nothing about
-concurrency is deferred.
+plus the shared DB. Nothing about concurrency is deferred.
 
 ### Channel mode vs fallback mode
 
@@ -183,24 +186,28 @@ craft and no divergence between "what the event said" and "what the CLI returns.
 When events coalesce, the agent re-reads for freshness rather than trusting a
 possibly-stale body.
 
-Two families of trigger, plus delegation:
+Two families:
 
-- **Observed triggers** — the CLI saw a change in a source it can reach (a PR, a
-  CI rollup, the graph). It pushes the trigger; the session reacts through the
-  matching `dispatch` read.
-- **Delegation triggers** — the CLI needs work only the session's MCP client can
-  do (reach Linear). It pushes the request; the session does it through its
-  skills and writes results back with `dispatch graph …`, which the server then
-  observes. Nothing is polled over MCP by the CLI.
+- **PR/CI triggers** — the CLI saw a change on a PR it is watching. It pushes the
+  trigger with the `dispatch pr status` payload as the body; the session applies
+  `deliver`'s judgment. Judgment is genuinely the session's here — deciding what a
+  review or a failing check demands is not deterministic.
+- **Work orders** — the CLI did the deterministic graph reasoning itself (rank the
+  frontier, apply the milestone gates, account for slots, claim) and tells the
+  session exactly what to do next: coordinate this ticket, review this milestone,
+  refresh the graph. The session runs the named skill and **never has to
+  understand the graph**. A tracker refresh is a work order too: the CLI can't
+  read an MCP-only tracker, so it asks the session — which holds the MCP client —
+  to do it and write the delta back through `dispatch graph …`.
 
 ### Event catalog
 
 Every event carries `source` (set automatically to the server name), a `kind`,
-and a monotonic `seq` for ordering/coalescing. Meta values are strings; meta
-keys are `snake_case` identifiers (`[A-Za-z0-9_]` — the channel layer silently
-drops keys with hyphens, so it is `pr`, never `pr-number`). Bodies are either
-the canonical `dispatch pr status` payload or a short instruction; never raw
-external text assembled by the server.
+and a monotonic `seq` for ordering/coalescing. Meta values are strings; each meta
+key consists only of letters, digits, and underscores (anchored `^[a-z0-9_]+$`) —
+the channel layer silently drops any key with a hyphen, so it is `pr`, never
+`pr-number`. Bodies are either the canonical `dispatch pr status` payload or a
+short instruction; never raw external text assembled by the server.
 
 **PR / CI triggers** — body is the `dispatch pr status` payload for `repo`/`pr`.
 
@@ -211,43 +218,41 @@ external text assembled by the server.
 | `pr_comment`      | `repo`, `pr`, `thread`                            | a new top-level comment or inline reply lands     |
 | `pr_state_change` | `repo`, `pr`, `state` = ready\|draft\|merged\|closed | the PR changes lifecycle state                 |
 
-**Graph triggers** — body is a one-line pointer; the session reads `dispatch
-graph doc`/`summary`.
+**Work orders** — body is a short instruction naming the skill to run. The CLI
+has already done the scheduling (ranked, gated, slotted, and — for
+`dispatch_ticket` — claimed) before it emits one, so the session just executes.
 
-| kind                      | meta (beyond source/kind/seq)      | fires when                                            |
-| ------------------------- | ---------------------------------- | ---------------------------------------------------- |
-| `ticket_frontier_changed` | `project`, `ready_count`           | the ranked available frontier changes (new unblocked work) |
-| `milestone_gate_open`     | `project`, `milestone`             | a milestone's members complete and its review gate opens |
-| `slot_available`          | `free_slots`                       | a compute slot frees up under `maxParallel`          |
+| kind                       | meta (beyond source/kind/seq) | asks the session to                                              |
+| -------------------------- | ----------------------------- | --------------------------------------------------------------- |
+| `dispatch_ticket`          | `project`, `ticket`           | run `work-ticket` for the ticket (already claimed for this session, with a slot held) |
+| `perform_milestone_review` | `project`, `milestone`        | run `milestone-review` — the milestone's gate is open           |
+| `refresh_graph`            | `tracker`, `reason`           | run `build-graph` against the tracker and write the delta (the CLI can't read the tracker itself) |
 
-**Delegation triggers** — body is a short instruction naming the skill to run.
-
-| kind              | meta (beyond source/kind/seq)      | asks the session to                                  |
-| ----------------- | ---------------------------------- | ---------------------------------------------------- |
-| `refresh_graph`   | `tracker`, `reason`                | run `build-graph` (tracker MCP) and write the delta, advancing the cursor |
-| `dispatch_ticket` | `project`, `ticket`                | claim (`graph next --claim`) and run `work-ticket` for that ticket |
-
-New kinds may be added; renaming a kind is a breaking change (as in §3.1).
+New kinds may be added; renaming a kind is a breaking change.
 
 ### What the CLI watches directly
 
 | Source              | Mechanism (no MCP)                                   | Emits                                            |
 | ------------------- | ---------------------------------------------------- | ------------------------------------------------ |
 | GitHub PR / CI      | `dispatch pr status` internals (the integrated `pr-status` logic + `gh pr checks --watch` / `bk build wait`) | `ci_finished`, `pr_review`, `pr_comment`, `pr_state_change` |
-| Graph DB (own state)| SQLite reads on a tick, via the existing derivation layer | `ticket_frontier_changed`, `milestone_gate_open`, `slot_available` |
-| Tracker (Linear …)  | **cannot** — pushed as a `refresh_graph` delegation   | `refresh_graph`                                  |
+| Graph DB (own state)| SQLite reads on a tick; the CLI ranks, gates, slots, and claims | `dispatch_ticket`, `perform_milestone_review`    |
+| Tracker (Linear …)  | **cannot** — asked of the session as a work order     | `refresh_graph`                                  |
 
-The frontier and gate events are computed from the same derivation layer
-(`derive.mts` / `queries.mts`) the `graph` commands use, so the CLI and the
-session always agree on what is ready.
+Scheduling runs through the same derivation layer (`derive.mts` / `queries.mts`)
+the `graph` commands use, entirely inside the CLI. The session receives only the
+resulting work orders and never re-derives the frontier.
 
 ### `dispatch pr status`: integrating pr-status
 
 `pr-status` today is a standalone ~710-line bash script that does far more than
 `gh pr view`: it drives `gh api graphql` + REST, classifies actionability,
 applies the §2.2 wire format, and maintains a disk cache. This design **moves it
-into the CLI as `dispatch pr status`** (a port from bash to the `.mts` CLI). One
-payload implementation then serves two surfaces:
+into the CLI as a `dispatch pr status` subcommand** — a port from bash to the
+`.mts` CLI, and a deliberate rename of the current `dispatch pr-status`
+interaction command (§2.2, §3.2.3). The spec keeps the hyphenated `dispatch
+pr-status` spelling until this rename lands; this design doc uses the proposed
+`dispatch pr status` throughout. One payload implementation then serves two
+surfaces:
 
 - **CLI output** — the session runs `dispatch pr status --pr 7` and gets the §2.2
   document, exactly as `deliver` reads it today.
@@ -261,12 +266,14 @@ for the PR/CI phase, not an afterthought.
 
 ### How the two loops become event handlers
 
-**`orchestrate`** (in `channel` mode). The `/loop`-driven tick loop goes away.
-The session opens, does one bootstrap tick, then yields. Thereafter each event is
-one tick's worth of work: on `ticket_frontier_changed` or `slot_available`,
-dispatch the newly-ready coordinators; on `milestone_gate_open`, run
-`milestone-review`; on `refresh_graph`, refresh from the tracker. The dynamic
-cadence table moves from `orchestrate/reference.md` into the CLI.
+**`orchestrate`** (in `channel` mode). The `/loop`-driven tick loop goes away, and
+with it the session's need to read `graph summary` and decide what to run — the
+CLI does the scheduling now. The session opens, then yields. Each work order is
+one unit of work: on `dispatch_ticket`, run `work-ticket` for the named ticket;
+on `perform_milestone_review`, run `milestone-review`; on `refresh_graph`, refresh
+from the tracker and write the delta. The ranking, gating, slot accounting, and
+claiming that lived in `orchestrate` move into the CLI, along with the dynamic
+cadence table from `orchestrate/reference.md`.
 
 **`deliver`** (in `channel` mode). The `sleep`+`pr-status` loop goes away. When
 the session opens a PR it records it (a `dispatch` write the server observes),
@@ -301,11 +308,13 @@ untrusted-field rules apply.
   in the shared graph DB and on the platforms. On restart a server rehydrates
   its watch set from the DB (this session's open claims and un-merged PRs) — no
   conversation history, no event spool of its own.
-- **Preview flags.** Until `dispatch` is allowlisted, sessions start with
-  `--dangerously-load-development-channels`; org `channelsEnabled` must be on.
-  Document both in the plugin README. If the channel capability is refused at
-  startup, the server says so and the skills fall back to `polling` mode rather
-  than failing.
+- **Preview flags.** Channels are a research preview. Until the `dispatch` plugin
+  is on the channel allowlist — the Anthropic-maintained `claude-plugins-official`
+  set, or an organization's `allowedChannelPlugins` managed setting — sessions
+  load it with `--dangerously-load-development-channels`, and org `channelsEnabled`
+  must be on. Document both in the plugin README. If the channel capability is
+  refused at startup, the server says so and the skills fall back to `polling`
+  mode rather than failing.
 
 ## Relationship to §3.1
 
@@ -340,12 +349,13 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 2. **Mode selection.** Add `channel`/`polling` dynamic loading to `orchestrate`
    and `deliver`, with `polling` = today's behaviour and `channel` a stub that
    yields. No behaviour change when no channel is attached.
-3. **Graph-DB events + orchestrate.** Watch the shared graph DB; emit the graph
-   triggers. Wire `orchestrate`'s `channel` mode to them. Add the `dispatch_ticket`
-   delegation.
-4. **Tracker delegation.** Emit `refresh_graph` on the tracker cadence;
-   `build-graph` becomes its handler. Retire `orchestrate`'s self-timed tracker
-   reads in `channel` mode.
+3. **Graph scheduling + orchestrate.** Move ranking, gating, slot accounting, and
+   claiming into the CLI; add the session/server liveness registry for stale-claim
+   recovery. Emit `dispatch_ticket` / `perform_milestone_review` work orders and
+   wire `orchestrate`'s `channel` mode to execute them.
+4. **Tracker refresh.** Emit `refresh_graph` on the tracker cadence; `build-graph`
+   becomes its handler. Retire `orchestrate`'s self-timed tracker reads in
+   `channel` mode.
 5. **Port `pr-status` → `dispatch pr status`.** Move the bash logic into the CLI;
    keep byte-for-byte output parity so `deliver`'s reads are unaffected.
 6. **PR/CI events + deliver.** Watch CI and reviewers; emit the PR triggers with
@@ -357,11 +367,12 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 
 ## Open questions
 
-- **Delegation liveness.** A delegation pushed while the session is mid-task
-  coalesces to the next turn (fine), but one pushed after the session has exited
-  is dropped silently (channel notifications aren't acknowledged). The server
-  must re-derive outstanding delegations from DB state on restart rather than
-  trusting delivery — what's the DB representation of "a refresh is owed"?
+- **Work-order idempotency.** A work order pushed after the session has exited is
+  dropped silently (channel notifications aren't acknowledged). For
+  `dispatch_ticket` the claim + liveness registry recovers it — the claim is
+  reclaimed and re-emitted. For `refresh_graph`, which owns no claim, the server
+  must re-derive "a refresh is owed" from DB state on restart; what's the DB
+  representation — a due-time on the tracker cursor, a pending-work row?
 - **CI provider abstraction.** `ci_finished` spans `gh pr checks --watch` and
   `bk build wait`, which are different subprocesses with different terminal
   signals; the watch loop needs a provider seam.

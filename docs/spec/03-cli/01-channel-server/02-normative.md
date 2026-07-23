@@ -2,9 +2,7 @@
 
 The channel server is the `dispatch` CLI running in its long-lived server mode
 (`dispatch mcp`). It is a Claude Code channel: an MCP server that pushes events
-into the session that spawned it. This section supersedes the daemon normative;
-the single-process, spawn-a-runner, prompt-template, and PID-lock requirements no
-longer apply.
+into the session that spawned it.
 
 ## Process model
 
@@ -61,19 +59,19 @@ Every event MUST carry:
 | `kind`    | `meta`        | The event kind (tables below).                                 |
 | `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.  |
 
-Additional `meta` keys are per-kind. Keys MUST be `snake_case` identifiers matching
-`[A-Za-z0-9_]`; the channel layer silently drops keys containing hyphens, so a key
-MUST NOT contain them (`pr`, never `pr-number`). Values are strings.
+Additional `meta` keys are per-kind. Each key MUST consist only of letters,
+digits, and underscores — an anchored `^[a-z0-9_]+$`. The channel layer silently
+drops any key containing a hyphen or other character, so keys MUST NOT contain one
+(`pr`, never `pr-number`). Values are strings.
 
 Bodies MUST NOT be assembled from raw external text. A PR/CI event body MUST be
-the `dispatch pr status` payload for the referenced PR; a graph event body MUST
-be a short pointer to the `dispatch` read that carries the detail; a delegation
-event body MUST be a short instruction naming the work. This keeps the injected
-content identical to what the session already reads through the CLI.
+the `dispatch pr-status` payload for the referenced PR; a work-order body MUST be
+a short instruction naming the work. This keeps the injected content identical to
+what the session already reads through the CLI.
 
 ### Event catalog
 
-**PR / CI triggers** — body is the `dispatch pr status` payload for `repo`/`pr`.
+**PR / CI triggers** — body is the `dispatch pr-status` payload for `repo`/`pr`.
 
 | kind              | `meta` (beyond source/kind/seq)                                        | fires when                                          |
 | ----------------- | --------------------------------------------------------------------- | --------------------------------------------------- |
@@ -82,20 +80,16 @@ content identical to what the session already reads through the CLI.
 | `pr_comment`      | `repo`, `pr`, `thread`                                                 | a new top-level comment or inline reply lands       |
 | `pr_state_change` | `repo`, `pr`, `state` = `ready` \| `draft` \| `merged` \| `closed`    | the PR changes lifecycle state                      |
 
-**Graph triggers** — body is a one-line pointer; the session reads `dispatch graph doc` / `summary`.
+**Work orders** — body is a short instruction naming the skill to run. The server
+MUST do the graph reasoning (rank, gate, slot, and — for `dispatch_ticket` —
+claim) before emitting one; the session executes it and MUST NOT need to read the
+graph.
 
-| kind                      | `meta` (beyond source/kind/seq) | fires when                                                     |
-| ------------------------- | ------------------------------- | ------------------------------------------------------------- |
-| `ticket_frontier_changed` | `project`, `ready_count`        | the ranked available frontier changes (new unblocked work)    |
-| `milestone_gate_open`     | `project`, `milestone`          | a milestone's members complete and its review gate opens      |
-| `slot_available`          | `free_slots`                    | a compute slot frees up under the machine-wide cap            |
-
-**Delegation triggers** — body is a short instruction naming the skill to run.
-
-| kind              | `meta` (beyond source/kind/seq) | asks the session to                                              |
-| ----------------- | ------------------------------- | --------------------------------------------------------------- |
-| `refresh_graph`   | `tracker`, `reason`             | run the graph producer over the tracker and write the delta, advancing the cursor |
-| `dispatch_ticket` | `project`, `ticket`             | claim the ticket (`dispatch graph next --claim`) and coordinate it |
+| kind                       | `meta` (beyond source/kind/seq) | asks the session to                                             |
+| -------------------------- | ------------------------------- | -------------------------------------------------------------- |
+| `dispatch_ticket`          | `project`, `ticket`             | coordinate the ticket (already claimed for this session, with a slot held) |
+| `perform_milestone_review` | `project`, `milestone`          | review the milestone whose gate is open                        |
+| `refresh_graph`            | `tracker`, `reason`             | run the graph producer over the tracker and write the delta, advancing the cursor (the server cannot read an MCP-only tracker) |
 
 New event kinds MAY be added. Renaming an existing kind is a breaking change.
 
@@ -108,14 +102,14 @@ on the session's next turn, in `seq` order; the session MUST process them as a
 group and, where an event may be stale by delivery time, re-read canonical state
 through the corresponding `dispatch` command rather than acting on the body alone.
 
-### Delegation
+### Work the server cannot do itself
 
 For any source the server cannot reach without an MCP client (a tracker exposed
 only over MCP), the server MUST NOT attempt the fetch itself. It MUST push the
-corresponding delegation trigger and treat the resulting `dispatch graph` writes
-(observed on a later tick) as the completion signal. The server MUST re-derive
-outstanding delegations from DB state on restart rather than assuming a pushed
-delegation was delivered (channel notifications are not acknowledged).
+corresponding work order (`refresh_graph`) and treat the resulting `dispatch
+graph` writes (observed on a later tick) as the completion signal. The server
+MUST re-derive owed work orders from DB state on restart rather than assuming a
+pushed order was delivered (channel notifications are not acknowledged).
 
 ## Event-source orchestration
 
@@ -153,14 +147,16 @@ Each participating session MUST run its own server; there MUST NOT be a
 single-server-per-machine requirement. Cross-session coordination MUST rely on
 the shared graph DB, not on a coordinating process:
 
-1. **Atomic claims.** A session watches only work it has claimed. `dispatch graph
-   next --claim` claims under an immediate transaction, so two sessions MUST NOT
-   be able to claim the same node.
+1. **Atomic claims.** Before emitting a `dispatch_ticket`, the server MUST claim
+   the ticket (and a slot) under an immediate transaction, so two servers MUST
+   NOT be able to hand the same node to their sessions.
 2. **Machine-wide compute cap.** The slot ledger (§2.6) enforces the global
    parallelism limit across all sessions and servers.
-3. **Crash recovery.** Claim heartbeats plus the stale-claim threshold reclaim
-   work abandoned by a crashed session. This replaces the daemon's central crash
-   recovery.
+3. **Liveness registry.** Each server MUST register itself in the DB on spawn
+   (session id, pid, start time) and heartbeat while alive; every claim MUST
+   record its owning session. Any server MUST be able to determine from the
+   registry which sessions are still live and reclaim claims whose owning session
+   is not, with a time threshold serving only as a backstop.
 
 ## Fallback mode
 

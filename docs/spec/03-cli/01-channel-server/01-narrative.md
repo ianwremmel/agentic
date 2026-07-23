@@ -1,11 +1,10 @@
 # §3.1.1 — Channel Server: Narrative
 
-This section supersedes the earlier daemon model. The problem is unchanged —
-keeping engineering work alive across the gaps where CI runs, reviewers think,
-and tickets sit between people — but the mechanism is different: instead of a
-single machine-wide process that cold-spawns a fresh agent per event, the CLI
-runs as a **Claude Code channel** attached to a live session and pushes events
-into it.
+The channel server keeps engineering work alive across the gaps where CI runs,
+reviewers think, and tickets sit between people. It is the `dispatch` CLI running
+as a **Claude Code channel** attached to a live session: it watches the event
+sources it can reach and pushes events into that session so the agent reacts
+without sitting in a loop.
 
 ## Why a channel server
 
@@ -24,11 +23,10 @@ the server goes back to watching.
 
 ## Process model
 
-The channel server is **one process per session**, not one per machine. It is an
-MCP server that the session runner (Claude Code) spawns as a stdio subprocess
-when the session starts and that exits when the session ends. There is no PID
-lock, no singleton, and no daemon to start or stop out of band: a session's
-server lives exactly as long as the session it serves.
+The channel server is **one process per session**. It is an MCP server that the
+session runner (Claude Code) spawns as a stdio subprocess when the session starts
+and that exits when the session ends — a session's server lives exactly as long
+as the session it serves, and nothing starts or stops it out of band.
 
 The server is **push-only**. It emits channel notifications; it does not require
 the session to call server-side tools for correctness. Everything the session
@@ -47,27 +45,28 @@ the DB — this session's open claims and un-merged PRs — and resumes.
 
 The server reacts to changes in the sources it can reach without an MCP client:
 GitHub (PR comments, reviews, state changes) and the CI provider directly, and
-its own graph DB (frontier changes, milestone gates, freed slots). For each
-source it picks the least-expensive strategy that works — an SDK/streaming watch,
-a watch subprocess, or polling with a dynamic interval — and coalesces changes
-seen on the same tick into a single event.
+its own graph DB. For each source it picks the least-expensive strategy that
+works — an SDK/streaming watch, a watch subprocess, or polling with a dynamic
+interval — and coalesces changes seen on the same tick into a single event.
 
-Events are **triggers, not payloads to be trusted in isolation**. Whatever an
-event says, the session responds by running the `dispatch` command that reads
-the canonical state and acting on that. Because the PR-status reader is part of
-the CLI, a PR event can carry exactly that reader's output as its body: the same
-bytes the session would fetch anyway, with no divergence between what the event
-said and what the CLI returns.
+Two kinds of thing reach the session. **PR/CI triggers** report a change on a
+watched PR; their body is the PR-status reader's output — the same bytes the
+session would fetch anyway — and the session applies its own judgment. Deciding
+what a review or a failing check demands is not deterministic, so it stays the
+session's job. **Work orders** are the opposite: the CLI does the deterministic
+graph reasoning itself — ranking the frontier, applying milestone gates,
+accounting for slots, claiming — and tells the session exactly what to do next
+(coordinate this ticket, review this milestone, refresh the graph). The session
+runs the named skill and never has to read or understand the graph.
 
-One source the server **cannot** reach is a tracker exposed only over MCP
-(Linear today). A channel is an MCP server, not a client; it cannot call another
-MCP server. Rather than engineer around this, the server **delegates**: it pushes
-a trigger asking the session — which does hold an MCP client and the tracker
-adapter skill — to do the fetch and write the result back through `dispatch
-graph`. The server then observes the result in the DB on its next tick. The
-trust boundary the rest of the spec relies on (MCP access stays in the session)
-is preserved, and the server drives the refresh instead of a skill self-timing
-it.
+One source the server **cannot** reach is a tracker exposed only over MCP (Linear
+today). A channel is an MCP server, not a client; it cannot call another MCP
+server. So a tracker refresh is itself a work order: the server asks the session
+— which holds the MCP client and the tracker adapter skill — to fetch and write
+the delta back through `dispatch graph`, then observes the result in the DB on
+its next tick. The trust boundary the rest of the spec relies on (MCP access
+stays in the session) is preserved, and the server drives the refresh instead of
+a skill self-timing it.
 
 ## Channel mode vs fallback mode
 
@@ -82,15 +81,17 @@ waiting differs, so the two modes cannot drift into two different behaviors.
 
 ## Multi-session
 
-The CLI supports several sessions working different projects at once, and that
-must keep working. It falls out of the process model: each session spawns its
-own server, and all servers and sessions share the one graph DB. Overlap is
-prevented where it already is — in the DB. Claims are atomic, so two sessions
-cannot take the same ticket; the slot ledger enforces the machine-wide compute
-cap across every session regardless of which server it belongs to; and stale-
-claim recovery reclaims work abandoned by a crashed session. The concurrency cap
-and crash recovery that the old daemon centralized are thus provided by the
-shared DB, not by a singleton process.
+The CLI supports several sessions working different projects at once. It falls
+out of the process model: each session spawns its own server, and all servers and
+sessions share the one graph DB. Overlap is prevented where it already is — in
+the DB. The CLI claims a ticket (and a slot) atomically before handing it to its
+session, so two servers cannot dispatch the same ticket; the slot ledger enforces
+the machine-wide compute cap across every session. Each server registers itself
+and heartbeats a liveness row while alive, and every claim records its owning
+session, so any server can tell which sessions are still running and reclaim the
+claims of ones that are not — rather than waiting only on a time threshold. The
+concurrency cap and crash recovery are thus provided by the shared DB, not by a
+singleton process.
 
 ## Relationship to §2.4
 

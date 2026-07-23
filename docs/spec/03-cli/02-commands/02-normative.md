@@ -3,9 +3,8 @@
 All `dispatch` commands exit 0 on success and non-zero on error. Errors are
 written to stderr; structured output is written to stdout.
 
-This section supersedes the daemon and prompt-template command surface. With the
-channel server (§3.1) there is no daemon to start or stop, and no prompt
-templates to manage: the server is spawned per session by the runner, and work to
+The channel server (§3.1) is spawned per session by the runner; there is no
+process to start or stop by hand and no prompt templates to manage. Work to
 monitor lives in the graph (§2.6), not in a separate task store.
 
 ---

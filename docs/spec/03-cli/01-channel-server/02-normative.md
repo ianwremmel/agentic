@@ -17,6 +17,16 @@ session — MUST be able to run concurrently against the shared graph DB (see
 The server's lifetime is bound to its session: it starts when the session starts
 and exits when the session ends. There is no out-of-band start or stop.
 
+### One session per waiting unit
+
+Channel events reach only the top-level session the runner spawned the server for;
+a nested subagent cannot be woken by an event delivered to its parent. Therefore
+any unit of work that must wait for an external event and then act — the
+orchestrator, and each in-flight ticket — MUST run as its own top-level session
+with its own server. A `dispatch_ticket` work order causes a new ticket session to
+be launched. This reconceives §2.6's nested coordinator/worker actors as top-level
+sessions and is subject to reconciliation with §2.6.
+
 ### Channel capability
 
 The server MUST declare the channel capability
@@ -30,7 +40,9 @@ The server MUST be push-only: correctness MUST NOT depend on the session calling
 any server-exposed MCP tool. All session→server signalling MUST ride the shared
 graph DB (§2.6) via ordinary `dispatch` command writes — recording a PR to watch,
 marking a delegation handled, claiming work. The server observes these writes on
-its poll tick.
+its poll tick. It MUST pick up a newly written watch or claim promptly — waking on
+a DB change (a SQLite update hook or file watch), not only on a fixed interval — so
+a just-registered PR takes effect within a second rather than a poll cycle later.
 
 The server MUST NOT keep durable state of its own beyond the graph DB. On restart
 it MUST rebuild its watch set from the DB: the spawning session's open claims and
@@ -39,11 +51,14 @@ its un-merged PRs.
 ### Mode marker
 
 The server MUST make its presence detectable so skills can select channel vs
-fallback mode. It MUST set an environment marker on spawn and MUST answer
-`dispatch mcp status` with whether channel mode is active for the current session.
-When the channel capability is refused at startup (research-preview flag absent,
-non-Anthropic auth, or `channelsEnabled` off), the server MUST report that
-condition rather than failing the session, so skills fall back to polling.
+fallback mode. Because a channel subprocess cannot set an environment variable in
+the agent's process, the marker MUST be injected by the runner (or carried in
+plugin config) as a session id that both the server's registry row and `dispatch
+mcp status` correlate on; `dispatch mcp status` MUST report channel mode active
+only when a live server is registered for the current session. When the channel
+capability is refused at startup (research-preview flag absent, non-Anthropic auth,
+or `channelsEnabled` off), the server MUST report that condition rather than
+failing the session, so skills fall back to polling.
 
 ## Channel message protocol
 
@@ -90,16 +105,25 @@ graph.
 | `dispatch_ticket`          | `project`, `ticket`             | coordinate the ticket (already claimed for this session, with a slot held) |
 | `perform_milestone_review` | `project`, `milestone`          | review the milestone whose gate is open                        |
 | `refresh_graph`            | `tracker`, `reason`             | run the graph producer over the tracker and write the delta, advancing the cursor (the server cannot read an MCP-only tracker) |
+| `park_human_blocked`       | `project`, `ticket`             | move a human-blocked ticket to its parked state and post the handoff (a tracker write) |
+| `alert_failure`            | `project`, `ticket`             | alert the operator that a ticket failed unrecoverably          |
+| `project_complete`         | `project`                       | record and announce that the project's work is done            |
 
-New event kinds MAY be added. Renaming an existing kind is a breaking change.
+The last three carry the orchestrator tick's non-scheduling duties in §2.6
+(surface anomalies, park human-blocked work, alert failures, decide completion):
+the server detects the condition deterministically from the graph and the session
+performs the part that needs a tracker write or an operator message. New event
+kinds MAY be added. Renaming an existing kind is a breaking change.
 
 ### Ordering and coalescing
 
-`seq` MUST increase monotonically per server. Two or more changes the server
-observes on the same poll tick MUST be coalesced into a single event rather than
-emitted separately. Events queued while the session is busy are delivered together
-on the session's next turn, in `seq` order; the session MUST process them as a
-group and, where an event may be stale by delivery time, re-read canonical state
+`seq` MUST increase monotonically per server. Changes of the **same kind on the
+same PR** observed on one tick MUST be coalesced into a single event; changes that
+differ in kind or PR MUST remain distinct events, since one event's
+`kind`/`repo`/`pr` are single-valued and merging heterogeneous changes would lose
+information. Events queued while the session is busy are delivered together on the
+session's next turn, in `seq` order; the session MUST process them as an ordered
+batch and, where an event may be stale by delivery time, re-read canonical state
 through the corresponding `dispatch` command rather than acting on the body alone.
 
 ### Work the server cannot do itself
@@ -107,9 +131,11 @@ through the corresponding `dispatch` command rather than acting on the body alon
 For any source the server cannot reach without an MCP client (a tracker exposed
 only over MCP), the server MUST NOT attempt the fetch itself. It MUST push the
 corresponding work order (`refresh_graph`) and treat the resulting `dispatch
-graph` writes (observed on a later tick) as the completion signal. The server
-MUST re-derive owed work orders from DB state on restart rather than assuming a
-pushed order was delivered (channel notifications are not acknowledged).
+graph` writes (observed on a later tick) as the completion signal. Because channel
+notifications are not acknowledged, a `refresh_graph` that owns no claim MUST be
+recorded durably — as a `refresh_due_at` on the tracker's cursor row — and the
+server MUST re-derive owed refreshes from that on restart rather than assuming a
+pushed order was delivered.
 
 ## Event-source orchestration
 
@@ -152,11 +178,16 @@ the shared graph DB, not on a coordinating process:
    NOT be able to hand the same node to their sessions.
 2. **Machine-wide compute cap.** The slot ledger (§2.6) enforces the global
    parallelism limit across all sessions and servers.
-3. **Liveness registry.** Each server MUST register itself in the DB on spawn
-   (session id, pid, start time) and heartbeat while alive; every claim MUST
-   record its owning session. Any server MUST be able to determine from the
-   registry which sessions are still live and reclaim claims whose owning session
-   is not, with a time threshold serving only as a backstop.
+3. **Two-level liveness.** Each server MUST register itself in the DB on spawn
+   (session id, pid, start time) and heartbeat while alive. The server heartbeat
+   detects a crashed session (the server dies with it) but not a wedged-yet-alive
+   agent, so §2.6's per-owner claim heartbeats MUST remain as the agent-progress
+   signal. Every claim MUST record its owning session; a claim is reclaimable when
+   its owning session's process is gone OR its per-owner heartbeat has lapsed.
+4. **Split reclamation.** Reclaiming a claim clears it in the DB, which any server
+   MAY do. The tracker-side unpark (clearing §2.6's mirrored working label) is a
+   tracker write the server cannot make, so it MUST be left to the next
+   `dispatch_ticket` session to reconcile.
 
 ## Fallback mode
 

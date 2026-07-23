@@ -47,7 +47,8 @@ The server reacts to changes in the sources it can reach without an MCP client:
 GitHub (PR comments, reviews, state changes) and the CI provider directly, and
 its own graph DB. For each source it picks the least-expensive strategy that
 works — an SDK/streaming watch, a watch subprocess, or polling with a dynamic
-interval — and coalesces changes seen on the same tick into a single event.
+interval — and coalesces same-kind changes to one PR seen on the same tick into a
+single event (changes differing in kind or PR stay distinct, ordered events).
 
 Two kinds of thing reach the session. **PR/CI triggers** report a change on a
 watched PR; their body is the PR-status reader's output — the same bytes the
@@ -81,17 +82,21 @@ waiting differs, so the two modes cannot drift into two different behaviors.
 
 ## Multi-session
 
-The CLI supports several sessions working different projects at once. It falls
-out of the process model: each session spawns its own server, and all servers and
-sessions share the one graph DB. Overlap is prevented where it already is — in
-the DB. The CLI claims a ticket (and a slot) atomically before handing it to its
-session, so two servers cannot dispatch the same ticket; the slot ledger enforces
-the machine-wide compute cap across every session. Each server registers itself
-and heartbeats a liveness row while alive, and every claim records its owning
-session, so any server can tell which sessions are still running and reclaim the
-claims of ones that are not — rather than waiting only on a time threshold. The
-concurrency cap and crash recovery are thus provided by the shared DB, not by a
-singleton process.
+Channel events reach only a top-level session, so each unit that must wait and
+react — the orchestrator, and each in-flight ticket — runs as its own top-level
+session with its own server; a `dispatch_ticket` launches a ticket session. The
+CLI has long supported several sessions on different projects at once, and this is
+that model. All servers and sessions share the one graph DB, and overlap is
+prevented where it already is — in the DB. The CLI claims a ticket (and a slot)
+atomically before handing it to its session, so two servers cannot dispatch the
+same ticket, and the slot ledger enforces the machine-wide compute cap. A server
+heartbeats while alive so a crashed session's claims can be reclaimed; but because
+a wedged agent's server keeps heartbeating, §2.6's per-owner heartbeats stay as the
+agent-progress signal, and a claim is reclaimable when its session's process is
+gone or its per-owner heartbeat lapses. Clearing the claim is a DB write any server
+can do; the tracker-side unpark is left to the next dispatch to reconcile.
+Concurrency and recovery are thus provided by the shared DB, not a singleton
+process.
 
 ## Relationship to §2.4
 

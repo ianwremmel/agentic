@@ -127,7 +127,42 @@ flowchart LR
 
 The server reads GitHub/CI and the shared DB and pushes triggers into its
 session; the session acts through `dispatch …` writes (which the server then
-observes) and reaches the tracker over MCP only when a delegation asks it to.
+observes) and reaches the tracker over MCP only when a delegation asks it to. New
+watch registrations and claims are picked up promptly — the server wakes on a DB
+change (a SQLite update hook or file watch), not only on a fixed interval — so a
+just-opened PR is watched within a second, not a poll cycle later. Without that,
+the DB backbone would reintroduce the very latency channels exist to remove.
+
+### Execution topology: a session per active unit
+
+Channel events reach only the **top-level** session — the one Claude Code spawned
+the server for. A `Task` subagent runs to completion and returns; it cannot yield
+and be re-woken later by an event delivered to its parent. So anything that must
+wait for an external event and then act has to be a top-level session with its own
+server, not a nested subagent.
+
+Channel mode therefore runs **one top-level session per active unit of work**,
+each with its own `dispatch mcp` server:
+
+- an **orchestrator session** whose server does the graph scheduling and pushes
+  work orders into it; and
+- one **ticket session** per in-flight ticket, launched when the orchestrator
+  session receives a `dispatch_ticket`, running `work-ticket` (and `deliver` for
+  its PRs) and woken by its own server's PR/CI events.
+
+Launching a ticket session is the one spawn that remains — but it starts a warm
+channel session that keeps its skills and context, not a cold prompt-templated
+runner. Per-project fan-out (§2.6's `maxParallel`) is the number of concurrent
+ticket sessions, capped by the slot ledger — the "several sessions, each with a
+server" model of the next section.
+
+This reconceives §2.6's actor model: coordinators and delivery workers were nested
+sub-agents holding slots; here each is a top-level session. That needs to be
+reconciled with §2.6 (see [Open decisions](#open-decisions-and-questions)). The
+leaner alternative — a single session running everything as one-shot subagents per
+event — keeps `deliver` as a foreground loop inside its subagent (a subagent can't
+be woken) and event-drives only the orchestrator tier, which does *not* retire
+deliver's sleep loop, the design's biggest win.
 
 ### Multi-session: many servers, one database
 
@@ -145,13 +180,19 @@ Overlap is prevented where it already is — in the DB, not in a coordinator:
 - **The slot ledger.** `dispatch graph slot acquire` enforces the machine-wide
   compute cap (`maxParallel`) across all sessions, whichever server they belong
   to — the global concurrency limit, in the DB rather than a coordinator process.
-- **Liveness-based stale-claim recovery.** Each server registers itself in the DB
-  on spawn (session id, pid, `started_at`) and heartbeats a liveness row while
-  alive; every claim records the session that owns it. Any server can then tell
-  which other sessions are still running and reclaim the claims of ones that are
-  not — staleness is "the owning session's server stopped heartbeating," with a
-  time threshold as a backstop. One server heartbeat covers all that session's
-  claims, and heartbeating moves out of the skills into the server.
+- **Liveness, at two levels.** The server registers itself on spawn (session id,
+  pid, `started_at`) and heartbeats while alive — but a server is a subprocess that
+  keeps heartbeating even if the agent loop wedges, so its heartbeat only proves the
+  *session process* is up. It dies with the session, giving fast crash detection;
+  detecting a *wedged-but-alive* agent still needs an agent-written progress signal,
+  so §2.6's per-owner claim heartbeats stay. A claim is stale when its owning
+  session's process is gone **or** its per-owner heartbeat has lapsed; the registry
+  lets any server attribute a claim to a session and reclaim it on either condition.
+- **Reclamation is split.** Clearing the claim in the DB is something any server can
+  do, but the tracker-side unpark (clearing §2.6's mirrored "working" label) is a
+  write the no-MCP server can't make. So the reclaiming server clears the DB claim
+  and the ticket returns to the frontier; the next `dispatch_ticket` session
+  reconciles the tracker state as it starts.
 
 So multi-session is a first-class property that falls out of per-session servers
 plus the shared DB. Nothing about concurrency is deferred.
@@ -168,23 +209,31 @@ team vs solo behaviour — dynamic loading of a mode variant:
 | `channel`    | a `dispatch mcp` server is attached        | Skill yields after each unit of work; the CLI wakes it with events. |
 | `polling`    | no channel (unavailable / not enabled)     | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself. |
 
-Mode is detected from whether a channel server is attached to the session — the
-server sets a marker on spawn (env var and/or a `dispatch mcp status` the skill
-can query). The judgment content of each skill (what counts as actionable, the
-gates, the §2.4 sequence) is identical across modes; only the *waiting* section
-differs. This keeps the two modes from diverging into two behaviours.
+Mode is detected from whether a channel server is attached to the session. A
+channel subprocess can't set an env var in the agent's process, so the marker is
+injected by the runner (or passed through plugin config) as a session id that both
+the server's registry row and `dispatch mcp status` correlate on; the skill reads
+`dispatch mcp status`, which reports `active` only when a live server is registered
+for this session. The judgment content of each skill (what counts as actionable,
+the gates, the §2.4 sequence) is identical across modes; only the *waiting* section
+differs, so the two modes can't diverge into two behaviours.
 
 ### Events are triggers
 
-An event is a **trigger**, not a payload to be trusted or acted on in isolation.
-Whatever the event says, the session responds by running a `dispatch` command
-that reads the canonical state — from the graph DB, or from `dispatch pr status`
-— and acts on that. Because [`pr-status` is integrated into the CLI](#dispatch-pr-status-integrating-pr-status),
-a PR event can carry *exactly* the `dispatch pr status` payload as its body: the
-same bytes the agent would fetch anyway, so there is no separate summary to
-craft and no divergence between "what the event said" and "what the CLI returns."
-When events coalesce, the agent re-reads for freshness rather than trusting a
-possibly-stale body.
+An event is a **trigger**. For a PR trigger the session re-reads the canonical
+state with `dispatch pr status` and acts on that; because
+[`pr-status` is integrated into the CLI](#dispatch-pr-status-integrating-pr-status),
+the event can carry *exactly* that payload as its body — the same bytes the agent
+would fetch anyway, so there is no separate summary to craft and no divergence
+between "what the event said" and "what the CLI returns." A work order is a trigger
+the session simply executes.
+
+**Coalescing is per-PR, per-kind.** Two changes of the same kind on the same PR
+seen on one tick collapse to a single event (the agent re-reads for freshness).
+Changes that differ in kind or PR — a `ci_finished` on PR 7 and a `pr_review` on
+PR 8 — stay **distinct events delivered as an ordered batch**, never merged, because
+one event's `kind`/`repo`/`pr` are single-valued and merging would lose
+information.
 
 Two families:
 
@@ -227,8 +276,15 @@ has already done the scheduling (ranked, gated, slotted, and — for
 | `dispatch_ticket`          | `project`, `ticket`           | run `work-ticket` for the ticket (already claimed for this session, with a slot held) |
 | `perform_milestone_review` | `project`, `milestone`        | run `milestone-review` — the milestone's gate is open           |
 | `refresh_graph`            | `tracker`, `reason`           | run `build-graph` against the tracker and write the delta (the CLI can't read the tracker itself) |
+| `park_human_blocked`       | `project`, `ticket`           | move a human-blocked ticket to its parked state and post the handoff (a tracker write) |
+| `alert_failure`            | `project`, `ticket`           | alert the operator that a ticket failed unrecoverably           |
+| `project_complete`         | `project`                     | record and announce that the project's work is done (the orchestrator's stop signal) |
 
-New kinds may be added; renaming a kind is a breaking change.
+The last three cover the orchestrator tick's non-scheduling duties in §2.6
+(surface anomalies, park human-blocked work, alert failures, decide completion):
+the CLI detects each condition deterministically from the graph, and the session
+performs the part that needs a tracker write or an operator message. New kinds may
+be added; renaming a kind is a breaking change.
 
 ### What the CLI watches directly
 
@@ -239,8 +295,20 @@ New kinds may be added; renaming a kind is a breaking change.
 | Tracker (Linear …)  | **cannot** — asked of the session as a work order     | `refresh_graph`                                  |
 
 Scheduling runs through the same derivation layer (`derive.mts` / `queries.mts`)
-the `graph` commands use, entirely inside the CLI. The session receives only the
-resulting work orders and never re-derives the frontier.
+the `graph` commands use, entirely inside the CLI. The tracker **producer**
+(`build-graph`) still supplies the raw graph shape — tasks, edges, milestones — and
+the CLI derives the ranked frontier and gates from it; the two layers are distinct,
+so this doesn't contradict §2.6's "the producer performs the graph reasoning" (the
+producer resolves dependencies; the CLI schedules). `build-graph` reads the current
+claims, outcomes, and cursors from the same DB it writes, so §2.6's exclusion inputs
+(in-flight, done, failed) are already in hand without being threaded through the
+`refresh_graph` work order.
+
+The server knows a refresh is owed from a `refresh_due_at` on the tracker's cursor
+row: it emits `refresh_graph` when the due time passes and clears it when the delta
+lands. That durable record is what `dispatch mcp status` reports and what the
+restart path re-derives from, so an owed refresh is never lost to a dropped
+notification.
 
 ### `dispatch pr status`: integrating pr-status
 
@@ -267,21 +335,25 @@ for the PR/CI phase, not an afterthought.
 ### How the two loops become event handlers
 
 **`orchestrate`** (in `channel` mode). The `/loop`-driven tick loop goes away, and
-with it the session's need to read `graph summary` and decide what to run — the
-CLI does the scheduling now. The session opens, then yields. Each work order is
-one unit of work: on `dispatch_ticket`, run `work-ticket` for the named ticket;
-on `perform_milestone_review`, run `milestone-review`; on `refresh_graph`, refresh
-from the tracker and write the delta. The ranking, gating, slot accounting, and
+with it the session's need to read `graph summary` to decide what to run — the CLI
+does the scheduling. The orchestrator session opens, then yields. Its server emits
+a work order per unit of work: `dispatch_ticket` (which launches a ticket session),
+`perform_milestone_review`, `refresh_graph`, and the tick-duty orders
+(`park_human_blocked`, `alert_failure`, `project_complete`) that carry §2.6's
+surface/park/alert/complete duties. The ranking, gating, slot accounting, and
 claiming that lived in `orchestrate` move into the CLI, along with the dynamic
-cadence table from `orchestrate/reference.md`.
+cadence table from `orchestrate/reference.md`. The session still never *derives*
+the schedule; it executes what the CLI hands it.
 
-**`deliver`** (in `channel` mode). The `sleep`+`pr-status` loop goes away. When
-the session opens a PR it records it (a `dispatch` write the server observes),
-then yields. The CLI watches CI and reviewers and pushes `ci_finished` /
-`pr_review` / `pr_state_change`. Each event wakes the session to run deliver's
-existing per-tick judgment **once** — address actionable concerns, evaluate
-gates — then yield again. On merge/close it clears the watch. Deliver's judgment
-(§2.4) is unchanged; only the waiting is relocated.
+**`deliver`** (in `channel` mode). Inside its ticket session the `sleep`+`pr-status`
+loop goes away. The session opens its PR, records it (a `dispatch` write the server
+observes), then yields. The ticket's own server watches CI and reviewers and pushes
+`ci_finished` / `pr_review` / `pr_state_change`; each event wakes the session to run
+deliver's per-tick judgment **once** — address actionable concerns, evaluate gates —
+then yield. On merge/close it clears the watch and the session ends. Deliver's
+judgment (§2.4) is unchanged; only the waiting is relocated — and only because
+deliver runs in a top-level ticket session, not a nested subagent (see
+[Execution topology](#execution-topology-a-session-per-active-unit)).
 
 In `polling` mode both skills behave exactly as they do today.
 
@@ -291,9 +363,9 @@ Channel content enters the agent's context and is influenced by whoever can
 comment on a PR or ticket. The key point: the event body is the **same `dispatch
 pr status` payload the agent already consumes** as its sole PR read path, so
 pushing it introduces no exposure the agent didn't already have when it pulled
-it. The server never assembles a bespoke body out of raw external strings; graph
-and delegation events carry only identifiers and a short instruction. Meta keys
-are `snake_case` per the channel layer's rules. If two-way features (reply tool,
+it. The server never assembles a bespoke body out of raw external strings; work
+orders carry only identifiers and a short instruction. Meta keys are `snake_case`
+per the channel layer's rules. If two-way features (reply tool,
 permission relay) are added later, the channel reference's sender-gating and
 untrusted-field rules apply.
 
@@ -350,33 +422,40 @@ vocabulary, coalescing, and the shared-DB signalling contract.
    and `deliver`, with `polling` = today's behaviour and `channel` a stub that
    yields. No behaviour change when no channel is attached.
 3. **Graph scheduling + orchestrate.** Move ranking, gating, slot accounting, and
-   claiming into the CLI; add the session/server liveness registry for stale-claim
-   recovery. Emit `dispatch_ticket` / `perform_milestone_review` work orders and
-   wire `orchestrate`'s `channel` mode to execute them.
-4. **Tracker refresh.** Emit `refresh_graph` on the tracker cadence; `build-graph`
-   becomes its handler. Retire `orchestrate`'s self-timed tracker reads in
-   `channel` mode.
+   claiming into the CLI; add the two-level liveness registry for stale-claim
+   recovery. Emit `dispatch_ticket` / `perform_milestone_review` and the tick-duty
+   orders (`park_human_blocked`, `alert_failure`, `project_complete`); wire the
+   orchestrator session's `channel` mode to execute them.
+4. **Tracker refresh.** Emit `refresh_graph` when `refresh_due_at` passes;
+   `build-graph` becomes its handler. Retire `orchestrate`'s self-timed tracker
+   reads in `channel` mode.
 5. **Port `pr-status` → `dispatch pr status`.** Move the bash logic into the CLI;
    keep byte-for-byte output parity so `deliver`'s reads are unaffected.
-6. **PR/CI events + deliver.** Watch CI and reviewers; emit the PR triggers with
-   the `dispatch pr status` payload as the body; wire `deliver`'s `channel` mode.
+6. **Ticket-session launch + deliver.** Add the mechanism that launches a ticket
+   session on `dispatch_ticket` (see [Open decisions](#open-decisions-and-questions));
+   watch CI and reviewers; emit the PR triggers; wire `deliver`'s `channel` mode.
    The heaviest poller retires.
-7. **Cadence + hardening.** Port the dynamic-interval table; coalescing;
-   restart-rehydration from the graph DB; multi-session soak (two sessions, one
-   DB, no overlap).
+7. **Cadence + hardening.** Port the dynamic-interval table; per-PR/per-kind
+   coalescing; wake-on-DB-change; restart-rehydration; multi-session soak (two
+   sessions, one DB, no overlap).
 
-## Open questions
+## Open decisions and questions
 
-- **Work-order idempotency.** A work order pushed after the session has exited is
-  dropped silently (channel notifications aren't acknowledged). For
-  `dispatch_ticket` the claim + liveness registry recovers it — the claim is
-  reclaimed and re-emitted. For `refresh_graph`, which owns no claim, the server
-  must re-derive "a refresh is owed" from DB state on restart; what's the DB
-  representation — a due-time on the tracker cursor, a pending-work row?
+- **Execution topology (needs sign-off).** This design takes the session-per-
+  active-unit model — an orchestrator session plus a ticket session per in-flight
+  ticket, each with its own server — because it is the only one that retires
+  deliver's sleep loop and it matches the "multiple sessions launch servers
+  concurrently" direction. It reconceives §2.6's nested coordinator/worker actors
+  as top-level sessions and needs reconciling with §2.6. The leaner single-session
+  alternative keeps deliver as a foreground subagent loop. Confirm before the
+  deliver phase.
+- **Session-launch mechanism.** Something must start a ticket session on
+  `dispatch_ticket` — the orchestrator session shelling out `claude`, or a thin
+  supervisor process. Which, and how it passes the session-id marker and the
+  ticket, is an implementation detail to pin down in the scheduling phase.
+- **§2.6 reconciliation.** Fold the work-order model, the producer-vs-CLI
+  derivation split, and the tick-duty kinds (`park_human_blocked`, `alert_failure`,
+  `project_complete`) back into §2.6 so the two specs agree.
 - **CI provider abstraction.** `ci_finished` spans `gh pr checks --watch` and
   `bk build wait`, which are different subprocesses with different terminal
   signals; the watch loop needs a provider seam.
-- **Signalling latency.** Push-only + DB-poll means a session's "start watching
-  this PR" is seen on the server's next tick, not instantly. If that lag ever
-  matters, a minimal two-way tool surface is the fallback — kept out of the first
-  cut deliberately.

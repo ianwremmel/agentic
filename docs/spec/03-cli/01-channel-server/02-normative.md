@@ -99,8 +99,11 @@ channel server and the commands the session runs alike. That is the correlator.
 
 1. **Record.** The server MUST read the session id from its own environment at
    spawn and store it on its registry row. A server whose environment carries
-   none MUST register without one; a row without one MUST NOT match any caller,
-   and only an explicit `--server` can address it.
+   none MUST register without one. A row without one MUST NOT match any caller;
+   it can be addressed only by `dispatch mcp ack`, which repairs it by writing
+   the acking session's id, or by an explicit `--server` from a caller that has
+   no session id of its own — an operator at a terminal. A caller that has one
+   MUST NOT be answered from a row that does not carry it.
 2. **Refresh.** `dispatch mcp ack` (§3.2) MUST write the acking process's session
    id onto the row it acknowledges, replacing what the server recorded. The ack
    is the only write that runs in a session shell at a moment when the server it

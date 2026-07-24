@@ -62,9 +62,12 @@ reason (`no-session-id`, `no-server-for-session`, `ambiguous-session`, or
 `awaiting-ack`) rather than report on a server that may belong to another
 session.
 
-`--server` names a registry id explicitly and takes precedence when given. An
-operator's terminal carries no session id, so operator invocations pass
-`--server` to get an answer about a specific server.
+`--server` names a registry id explicitly and takes precedence over the match,
+but not over the fail-closed rule: where the caller has a session id of its own
+and the named row does not carry that id, the command MUST report `inactive`
+with `no-server-for-session` rather than answer about another session's server
+(§3.1.2). An operator's terminal carries no session id, which is what makes
+`--server` the way to ask about a specific server.
 
 ---
 

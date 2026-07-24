@@ -327,14 +327,18 @@ The server starts when the session runner spawns it. On startup it MUST:
 1. Register itself in the graph DB, recording the session id from its own
    environment
    ([Correlating a caller to its server](#correlating-a-caller-to-its-server)),
-   and retire any existing row carrying that session id so an orphaned server
-   from an earlier run cannot answer for this session. It MUST read the variable
-   before any re-exec or privilege change that would replace its environment.
-   Registration comes first because it needs only the DB, and a skill invoked on
-   the session's first turn would otherwise correlate to nothing.
+   and retire — delete — any row carrying that session id that is no longer
+   live, which bounds the registry rather than changing any match, since a row
+   that is not live never matched. It MUST NOT retire a live row: two live
+   servers under one session id are the `ambiguous-session` case, which fails
+   closed rather than being resolved by whichever server registered last. It
+   MUST read the variable before any re-exec or privilege change that would
+   replace its environment. Registration comes first because it needs only the
+   DB, and a skill invoked on the session's first turn would otherwise correlate
+   to nothing.
 2. Verify the required CLIs are present and authenticated (`git`, `gh`, the CI
    provider CLI). A missing or unauthenticated required CLI is a fatal server
-   error; the server MUST remove its row before exiting.
+   error; the server MUST retire its row before exiting.
 3. Rebuild its watch set from the graph DB and begin watching.
 4. Start the acknowledgement handshake, concurrently with step 3. The server MUST
    NOT abort the session over an unanswered probe, and MUST NOT emit a work order
@@ -345,6 +349,14 @@ The server starts when the session runner spawns it. On startup it MUST:
 The server stops when its session ends; it MUST exit cleanly with the session.
 There is no separate stop command and no in-flight runner to terminate — the
 session is the runner.
+
+Exiting with the session is what keeps `ambiguous-session` recoverable, so it
+MUST NOT depend on the runner signalling: the server MUST exit when its stdio
+peer closes or the process that spawned it is gone. A server that kept
+heartbeating after its session ended would hold that session id live, and a
+later session told to reuse the id would then find two live rows and never leave
+`polling`. For the same reason a server that finds its own row retired MUST exit
+rather than re-register or keep beating.
 
 ### Distribution
 

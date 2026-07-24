@@ -329,10 +329,10 @@ policy off). The skills therefore keep their current foreground-loop behaviour a
 a **fallback mode**, and select between the two the same way they already select
 team vs solo behaviour — dynamic loading of a mode variant:
 
-| Mode         | Selected when                              | Waiting behaviour                                             |
-| ------------ | ------------------------------------------ | ------------------------------------------------------------ |
-| `channel`    | the caller's own session has acked its own server's probe | Skill returns after each unit of work; the CLI pushes events to the orchestrator session, which re-addresses or respawns the handling subagent. |
-| `polling`    | no ack yet (no channel, or refused), or no server correlates to the caller | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself. |
+| Mode      | Selected when                                                              | Waiting behaviour                                                                                                                               |
+| --------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channel` | the caller's own session has acked its own server's probe                  | Skill returns after each unit of work; the CLI pushes events to the orchestrator session, which re-addresses or respawns the handling subagent. |
+| `polling` | no ack yet (no channel, or refused), or no server correlates to the caller | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself.                                                                   |
 
 An attached server is not the signal — attachment is neither sufficient (the
 runner may refuse the capability) nor observable from the session. A channel

@@ -72,7 +72,7 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | File                                                        | Contents                                                          |
 | ----------------------------------------------------------- | ----------------------------------------------------------------- |
 | [01-narrative.md](03-cli/01-channel-server/01-narrative.md) | Why a channel server, process model, event system, mode selection, multi-session |
-| [02-normative.md](03-cli/01-channel-server/02-normative.md) | Process model, channel message protocol, event sourcing, multi-session, lifecycle |
+| [02-normative.md](03-cli/01-channel-server/02-normative.md) | Process model (mode marker, session correlation), channel message protocol, event sourcing, multi-session, fallback mode, lifecycle |
 
 ### §3.2 — Commands
 
@@ -95,3 +95,4 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | 2026-06-07 | Added §2.5 Ticket Coordination + §2.6 Orchestration          |
 | 2026-07-23 | §3.1 reframed from Daemon to per-session Channel Server; added the channel message protocol; §3.2 reframed to server + work-registration commands |
 | 2026-07-24 | §3.1 mode detection changed to an acknowledgement handshake and the meta-key/body rules corrected against the measured channel preview |
+| 2026-07-24 | §3.1/§3.2 correlate a caller to its own channel server on the runner's session id, so a cold `dispatch mcp status` can select its mode |

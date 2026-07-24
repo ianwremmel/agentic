@@ -158,7 +158,10 @@ server sees an ordinary MCP handshake, no error, and no response to the
 notifications it pushes; the refusal appears only in the client's debug log and,
 for most kinds, a warning toast in the TUI. Nor does the handshake carry anything
 the session could be correlated on: `initialize` supplies no session id, and
-`roots/list` returns the session's cwd and nothing more. A server therefore
+`roots/list` returns the session's cwd and nothing more. (The runner does supply
+one outside the handshake — see
+[Correlating a caller to its server](#correlating-a-caller-to-its-server).)
+A server therefore
 cannot report its own refusal from the protocol, and mode detection has to be a
 **positive acknowledgement**: the server pushes a probe event whose body
 instructs the session to record the acknowledgement through a `dispatch …` write,
@@ -328,8 +331,8 @@ team vs solo behaviour — dynamic loading of a mode variant:
 
 | Mode         | Selected when                              | Waiting behaviour                                             |
 | ------------ | ------------------------------------------ | ------------------------------------------------------------ |
-| `channel`    | the session has acked the server's probe   | Skill returns after each unit of work; the CLI pushes events to the orchestrator session, which re-addresses or respawns the handling subagent. |
-| `polling`    | no ack yet (no channel, or refused)        | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself. |
+| `channel`    | the caller's own session has acked its own server's probe | Skill returns after each unit of work; the CLI pushes events to the orchestrator session, which re-addresses or respawns the handling subagent. |
+| `polling`    | no ack yet (no channel, or refused), or no server correlates to the caller | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself. |
 
 An attached server is not the signal — attachment is neither sufficient (the
 runner may refuse the capability) nor observable from the session. A channel
@@ -341,6 +344,71 @@ status` reports `active` only once that acknowledgement exists for a live server
 The judgment content of each skill (what counts as actionable, the gates, the
 §2.4 sequence) is identical across modes; only the *waiting* section differs, so
 the two modes can't diverge into two behaviours.
+
+### Correlating a caller to its server
+
+The handshake settles *whether* some session acked; it does not settle *which*
+server a given `dispatch mcp status` belongs to. A skill woken by an event was
+handed a registry id, but a skill starting cold was not, and several servers —
+one per session — can be live on the machine at once.
+
+CLC-992 found no session identity in the MCP handshake, and that was read too
+broadly: the *handshake* carries none, but the runner puts one in the
+**environment** of the processes it spawns. Measured for CLC-1021 in Claude Code
+2.1.218 in the dev container: `CLAUDE_CODE_SESSION_ID` is set both in the shell a
+Bash tool call runs in and in the environment of a `stdio` subprocess the same
+session spawned, with the same value. A subagent's tool calls carry the top-level
+session's value, so a subagent resolves to the server whose events its spawner
+relays to it. And a nested `claude` launched from a tool call exports
+its *own* id to its children rather than the id it inherited, which is what makes
+the variable a correlator and not just an inherited constant.
+
+So the server records the session id from its own environment at spawn, a cold
+`dispatch mcp status` reads the same variable and takes the live registry row
+that carries it, and `dispatch mcp ack` rewrites the row's id to the acking
+session's. That last write is the one piece of bookkeeping the rule needs: the
+server reads the variable once, at spawn, but the runner process can outlive the
+session id it was spawned under, and a server whose row still names a dead id
+holds claims fresh that no caller can find. The ack runs in a session shell with
+the current id and the server's id both in hand, so it is the natural place to
+reconcile them.
+
+Where the caller has no session id, or no live row carries it, the answer is
+`inactive`. The two failures are not symmetric — a wrong `active` strands a
+session on events that will never arrive, a wrong `inactive` costs a poll loop —
+so there is no second-choice handle to fall back to. `status` names which
+condition it hit, separating the two broken cases from `awaiting-ack`, the
+transient state a session passes through on the way to a channel.
+
+`CLAUDE_CODE_SESSION_ID` is the runner's variable, not a documented interface, so
+it can change. Removing it fails closed and uniformly — every caller drops to
+polling and says why, since `probe` is the only event carrying a registry id and
+so nothing else has a second way in. The change that would hurt is subtler: a
+runner that handed a nested session its parent's id would put both on one id, and
+that is the assumption the rule rests on rather than a property it enforces.
+Two more assumptions are untested: that the id does not rotate under a live
+server (`/clear`, `/compact`, resume in place), which would drop the session to
+polling for the rest of its life, and that nothing runs `dispatch` from a process
+the session detached, which keeps the id after the session is gone.
+
+The rule still beats the alternatives on the same axis:
+
+- **Process ancestry** (the runner is an ancestor of both its server and its
+  tool calls, so match on the lowest common ancestor) — works, and was the
+  first choice here, but it cannot tell a nested session from its parent. A
+  `claude -p` started from a tool call is a session whose whole process tree
+  sits under the outer runner, and print-mode sessions register no channel at
+  all, so such a session finds exactly one anchor — the outer session's — and
+  is told `active` on a server that will never push to it. That is the failure
+  the whole rule exists to prevent, and the CLC-992 spike harness was itself
+  shaped that way, so it is not hypothetical.
+- **Working directory** — the only handle `roots/list` offers, and two sessions
+  in one repo share it, so it cannot separate them at all.
+- **The single live server, when there is only one** — right until a second
+  session exists, which §3.1.2 requires to be possible.
+- **Re-probing forever**, so any skill eventually sees an id in an event —
+  spends a turn per interval in every session for the session's whole life, and
+  a cold skill still blocks until the next probe.
 
 ### Events are triggers
 
@@ -513,8 +581,8 @@ untrusted-field rules apply.
   in the shared graph DB and on the platforms. On restart a server rehydrates
   its watch set from the DB (this session's open claims and un-merged PRs) — no
   conversation history, no event spool of its own. It inherits nothing from the
-  dead server, though: with no session identity to key on, the old claims come
-  back through stale reclamation rather than adoption. Cheap for the server, not
+  dead server, though: the old claims come back through stale reclamation rather
+  than adoption. Cheap for the server, not
   free for the coordinators: the restart drops the ticket → subagent-id map with
   the session, so every in-flight ticket is re-entered through the short-lived
   path.
@@ -557,14 +625,16 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 ## Phased plan
 
 1. **Channel skeleton.** `dispatch mcp` speaks the channel protocol; declares the
-   capability; runs the acknowledgement handshake that establishes the mode
-   marker; pushes a hand-triggered test event. Prove delivery into a session
-   end-to-end behind the dev flag.
+   capability; registers its row (session id, pid, heartbeat) and runs the
+   acknowledgement handshake that establishes the mode marker; pushes a
+   hand-triggered test event. Prove delivery into a session end-to-end behind the
+   dev flag. The registry lands here rather than in phase 3 because `dispatch mcp
+   status` cannot answer without it.
 2. **Mode selection.** Add `channel`/`polling` dynamic loading to `orchestrate`
    and `deliver`, with `polling` = today's behaviour and `channel` a stub that
    yields. No behaviour change when no channel is attached.
 3. **Graph scheduling + orchestrate.** Move ranking, gating, slot accounting, and
-   claiming into the CLI; add the session-level liveness registry for stale-claim
+   claiming into the CLI; extend the phase-1 registry to drive stale-claim
    recovery. Emit `dispatch_ticket` / `perform_milestone_review` and the tick-duty
    orders (`park_human_blocked`, `alert_failure`, `project_complete`); wire the
    orchestrator session's `channel` mode to execute them.
@@ -611,12 +681,6 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 - **CI provider abstraction.** `ci_finished` spans `gh pr checks --watch` and
   `bk build wait`, which are different subprocesses with different terminal
   signals; the watch loop needs a provider seam.
-- **Correlating a session to its server.** The runner gives the CLI no session
-  identity, so a `dispatch mcp status` run cold — by a skill that was not woken by
-  an event, and so never saw a registry id — cannot tell which of several live
-  servers on the machine is its own. Working directory is the only handle the
-  server has (via `roots/list`), and two sessions can share one. Settle this
-  before mode selection ships; until then a skill has to be given the registry id.
 - **Allowlisted plugin channels.** The spike exercised only a `server:` entry
   under the dev flag. Whether `plugin:dispatch@agentic` registers once
   allowlisted — and so whether a `--bg` orchestrator is viable — is unverified.

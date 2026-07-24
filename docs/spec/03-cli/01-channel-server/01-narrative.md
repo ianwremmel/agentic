@@ -72,7 +72,12 @@ a skill self-timing it.
 ## Channel mode vs fallback mode
 
 Channels are not universally available: they are a research-preview capability,
-require Anthropic authentication, and can be disabled by organization policy. The
+require Anthropic authentication, and can be disabled by organization policy.
+Session kind matters too — a `-p`/print session registers no channel at all, and
+a background session registers one only for an allowlisted plugin — so until the
+plugin is allowlisted the server needs an interactive session. A runner that
+declines any of this drops the server's events without telling it, so the server
+learns its own mode from whether the session acknowledges a startup probe. The
 skills therefore keep their existing foreground-loop behavior as a **fallback
 mode** and select between the two the way they already select other behavior
 variants (team vs solo) — by dynamically loading a mode variant. In channel mode

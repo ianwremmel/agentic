@@ -14,22 +14,40 @@ monitor lives in the graph (§2.6), not in a separate task store.
 ### `dispatch mcp`
 
 Run the channel server (§3.1) in stdio MCP mode. It is spawned by the session
-runner as a subprocess — registered like any MCP server via plugin `.mcp.json` or
-`--channels` — not launched by the operator directly. Behavior per §3.1.2. There
-is no `start`/`stop`: the server's lifetime is the session's.
+runner as a subprocess — declared like any MCP server in plugin `.mcp.json` and
+named in the session's `--channels` list — not launched by the operator directly.
+Behavior per §3.1.2. There is no `start`/`stop`: the server's lifetime is the
+session's.
+
+### `dispatch mcp ack`
+
+Record that this session received the server's `probe` event — the mode marker
+(§3.1.2). The session runs it in answer to the probe, passing back the registry
+id the probe carried.
+
+```shell
+dispatch mcp ack --server <registry-id>
+```
+
+It MUST be idempotent: a repeated ack for the same registry id refreshes the
+marker rather than erroring, since the server re-pushes the probe until one
+lands.
 
 ### `dispatch mcp status`
 
-Report whether channel mode is active for the current session, plus basic health:
-the PRs being watched, the last poll tick, and any pending delegations.
+Report whether channel mode is active, plus basic health: the PRs being watched,
+the last poll tick, and any pending delegations.
 
 ```shell
-dispatch mcp status
+dispatch mcp status [--server <registry-id>]
 ```
 
-Skills call this (alongside the spawn-time environment marker) to select channel
-vs fallback mode. It MUST succeed whether or not a server is attached, reporting
-`inactive` when none is, so mode selection is deterministic.
+Skills call this to select channel vs fallback mode; it reports `active` only for
+a live server whose probe has been acked (§3.1.2). It MUST succeed whether or not
+a server is attached, reporting `inactive` when none is, so a skill always gets an
+answer. `--server` names the registry id to check; a skill woken by a channel
+event has it, and one starting cold does not — see the correlation gap in §3.1.2's
+mode marker.
 
 ---
 

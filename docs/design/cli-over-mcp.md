@@ -73,8 +73,8 @@ session as a tag:
 ```
 
 `content` is the tag body; each `meta` key becomes an attribute (values are
-always strings). Events **queue and coalesce**: several pushed while the agent
-is busy arrive together on the next turn, in order. A channel can be push-only
+always strings). Events **queue**: several pushed while the agent is busy arrive
+once it is free, each as its own turn, in order. A channel can be push-only
 (notifications) or also expose MCP tools; this design uses push-only.
 
 ### Constraints to design within
@@ -85,13 +85,103 @@ decision.
 | Constraint                    | Consequence for this design                                                        |
 | ----------------------------- | ---------------------------------------------------------------------------------- |
 | Server, not client (no MCP)   | The watch loop can't reach MCP-only sources (Linear); that work is delegated back to the session, which has the MCP client. |
-| Session-scoped lifetime       | Each session spawns its own server; the server lives and dies with it. Always-on = a persistent session. |
-| Not always available          | Research preview (flags/protocol may change; custom channels need `--dangerously-load-development-channels`), Anthropic-auth only (no Bedrock / Vertex / Foundry), org `channelsEnabled` gate. The skills therefore need a non-channel fallback mode. |
+| Session-scoped lifetime       | Each session spawns its own server; the server lives and dies with it. Always-on = a persistent interactive session (see [Measured behavior of the preview](#measured-behavior-of-the-preview)). |
+| Not always available          | Research preview (flags/protocol may change; custom channels need `--dangerously-load-development-channels`, and so an interactive session until the plugin is allowlisted), Anthropic-auth only (no Bedrock / Vertex / Foundry), org `channelsEnabled` gate. The skills therefore need a non-channel fallback mode. |
 | Injected content              | Event bodies enter the agent's context; the body is the same `dispatch pr status` payload the agent already consumes, so its trust properties are unchanged (see [Injection safety](#injection-safety)). |
 
 The no-MCP boundary is the most interesting of these — it's what makes
 delegation a load-bearing pattern rather than a convenience — but it is one
 constraint among several, not the whole design.
+
+### Measured behavior of the preview
+
+A throwaway stdio server that declares the capability and pushes
+`notifications/claude/channel` was driven from real sessions on Claude Code
+2.1.218 (Anthropic auth, personal Max org). Delivery works. The rest of this
+subsection is what those sessions did, except where it is marked as read from the
+runner's source instead — a distinction worth keeping, since source-read details
+can change under us without a session ever behaving differently. Where any of it
+contradicts the paragraphs above, it wins.
+
+**Delivery.** An event arrives as a user-role message in its own turn:
+
+```text
+<channel source="channel-probe" kind="probe" seq="1" repo="ianwremmel/agentic" pr="0">
+hand-emitted probe event: if you can read this, delivery works
+</channel>
+```
+
+`source` is the MCP server name, injected by the runner. Events pushed while the
+session is busy queue on the same inbound queue as task notifications and are
+delivered in order as separate turns once the current turn ends. The channel
+layer never merges two events, so all coalescing is the server's job.
+
+**Gates, in the order the runner applies them.** Each produces a `skip` with a
+named kind; the first one that trips wins.
+
+| # | Gate                                       | Skip kind    | Observed here                 |
+| - | ------------------------------------------ | ------------ | ----------------------------- |
+| 1 | server declares the capability             | `capability` | passes                        |
+| 2 | first-party auth (no third-party provider) | `provider`   | passes                        |
+| 3 | feature availability (a remote flag)       | `disabled`   | passes                        |
+| 4 | org `channelsEnabled`                      | `policy`     | passes                        |
+| 5 | server named in the session channel list   | `session`    | passes when named             |
+| 6 | allowlist, or a dev-flagged entry          | `allowlist`  | passes only with the dev flag |
+
+Which orgs gate 4 binds is read from the runner's source, not observed — a
+personal plan passes it unconditionally, so the sessions here never exercised it;
+the source scopes it to claude.ai Team/Enterprise orgs and to console orgs that
+have managed settings. Gates 3 and 4 are outside our control and can start
+failing without warning, so the fallback is not hypothetical.
+
+**Session kind decides whether channels register at all.** The two flags spell
+their arguments `server:<name>` or `plugin:<name>@<marketplace>`; a bare name is
+rejected.
+
+| Session                 | `--channels`    | `--dangerously-load-development-channels`  |
+| ----------------------- | --------------- | ------------------------------------------ |
+| interactive (TTY)       | honored         | honored, after a startup confirmation      |
+| `--bg` background agent | honored         | dropped — the confirmation cannot be shown |
+| `-p` / print            | never evaluated | never evaluated                            |
+
+So a `server:`-entry channel needs an interactive session: print mode evaluates
+neither flag, and `--bg` drops the dev flag specifically, which is the only route
+a `server:` entry has past gate 6. Until the plugin is allowlisted the
+orchestrator must therefore be a real TTY (tmux). A `plugin:` entry was not
+tested — the gate reads the installed plugin's marketplace and the allowlist, so
+an allowlisted `plugin:dispatch@agentic` should clear gate 6 under `--bg` too,
+but that needs confirming before the deployment story depends on it. Print mode
+never works either way.
+
+**The runner never tells the server it was refused.** Under every skip kind the
+server sees an ordinary MCP handshake, no error, and no response to the
+notifications it pushes; the refusal appears only in the client's debug log and,
+for most kinds, a warning toast in the TUI. Nor does the handshake carry anything
+the session could be correlated on: `initialize` supplies no session id, and
+`roots/list` returns the session's cwd and nothing more. A server therefore
+cannot report its own refusal from the protocol, and mode detection has to be a
+**positive acknowledgement**: the server pushes a probe event whose body
+instructs the session to record the acknowledgement through a `dispatch …` write,
+and stays in `polling` — re-pushing the probe on a capped backoff — until one
+lands. Re-pushing rather than timing out is what keeps a session that was merely
+busy, or that had not yet loaded a skill, from being stuck in `polling` for the
+rest of its life; the backoff is what keeps an unanswerable probe from spending a
+turn every tick. That handshake is the trigger the mode-selection phase needs.
+
+**Meta and body handling.**
+
+- Meta keys must match `^[a-zA-Z_][a-zA-Z0-9_]*$`. A key with a hyphen is
+  dropped, the rest of the event is delivered, and a warning is logged — so
+  `pr`, never `pr-number`, but mixed case is fine.
+- Meta values must be strings. A number or boolean fails schema validation in
+  the runner's notification handler, which logs a connection error and drops
+  the **whole** event. The server must stringify before pushing.
+- The layer does not dedupe attributes: a `source` meta key emits a second
+  `source` attribute on the same tag rather than overriding the runner's. The
+  server must leave `source` alone and keep `kind` to its own vocabulary.
+- Bodies are injected without escaping except that `</channel>` is rewritten to
+  `<\/channel>`, so a body cannot close the tag early. A `<channel …>` *opening*
+  tag inside a body passes through verbatim.
 
 ## The design
 
@@ -238,17 +328,19 @@ team vs solo behaviour — dynamic loading of a mode variant:
 
 | Mode         | Selected when                              | Waiting behaviour                                             |
 | ------------ | ------------------------------------------ | ------------------------------------------------------------ |
-| `channel`    | a `dispatch mcp` server is attached        | Skill returns after each unit of work; the CLI pushes events to the orchestrator session, which re-addresses or respawns the handling subagent. |
-| `polling`    | no channel (unavailable / not enabled)     | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself. |
+| `channel`    | the session has acked the server's probe   | Skill returns after each unit of work; the CLI pushes events to the orchestrator session, which re-addresses or respawns the handling subagent. |
+| `polling`    | no ack yet (no channel, or refused)        | Current behaviour: the skill runs the foreground `sleep`/`/loop` loop itself. |
 
-Mode is detected from whether a channel server is attached to the session. A
-channel subprocess can't set an env var in the agent's process, so the marker is
-injected by the runner (or passed through plugin config) as a session id that both
-the server's registry row and `dispatch mcp status` correlate on; the skill reads
-`dispatch mcp status`, which reports `active` only when a live server is registered
-for this session. The judgment content of each skill (what counts as actionable,
-the gates, the §2.4 sequence) is identical across modes; only the *waiting* section
-differs, so the two modes can't diverge into two behaviours.
+An attached server is not the signal — attachment is neither sufficient (the
+runner may refuse the capability) nor observable from the session. A channel
+subprocess also can't set an env var in the agent's process. So the marker is the
+acknowledgement handshake in
+[Measured behavior of the preview](#measured-behavior-of-the-preview): the server
+pushes a probe, the session answers with `dispatch mcp ack`, and `dispatch mcp
+status` reports `active` only once that acknowledgement exists for a live server.
+The judgment content of each skill (what counts as actionable, the gates, the
+§2.4 sequence) is identical across modes; only the *waiting* section differs, so
+the two modes can't diverge into two behaviours.
 
 ### Events are triggers
 
@@ -263,9 +355,10 @@ the session simply executes.
 **Coalescing is per-PR, per-kind.** Two changes of the same kind on the same PR
 seen on one tick collapse to a single event (the agent re-reads for freshness).
 Changes that differ in kind or PR — a `ci_finished` on PR 7 and a `pr_review` on
-PR 8 — stay **distinct events delivered as an ordered batch**, never merged, because
-one event's `kind`/`repo`/`pr` are single-valued and merging would lose
-information.
+PR 8 — stay **distinct events, delivered one turn each in order**, because one
+event's `kind`/`repo`/`pr` are single-valued and merging would lose information.
+The channel layer merges nothing on its own, so this is the only coalescing there
+is.
 
 Two families:
 
@@ -284,11 +377,11 @@ Two families:
 ### Event catalog
 
 Every event carries `source` (set automatically to the server name), a `kind`,
-and a monotonic `seq` for ordering/coalescing. Meta values are strings; each meta
-key consists only of letters, digits, and underscores (anchored `^[a-z0-9_]+$`) —
-the channel layer silently drops any key with a hyphen, so it is `pr`, never
-`pr-number`. Bodies are either the canonical `dispatch pr status` payload or a
-short instruction; never raw external text assembled by the server.
+and a monotonic `seq` for ordering/coalescing. Meta values are strings and meta
+keys match `^[a-zA-Z_][a-zA-Z0-9_]*$` — a hyphenated key is dropped, so it is
+`pr`, never `pr-number`, and a non-string value costs the whole event. Bodies
+are either the canonical `dispatch pr status` payload or a short instruction;
+never raw external text assembled by the server.
 
 **PR / CI triggers** — body is the `dispatch pr status` payload for `repo`/`pr`.
 
@@ -400,31 +493,41 @@ comment on a PR or ticket. The key point: the event body is the **same `dispatch
 pr status` payload the agent already consumes** as its sole PR read path, so
 pushing it introduces no exposure the agent didn't already have when it pulled
 it. The server never assembles a bespoke body out of raw external strings; work
-orders carry only identifiers and a short instruction. Meta keys are `snake_case`
-per the channel layer's rules. If two-way features (reply tool,
+orders carry only identifiers and a short instruction. The runner rewrites a
+`</channel>` in a body so it cannot close the tag early, but it does not strip a
+`<channel …>` opener, and it does not dedupe a `source` attribute — so the server
+must not put external text in a body, must leave `source` to the runner, and must
+keep `kind` to its own vocabulary. If two-way features (reply tool,
 permission relay) are added later, the channel reference's sender-gating and
 untrusted-field rules apply.
 
 ## Deployment and lifecycle
 
-- **Always-on = a persistent session.** Channels deliver only while a session is
-  open. A participating session runs in a long-lived context (persistent
-  terminal, `tmux`, or a background `claude` process). When it exits, its
-  `dispatch mcp` server exits with it and its waiting stops until it restarts;
-  other sessions' servers are unaffected.
+- **Always-on = a persistent interactive session.** Channels deliver only while
+  a session is open, and only an interactive session registers a dev-flagged
+  channel at all, so a participating session runs in a persistent terminal or
+  `tmux` — not `claude -p`, and not `--bg` until the plugin is allowlisted. When
+  it exits, its `dispatch mcp` server exits with it and its waiting stops until
+  it restarts; other sessions' servers are unaffected.
 - **Restart is cheap; the server holds no durable state.** All durable state is
   in the shared graph DB and on the platforms. On restart a server rehydrates
   its watch set from the DB (this session's open claims and un-merged PRs) — no
-  conversation history, no event spool of its own. Cheap for the server, not free
-  for the coordinators: the restart drops the ticket → subagent-id map with the
-  session, so every in-flight ticket is re-entered through the short-lived path.
+  conversation history, no event spool of its own. It inherits nothing from the
+  dead server, though: with no session identity to key on, the old claims come
+  back through stale reclamation rather than adoption. Cheap for the server, not
+  free for the coordinators: the restart drops the ticket → subagent-id map with
+  the session, so every in-flight ticket is re-entered through the short-lived
+  path.
 - **Preview flags.** Channels are a research preview. Until the `dispatch` plugin
   is on the channel allowlist — the Anthropic-maintained `claude-plugins-official`
   set, or an organization's `allowedChannelPlugins` managed setting — sessions
-  load it with `--dangerously-load-development-channels`, and org `channelsEnabled`
-  must be on. Document both in the plugin README. If the channel capability is
-  refused at startup, the server says so and the skills fall back to `polling`
-  mode rather than failing.
+  load it with `--dangerously-load-development-channels plugin:dispatch@agentic`,
+  which prompts for confirmation at startup. That `plugin:` spelling is the
+  untested half of the spike: only a `server:` entry was exercised. Org
+  `channelsEnabled` must be on for claude.ai Team/Enterprise and for console orgs
+  with managed settings. Document both in the plugin README. Refusal is silent to
+  the server, so the skills stay in `polling` until an acknowledgement lands,
+  rather than waiting for the server to detect a refusal it never sees.
 
 ## Relationship to §3.1
 
@@ -454,8 +557,9 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 ## Phased plan
 
 1. **Channel skeleton.** `dispatch mcp` speaks the channel protocol; declares the
-   capability; sets the mode marker; pushes a hand-triggered test event. Prove
-   delivery into a session end-to-end behind the dev flag.
+   capability; runs the acknowledgement handshake that establishes the mode
+   marker; pushes a hand-triggered test event. Prove delivery into a session
+   end-to-end behind the dev flag.
 2. **Mode selection.** Add `channel`/`polling` dynamic loading to `orchestrate`
    and `deliver`, with `polling` = today's behaviour and `channel` a stub that
    yields. No behaviour change when no channel is attached.
@@ -507,3 +611,12 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 - **CI provider abstraction.** `ci_finished` spans `gh pr checks --watch` and
   `bk build wait`, which are different subprocesses with different terminal
   signals; the watch loop needs a provider seam.
+- **Correlating a session to its server.** The runner gives the CLI no session
+  identity, so a `dispatch mcp status` run cold — by a skill that was not woken by
+  an event, and so never saw a registry id — cannot tell which of several live
+  servers on the machine is its own. Working directory is the only handle the
+  server has (via `roots/list`), and two sessions can share one. Settle this
+  before mode selection ships; until then a skill has to be given the registry id.
+- **Allowlisted plugin channels.** The spike exercised only a `server:` entry
+  under the dev flag. Whether `plugin:dispatch@agentic` registers once
+  allowlisted — and so whether a `--bg` orchestrator is viable — is unverified.

@@ -1,4 +1,5 @@
 import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
 
 import {DataError} from './errors.mts';
 
@@ -13,15 +14,20 @@ const MANIFEST = new URL('../../.claude-plugin/plugin.json', import.meta.url);
  * The installed plugin's version, read from its manifest so nothing has to be
  * kept in step with it by hand. Callers report it to a peer (MCP `serverInfo`),
  * which is why an unreadable manifest is a failure rather than a guess.
+ *
+ * `manifestUrl` exists so a test can point at a broken manifest; production
+ * callers take the default.
  */
-export async function pluginVersion(): Promise<string> {
+export async function pluginVersion(
+  manifestUrl: URL = MANIFEST
+): Promise<string> {
   let manifest: unknown;
   try {
-    manifest = JSON.parse(await readFile(MANIFEST, 'utf8'));
+    manifest = JSON.parse(await readFile(manifestUrl, 'utf8'));
   } catch (error) {
     throw new DataError('cannot read the plugin manifest', {
       cause: error,
-      details: {path: MANIFEST.pathname},
+      details: {path: fileURLToPath(manifestUrl)},
       hint: 'reinstall the dispatch plugin — its manifest is missing or is not JSON.',
     });
   }
@@ -33,7 +39,7 @@ export async function pluginVersion(): Promise<string> {
 
   if (typeof version !== 'string' || version === '') {
     throw new DataError('the plugin manifest declares no version', {
-      details: {path: MANIFEST.pathname},
+      details: {path: fileURLToPath(manifestUrl)},
       hint: 'set a semver "version" in the plugin manifest.',
     });
   }

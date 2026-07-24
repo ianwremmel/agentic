@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {once} from 'node:events';
 import {PassThrough, Readable} from 'node:stream';
 import {describe, it} from 'node:test';
 
@@ -12,6 +13,7 @@ import {
 } from './server.mts';
 
 const VERSION = '1.2.3';
+const TIMEOUT = 10_000;
 
 /** Logs go to their own sink here, as they go to stderr in production. */
 function sinkLogger() {
@@ -135,10 +137,33 @@ describe('serve — messages it will not answer', () => {
     assert.deepEqual(written, []);
   });
 
-  it('never answers a response, which would bounce back and forth', async () => {
-    const written = await exchange(['{"jsonrpc":"2.0","id":4,"result":{}}']);
+  it('never answers a notification it had to refuse either', async () => {
+    // JSON-RPC allows no reply to a notification, not even an error one.
+    const written = await exchange([
+      '{"jsonrpc":"2.0","method":"notifications/cancelled","params":[1]}',
+      '{"jsonrpc":"1.0","method":"notifications/initialized"}',
+    ]);
 
     assert.deepEqual(written, []);
+  });
+
+  it('never answers a response, which would bounce back and forth', async () => {
+    const written = await exchange([
+      '{"jsonrpc":"2.0","id":4,"result":{}}',
+      '{"jsonrpc":"2.0","id":null,"error":{"code":-1,"message":"no"}}',
+    ]);
+
+    assert.deepEqual(written, []);
+  });
+
+  it('refuses a batch rather than half-answering it', async () => {
+    const [line, ...rest] = await exchange([
+      '[{"jsonrpc":"2.0","id":1,"method":"ping"}]',
+    ]);
+    const response = JSON.parse(line ?? '') as {id: null; error: unknown};
+
+    assert.deepEqual(rest, []);
+    assert.equal(response.id, null);
   });
 
   it('keeps serving after a message it refused', async () => {
@@ -154,30 +179,74 @@ describe('serve — messages it will not answer', () => {
 });
 
 describe('serve — lifetime', () => {
-  it('returns when the peer closes the stream', async () => {
-    // Resolving at all is the assertion: a server that kept reading would hang
-    // the test rather than fail it.
-    await exchange([initialize(LATEST_PROTOCOL_VERSION)]);
-  });
+  // Each of these fails by hanging rather than by asserting, and the suite sets
+  // no default timeout — so they carry their own.
+  it(
+    'returns rather than throwing when the peer dies mid-write',
+    {timeout: TIMEOUT},
+    async () => {
+      // The runner going away between our read and our write is the ordinary
+      // shutdown race, not a failure: a throw here would exit the CLI 1 with a
+      // stack trace, and the session that ended would look like a crash.
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const running = serve({
+        input,
+        output,
+        log: sinkLogger(),
+        version: VERSION,
+      });
 
-  it('returns when the signal aborts, with the stream still open', async () => {
+      output.destroy();
+      input.write(`${initialize(LATEST_PROTOCOL_VERSION)}\n`);
+      input.end();
+
+      await running;
+    }
+  );
+
+  it('returns when the input stream errors', {timeout: TIMEOUT}, async () => {
     const input = new PassThrough();
     const output = new PassThrough();
     output.resume();
-    const controller = new AbortController();
-
     const running = serve({
       input,
       output,
       log: sinkLogger(),
       version: VERSION,
-      signal: controller.signal,
     });
-    controller.abort();
+
+    input.destroy(Object.assign(new Error('gone'), {code: 'ECONNRESET'}));
 
     await running;
-    assert.equal(input.destroyed, false, 'the runner still owns the stream');
   });
+
+  it(
+    'returns when the signal aborts mid-session',
+    {timeout: TIMEOUT},
+    async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const controller = new AbortController();
+
+      const running = serve({
+        input,
+        output,
+        log: sinkLogger(),
+        version: VERSION,
+        signal: controller.signal,
+      });
+
+      // Abort only once the server is demonstrably inside its read loop, so this
+      // exercises the listener rather than the already-aborted shortcut.
+      input.write(`${initialize(LATEST_PROTOCOL_VERSION)}\n`);
+      await once(output, 'data');
+      controller.abort();
+
+      await running;
+      assert.equal(input.destroyed, false, 'the runner still owns the stream');
+    }
+  );
 
   it('writes nothing but framed JSON to stdout', async () => {
     const written = await exchange([

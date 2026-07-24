@@ -66,6 +66,16 @@ describe('readMessages', () => {
 
     assert.deepEqual(await collect(input, {signal: AbortSignal.abort()}), []);
   });
+
+  it('rethrows an input error instead of letting it kill the process', async () => {
+    // readline re-emits the input's error as its own, where an unlistened
+    // 'error' event is an uncaught exception rather than a rejected read.
+    const input = new PassThrough();
+    const reading = collect(input);
+    input.destroy(new Error('the pipe broke'));
+
+    await assert.rejects(reading, /the pipe broke/u);
+  });
 });
 
 /** Everything written to a stream, as the peer would read it. */

@@ -3,6 +3,7 @@ import {describe, it} from 'node:test';
 
 import {
   errorResponse,
+  INVALID_PARAMS,
   INVALID_REQUEST,
   PARSE_ERROR,
   parseMessage,
@@ -52,13 +53,6 @@ describe('parseMessage', () => {
     assert.equal(message.kind, 'notification');
   });
 
-  it('drops a response rather than answering it', () => {
-    // Answering would bounce off a peer applying the same rule, forever.
-    const message = parseMessage('{"jsonrpc":"2.0","id":7,"result":{}}');
-
-    assert.equal(message.kind, 'ignored');
-  });
-
   it('reports unparseable input as a parse error with no id', () => {
     const message = refusal('{"jsonrpc":"2.0",');
 
@@ -89,7 +83,66 @@ describe('parseMessage', () => {
     );
 
     assert.equal(message.id, 1);
+    assert.equal(message.error.code, INVALID_PARAMS);
   });
+
+  it('refuses a request addressed by an id no response can carry back', () => {
+    // Read as a notification it would be dropped, leaving the peer waiting on
+    // an answer that can never be routed.
+    const message = refusal('{"jsonrpc":"2.0","id":true,"method":"ping"}');
+
+    assert.equal(message.id, null);
+    assert.equal(message.error.code, INVALID_REQUEST);
+  });
+
+  it('refuses a fractional id, which MCP does not allow', () => {
+    assert.equal(
+      refusal('{"jsonrpc":"2.0","id":1.5,"method":"ping"}').id,
+      null
+    );
+  });
+
+  it('drops a batch, since no revision this server speaks carries one', () => {
+    assert.equal(
+      refusal('[{"jsonrpc":"2.0","id":1,"method":"ping"}]').id,
+      null
+    );
+  });
+});
+
+describe('parseMessage — a notification is never answerable', () => {
+  // JSON-RPC forbids answering a notification at all, so every way one can be
+  // wrong has to end in silence rather than an error response.
+  const cases: Record<string, string> = {
+    'bad params shape':
+      '{"jsonrpc":"2.0","method":"notifications/cancelled","params":[1]}',
+    'wrong protocol version':
+      '{"jsonrpc":"1.0","method":"notifications/initialized"}',
+    'null id, which names no call':
+      '{"jsonrpc":"1.0","id":null,"method":"notifications/initialized"}',
+  };
+
+  for (const [name, line] of Object.entries(cases)) {
+    it(`stays silent on a notification with a ${name}`, () => {
+      assert.equal(parseMessage(line).kind, 'ignored', line);
+    });
+  }
+});
+
+describe('parseMessage — a response is never answered', () => {
+  const cases: Record<string, string> = {
+    result: '{"jsonrpc":"2.0","id":7,"result":{}}',
+    error: '{"jsonrpc":"2.0","id":7,"error":{"code":-1,"message":"no"}}',
+    // The id a peer uses when it could not read ours. Answering it would bounce
+    // between two servers applying this same rule.
+    'null id': '{"jsonrpc":"2.0","id":null,"error":{"code":-1,"message":"no"}}',
+  };
+
+  for (const [name, line] of Object.entries(cases)) {
+    it(`drops a response carrying a ${name}`, () => {
+      assert.equal(parseMessage(line).kind, 'ignored', line);
+    });
+  }
 });
 
 describe('responses', () => {

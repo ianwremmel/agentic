@@ -36,7 +36,7 @@ export function group({
   const byName = new Map(children.map((child) => [child.name, child]));
   const width = Math.max(0, ...children.map((child) => child.name.length));
 
-  const usage = [
+  const subcommandUsage = [
     fallback === undefined
       ? `dispatch ${path ?? name} <subcommand> [args...]`
       : `dispatch ${path ?? name} [<subcommand> [args...]]`,
@@ -53,6 +53,15 @@ export function group({
           ),
         ]),
   ].join('\n');
+
+  // A group whose subcommands have yet to be written is, for now, only its
+  // fallback: it answers with what that command does, rather than offering a
+  // caller — usually an agent — a subcommand that would be rejected. Once
+  // children exist the group lists them and names the fallback in one line.
+  const usage =
+    children.length === 0 && fallback !== undefined
+      ? fallback.usage
+      : subcommandUsage;
 
   return {
     name,

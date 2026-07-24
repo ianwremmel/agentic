@@ -1,5 +1,6 @@
 import {parseArgsOrUsage} from '../lib/args.mts';
 import type {Command} from '../lib/command.mts';
+import {isPeerGone} from '../lib/io.mts';
 import {serve} from '../lib/mcp/server.mts';
 import {pluginVersion} from '../lib/plugin-version.mts';
 import {group} from '../lib/subcommand.mts';
@@ -19,7 +20,7 @@ const server: Command = {
     'it by writing the graph with ordinary dispatch commands.',
   ].join('\n'),
 
-  async run(argv, {stdin, stdout, log}) {
+  async run(argv, {stdin, stdout, stderr, log}) {
     parseArgsOrUsage({
       args: argv,
       options: {},
@@ -32,11 +33,19 @@ const server: Command = {
     // install is broken.
     const version = await pluginVersion();
 
+    // The runner can take the log stream down with the rest of the session, and
+    // an unlistened 'error' event on it would end the process as a crash long
+    // after there was anything left to report. The listener outlives this
+    // command deliberately: the last writes to stderr happen after it returns,
+    // as the CLI logs the command out.
+    stderr.on('error', () => undefined);
+
     const controller = new AbortController();
     const stop = (signal: NodeJS.Signals): void => {
-      // Logging is fire-and-forget here: a signal handler cannot await, and
-      // aborting is what actually has to happen.
-      void log.info('stopping on signal', {signal});
+      // A signal handler cannot await, and aborting is what actually has to
+      // happen — a stderr that has already gone must not turn the shutdown into
+      // an unhandled rejection.
+      log.info('stopping on signal', {signal}).catch(() => undefined);
       controller.abort();
     };
     for (const signal of STOP_SIGNALS) {
@@ -51,6 +60,12 @@ const server: Command = {
         version,
         signal: controller.signal,
       });
+    } catch (error) {
+      // The runner tearing down its pipes — stderr included, so even the log
+      // line about it fails — is how a session ends. There is nobody left to
+      // report to, and reporting it as a crash would make every clean shutdown
+      // look like one.
+      if (!isPeerGone(error)) throw error;
     } finally {
       for (const signal of STOP_SIGNALS) {
         process.off(signal, stop);

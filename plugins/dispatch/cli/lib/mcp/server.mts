@@ -1,6 +1,7 @@
 import type {Writable} from 'node:stream';
 
 import type {Logger} from '../log/logger.mts';
+import {isPeerGone} from '../io.mts';
 import {readMessages, writeMessage} from './framing.mts';
 import {
   errorResponse,
@@ -30,12 +31,13 @@ export const SERVER_NAME = 'dispatch';
  * base-protocol features — the handshake and notifications — so support is a
  * question of what the peer will accept back, not of feature gating. Claude Code
  * 2.1.219 asks for `2025-11-25`, and accepts an older revision in the answer.
+ *
+ * Revisions before `2025-06-18` are deliberately absent: they require a server
+ * to accept JSON-RPC batches, and this one refuses an array outright.
  */
 export const SUPPORTED_PROTOCOL_VERSIONS = [
   '2025-11-25',
   '2025-06-18',
-  '2025-03-26',
-  '2024-11-05',
 ] as const;
 
 export const LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0];
@@ -89,7 +91,8 @@ async function initialize({
   // handshake from here.
   await log.info('peer connected', {
     protocol: protocolVersion,
-    requested: String(params.protocolVersion),
+    requested:
+      typeof params.protocolVersion === 'string' ? params.protocolVersion : '-',
     client: describeClient(params.clientInfo),
   });
 
@@ -119,55 +122,102 @@ export async function serve({
   version,
   signal,
 }: ServeOptions): Promise<void> {
+  // Wired before the first await: a caller that aborts while this function is
+  // still starting up would otherwise fire the event before anyone listens, and
+  // the server would read on past its own shutdown.
+  const stop = new AbortController();
+  const abort = (): void => {
+    stop.abort();
+  };
+  if (signal?.aborted === true) stop.abort();
+  else signal?.addEventListener('abort', abort, {once: true});
+
+  // A peer that dies mid-stream surfaces as a stream error, and an unlistened
+  // 'error' event is an uncaught exception — not how the end of a session
+  // should read.
+  const onStreamError = (error: Error): void => {
+    log.debug('stream error', {detail: error.message}).catch(() => undefined);
+    stop.abort();
+  };
+  input.on('error', onStreamError);
+  output.on('error', onStreamError);
+
   await log.info('channel server started', {
-    protocol: LATEST_PROTOCOL_VERSION,
+    supported: SUPPORTED_PROTOCOL_VERSIONS.join(','),
     version,
   });
 
-  // The peer's `notifications/initialized` closes the handshake. Nothing may be
-  // pushed to the session before it lands.
+  // Whether the peer ever closed the handshake with `notifications/initialized`.
+  // A session that never did is one whose runner refused the channel, which is
+  // otherwise indistinguishable from a quiet one.
   let initialized = false;
+  let handshakes = 0;
 
-  const options = signal === undefined ? {} : {signal};
-  for await (const line of readMessages(input, options)) {
-    const message = parseMessage(line);
+  /** Frame one message back, reporting whether the peer was still there. */
+  const send = async (message: object): Promise<boolean> => {
+    try {
+      await writeMessage(output, message);
+      return true;
+    } catch (error) {
+      if (!isPeerGone(error)) throw error;
+      await log.info('peer closed the stream mid-write');
+      stop.abort();
+      return false;
+    }
+  };
 
-    switch (message.kind) {
-      case 'request':
-        await writeMessage(
-          output,
-          await respond(message.id, message.method, {
+  try {
+    for await (const line of readMessages(input, {signal: stop.signal})) {
+      const message = parseMessage(line);
+
+      switch (message.kind) {
+        case 'request': {
+          if (message.method === 'initialize' && handshakes++ > 0) {
+            await log.warn('peer re-initialized an established connection');
+          }
+          const response = await respond(message.id, message.method, {
             params: message.params,
             version,
             log,
-          })
-        );
-        break;
-      case 'notification':
-        if (message.method === 'notifications/initialized') {
-          initialized = true;
-          await log.info('handshake complete');
-        } else {
-          await log.debug('ignoring notification', {method: message.method});
+          });
+          if (!(await send(response))) return;
+          break;
         }
-        break;
-      case 'ignored':
-        await log.debug('ignoring message', {reason: message.reason});
-        break;
-      case 'malformed':
-        await log.warn('rejecting message', {
-          code: message.error.code,
-          detail: message.error.message,
-        });
-        await writeMessage(
-          output,
-          errorResponse(message.id, message.error.code, message.error.message)
-        );
-        break;
+        case 'notification':
+          if (message.method === 'notifications/initialized') {
+            initialized = true;
+            await log.info('handshake complete');
+          } else {
+            await log.debug('ignoring notification', {method: message.method});
+          }
+          break;
+        case 'ignored':
+          await log.debug('ignoring message', {reason: message.reason});
+          break;
+        case 'malformed': {
+          await log.warn('rejecting message', {
+            code: message.error.code,
+            detail: message.error.message,
+          });
+          const refusal = errorResponse(
+            message.id,
+            message.error.code,
+            message.error.message
+          );
+          if (!(await send(refusal))) return;
+          break;
+        }
+      }
     }
+  } catch (error) {
+    if (!isPeerGone(error)) throw error;
+    await log.info('peer closed the stream');
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    input.off('error', onStreamError);
+    output.off('error', onStreamError);
+    await log.info('channel server stopped', {initialized});
   }
-
-  await log.info('channel server stopped', {initialized});
 }
 
 /**

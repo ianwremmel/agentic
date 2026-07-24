@@ -1,7 +1,7 @@
 import {createInterface} from 'node:readline';
 import type {Writable} from 'node:stream';
 
-import {writeLine} from '../io.mts';
+import {writeOrFail} from '../io.mts';
 
 /**
  * MCP's stdio transport is newline-delimited JSON: one message per line, and
@@ -35,6 +35,16 @@ export async function* readMessages(
   };
   signal?.addEventListener('abort', close, {once: true});
 
+  // `readline` re-emits the input's error as its own and its iterator does not
+  // surface it, so an unlistened one would kill the process. Ending the read
+  // and rethrowing after it lets the caller decide whether a broken pipe is a
+  // shutdown or a failure.
+  let failure: Error | undefined;
+  reader.on('error', (error: Error) => {
+    failure = error;
+    reader.close();
+  });
+
   try {
     for await (const line of reader) {
       const message = line.trim();
@@ -46,18 +56,23 @@ export async function* readMessages(
     signal?.removeEventListener('abort', close);
     reader.close();
   }
+
+  if (failure !== undefined) {
+    throw failure;
+  }
 }
 
 /**
  * Frame one message onto `output`.
  *
  * `JSON.stringify` escapes any newline inside a string, so an encoded message
- * can never split itself across two lines. Backpressure is respected, since the
- * peer reading us is a pipe that can fill.
+ * can never split itself across two lines. A write that fails is raised rather
+ * than swallowed: for this server a departed peer is the end of the session,
+ * which the caller has to act on.
  */
 export async function writeMessage(
   output: Writable,
   message: object
 ): Promise<void> {
-  await writeLine(output, JSON.stringify(message));
+  await writeOrFail(output, `${JSON.stringify(message)}\n`);
 }

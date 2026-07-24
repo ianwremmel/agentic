@@ -54,21 +54,45 @@ its poll tick. It MUST pick up a newly written watch or claim promptly — wakin
 a DB change (a SQLite update hook or file watch), not only on a fixed interval — so
 a just-registered PR takes effect within a second rather than a poll cycle later.
 
-The server MUST NOT keep durable state of its own beyond the graph DB. On restart
-it MUST rebuild its watch set from the DB: the spawning session's open claims and
-its un-merged PRs.
+The server MUST NOT keep durable state of its own beyond the graph DB. A restart
+mints a new registry id and inherits nothing from the dead server, so the new one
+MUST rebuild its watch set from the open claims and un-merged PRs it can reach
+from the working directory it was spawned in; claims the dead server held return
+to the frontier through stale reclamation rather than being adopted.
 
 ### Mode marker
 
 The server MUST make its presence detectable so skills can select channel vs
-fallback mode. Because a channel subprocess cannot set an environment variable in
-the agent's process, the marker MUST be injected by the runner (or carried in
-plugin config) as a session id that both the server's registry row and `dispatch
-mcp status` correlate on; `dispatch mcp status` MUST report channel mode active
-only when a live server is registered for the current session. When the channel
-capability is refused at startup (research-preview flag absent, non-Anthropic auth,
-or `channelsEnabled` off), the server MUST report that condition rather than
-failing the session, so skills fall back to polling.
+fallback mode. A channel subprocess cannot set an environment variable in the
+agent's process, the runner gives the server no handle the session can correlate
+on, and it gives no signal when it refuses the capability — a refused server sees
+an ordinary MCP handshake and its pushes are dropped silently. Detection MUST
+therefore be a positive acknowledgement:
+
+1. The server pushes a `probe` event carrying the registry id it minted (see
+   [Multi-session](#multi-session)), instructing the session to record the
+   acknowledgement against that id through `dispatch mcp ack` (§3.2).
+2. `dispatch mcp status` MUST report channel mode active only when an
+   acknowledgement exists for a live server's registry id, and `inactive`
+   otherwise. This is what makes a skill running in a session whose channel was
+   refused select `polling`.
+3. Until the acknowledgement lands the server MUST keep re-pushing the probe
+   rather than latch a verdict after a fixed timeout, on a capped backoff so an
+   unanswered probe does not consume a turn on every tick forever. A session that
+   is merely busy, or that has not yet loaded a skill that answers, then converges
+   on channel mode when it can, and a session whose runner refuses the capability
+   never leaves `polling`.
+
+The server MUST begin watching without waiting for the acknowledgement, so a
+session that ends up in `polling` costs nothing but the probes. It MUST NOT emit
+a work order before the acknowledgement lands: a work order claims a ticket and a
+slot, which a refused session would never release while its live server keeps the
+claim fresh.
+
+One thing this does not settle: with no session identity from the runner, a
+`dispatch mcp status` invocation cannot by itself tell which live server belongs
+to its caller when several sessions share a machine. The registry id is the
+correlator, and a skill woken by an event has it; a skill starting cold does not.
 
 ## Channel message protocol
 
@@ -80,19 +104,26 @@ Every event MUST carry:
 
 | Attribute | Source        | Meaning                                                        |
 | --------- | ------------- | -------------------------------------------------------------- |
-| `source`  | set by runner | The server name; not set by the server.                       |
+| `source`  | set by runner | The server name; the server MUST NOT set it.                   |
 | `kind`    | `meta`        | The event kind (tables below).                                 |
 | `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.  |
 
-Additional `meta` keys are per-kind. Each key MUST consist only of letters,
-digits, and underscores — an anchored `^[a-z0-9_]+$`. The channel layer silently
-drops any key containing a hyphen or other character, so keys MUST NOT contain one
-(`pr`, never `pr-number`). Values are strings.
+The channel layer does not dedupe attributes: a `source` key in `meta` emits a
+second `source` attribute on the tag rather than overriding the runner's. The
+server MUST NOT set one.
+
+Additional `meta` keys are per-kind. Each key MUST match an anchored
+`^[a-zA-Z_][a-zA-Z0-9_]*$`; the channel layer drops any key that does not (`pr`,
+never `pr-number`). Values MUST be strings — a non-string value fails the
+runner's schema validation and costs the whole event, so the server MUST
+stringify before pushing.
 
 Bodies MUST NOT be assembled from raw external text. A PR/CI event body MUST be
-the `dispatch pr-status` payload for the referenced PR; a work-order body MUST be
-a short instruction naming the work. This keeps the injected content identical to
-what the session already reads through the CLI.
+the `dispatch pr-status` payload for the referenced PR; a work-order or `probe`
+body MUST be a short instruction naming the work. This keeps the injected content
+identical to what the session already reads through the CLI. The runner rewrites a `</channel>`
+in a body so it cannot close the tag early, but it does not strip a `<channel …>`
+opener; the server MUST NOT rely on that rewriting in place of the rule above.
 
 ### Event catalog
 
@@ -122,8 +153,15 @@ graph.
 The last three carry the orchestrator tick's non-scheduling duties in §2.6
 (surface anomalies, park human-blocked work, alert failures, decide completion):
 the server detects the condition deterministically from the graph and the session
-performs the part that needs a tracker write or an operator message. New event
-kinds MAY be added. Renaming an existing kind is a breaking change.
+performs the part that needs a tracker write or an operator message.
+
+**Handshake** — one kind, outside both families, carrying no graph work.
+
+| kind    | `meta` (beyond source/kind/seq) | asks the session to                                                |
+| ------- | ------------------------------- | ------------------------------------------------------------------ |
+| `probe` | `server` = the registry id      | run `dispatch mcp ack --server <id>`, establishing the mode marker |
+
+New event kinds MAY be added. Renaming an existing kind is a breaking change.
 
 ### Ordering and coalescing
 
@@ -131,10 +169,11 @@ kinds MAY be added. Renaming an existing kind is a breaking change.
 same PR** observed on one tick MUST be coalesced into a single event; changes that
 differ in kind or PR MUST remain distinct events, since one event's
 `kind`/`repo`/`pr` are single-valued and merging heterogeneous changes would lose
-information. Events queued while the session is busy are delivered together on the
-session's next turn, in `seq` order; the session MUST process them as an ordered
-batch and, where an event may be stale by delivery time, re-read canonical state
-through the corresponding `dispatch` command rather than acting on the body alone.
+information. Events queued while the session is busy are delivered once it is
+free, each as its own turn, in `seq` order — the channel layer never merges two
+events, so all coalescing is the server's. The session MUST handle each event and,
+where an event may be stale by delivery time, re-read canonical state through the
+corresponding `dispatch` command rather than acting on the body alone.
 
 ### Work the server cannot do itself
 
@@ -188,8 +227,9 @@ the shared graph DB, not on a coordinating process:
    NOT be able to hand the same node to their sessions.
 2. **Machine-wide compute cap.** The slot ledger (§2.6) enforces the global
    parallelism limit across all sessions and servers.
-3. **Liveness.** Each server MUST register itself in the DB on spawn (session id,
-   pid, start time) and heartbeat while its orchestrator session is alive; the
+3. **Liveness.** Each server MUST mint its own registry id on spawn — the runner
+   supplies none — and register itself in the DB under it (registry id, pid,
+   start time), then heartbeat while its orchestrator session is alive; the
    server dies with the session, so a crashed orchestrator's claims go stale and any
    other server MAY reclaim them via the registry. In channel mode workers are
    event-driven and have returned between events, so there is no per-worker progress
@@ -204,10 +244,11 @@ the shared graph DB, not on a coordinating process:
 ## Fallback mode
 
 When the channel capability is unavailable, skills MUST fall back to their
-foreground polling behavior (`polling` mode). The server MUST report capability
-refusal at startup so the mode selection is deterministic. Mode selection MUST NOT
-change a skill's judgment content — only whether it waits by yielding for events
-or by looping itself.
+foreground polling behavior (`polling` mode). Because refusal is invisible to the
+server, the mode is decided by the acknowledgement handshake in
+[Mode marker](#mode-marker) — no acknowledgement yet means `polling`. Mode
+selection MUST NOT change a skill's judgment content — only whether it waits by
+yielding for events or by looping itself.
 
 ## Lifecycle
 
@@ -218,10 +259,10 @@ The server starts when the session runner spawns it. On startup it MUST:
 1. Verify the required CLIs are present and authenticated (`git`, `gh`, the CI
    provider CLI). A missing or unauthenticated required CLI is a fatal server
    error.
-2. Establish the channel capability. If the runner refuses it, the server MUST
-   signal fallback mode rather than aborting the session.
-3. Rebuild its watch set from the graph DB (the spawning session's open claims
-   and un-merged PRs) and begin watching.
+2. Rebuild its watch set from the graph DB and begin watching.
+3. Start the acknowledgement handshake, concurrently with step 2. The server MUST
+   NOT abort the session over an unanswered probe, and MUST NOT emit a work order
+   until one is answered.
 
 ### Stop
 
@@ -232,5 +273,7 @@ session is the runner.
 ### Distribution
 
 The server ships as part of the `dispatch` CLI (no separate binary). Its channel
-mode is entered via `dispatch mcp` and is registered with the runner like any MCP
-server (plugin `.mcp.json` / `--channels`).
+mode is entered via `dispatch mcp`. Registration takes two parts: the MCP server
+declaration (plugin `.mcp.json`) and an entry naming it in the session's channel
+list (`--channels`) — the declaration alone connects the server but registers no
+channel.

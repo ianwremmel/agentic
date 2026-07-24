@@ -49,10 +49,10 @@ marker syntax, or cache layout.
 
 ## Server vs interaction: who calls what
 
-Server and work-registration commands (`mcp status`, the `graph` surface,
-`graph pr add`) are invoked by the operator from the terminal, or by a skill to
-register work; the session runner spawns `dispatch mcp` itself. They manage the
-server and the graph.
+Server and work-registration commands (`mcp status`, `mcp ack`, the `graph`
+surface, `graph pr add`) are invoked by the operator from the terminal, or by a
+skill to register work and answer the server's probe; the session runner spawns
+`dispatch mcp` itself. They manage the server and the graph.
 
 Interaction commands (`create-comment`, `reply-to-thread`, `react`,
 `request-review`, `pr-status`, `ack-annotation`) are invoked by an agent session

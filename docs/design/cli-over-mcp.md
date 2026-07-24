@@ -153,8 +153,9 @@ turns still in context. This keeps a coordinator's context warm across its
 ticket's lifecycle — closer to §2.6's persistent coordinator than a fresh agent each
 time — while the *waiting* still lives in the server, never in a subagent sleep loop.
 Subagents run in the background so the orchestrator stays responsive; per-project
-fan-out (§2.6's `maxParallel`) is how many it keeps addressable and holding slots,
-capped by the slot ledger — a held slot no longer implies a running process.
+fan-out (§2.6's `maxParallel`) is how many coordinators it keeps addressable. The
+slot ledger caps concurrent compute, not addressability — a returned subagent holds
+no slot.
 
 Resume-with-context is the preferred shape, but it is **not load-bearing for
 correctness**: because all durable state lives in the graph DB and on the platforms, a
@@ -378,11 +379,14 @@ lived in `orchestrate` move into the CLI, along with the dynamic cadence table f
 dispatches what the CLI hands it.
 
 **`deliver`** (in `channel` mode). The `sleep`+`pr-status` loop goes away. deliver
-runs as a subagent the orchestrator relays PR events to: on each, it reads the PR's
-canonical state (`dispatch pr status`), runs its per-tick judgment **once** —
-address actionable concerns, evaluate gates — and then returns. The orchestrator
-either re-addresses that subagent for the next event on the PR or spawns a fresh one;
-the DB carries its state either way. On merge/close the orchestrator clears the watch.
+runs as a subagent that receives PR events instead of polling for them: on each, it
+reads the PR's canonical state (`dispatch pr status`), runs its per-tick judgment
+**once** — address actionable concerns, evaluate gates — and then returns. Whoever
+spawned it either re-addresses it for the next event on that PR or spawns a fresh
+one; the DB carries its state either way. Which agent that is — the orchestrator or
+the ticket's coordinator — is unsettled (see
+[Open decisions](#open-decisions-and-questions)), because only a subagent's own
+spawner holds the id needed to re-address it. On merge/close the watch is cleared.
 Deliver's judgment (§2.4) is unchanged; only the waiting is relocated — into the
 server, not a nested sleep loop (see
 [Execution topology](#execution-topology-one-orchestrator-session-routed-subagents)).
@@ -484,9 +488,11 @@ vocabulary, coalescing, and the shared-DB signalling contract.
   with nothing to signal the fallback. Measure it before the deliver phase.
 - **Who owns the delivery worker.** The topology routes a PR trigger to "the subagent
   handling that ticket", but §2.5 has the coordinator spawn one delivery instance per
-  PR — making `deliver` a grandchild whose id the orchestrator never saw. Either the
-  orchestrator spawns delivery workers directly and the coordinator addresses them
-  through it, or the relay is two-hop (orchestrator → coordinator → its worker). The
+  PR — making `deliver` a grandchild whose id the orchestrator never saw, and only a
+  spawner can re-address what it spawned. So either the relay is two-hop (orchestrator
+  → coordinator → its worker), or the orchestrator spawns delivery workers itself and
+  §2.5's coordinator-owns-its-PRs rule bends. The coordinator cannot hand its worker's
+  id upward mid-run, so passing the id to the orchestrator is not a third option. The
   spike covers the nesting either way; the choice belongs to the deliver phase.
 - **§2.6 reconciliation.** Fold the work-order model, the producer-vs-CLI
   derivation split, the tick-duty kinds (`park_human_blocked`, `alert_failure`,

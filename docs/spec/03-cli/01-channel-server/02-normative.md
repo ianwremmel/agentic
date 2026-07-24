@@ -23,12 +23,14 @@ Channel events reach only the top-level session the runner spawned the server fo
 and a subagent cannot be woken directly by a channel event. So a project runs as one
 **orchestrator session** that owns the server; the server watches the graph and every
 in-flight ticket's PRs and pushes all events to the orchestrator, which relays each
-to a subagent — a coordinator subagent per `dispatch_ticket`, and the subagent
-handling a PR for each PR/CI trigger (matched by `repo`/`pr`). A subagent MAY be
-**resumable** — it returns after each event, and the orchestrator re-addresses it by
-the id it received at spawn, with the earlier turns still in context — or
-short-lived, spawned per event. A resumable subagent holds no process between events,
-so the orchestrator MUST NOT treat it as live. Either way the graph DB and
+onward — a coordinator subagent per `dispatch_ticket`, and, for each PR/CI trigger
+(matched by `repo`/`pr`), the subagent handling that PR. Only an agent's own spawner
+holds the id needed to re-address it, so where the handling subagent was spawned by a
+coordinator rather than by the orchestrator, the relay MUST pass through that
+coordinator. A subagent MAY be **resumable** — it returns after each event, and its
+spawner re-addresses it by the id it received at spawn, with the earlier turns still
+in context — or short-lived, spawned per event. A resumable subagent holds no process
+between events, so its spawner MUST NOT treat it as live. Either way the graph DB and
 `dispatch pr-status` remain the source of truth: a subagent MUST be able to
 reconstruct its state from them (this is also the recovery path after an orchestrator
 restart), and the waiting MUST stay in the server — a subagent MUST NOT run a

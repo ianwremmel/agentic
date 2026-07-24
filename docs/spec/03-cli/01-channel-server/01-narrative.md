@@ -76,16 +76,17 @@ require Anthropic authentication, and can be disabled by organization policy. Th
 skills therefore keep their existing foreground-loop behavior as a **fallback
 mode** and select between the two the way they already select other behavior
 variants (team vs solo) — by dynamically loading a mode variant. In channel mode
-a skill yields after each unit of work and is woken by events; in polling mode it
-runs the loop itself. The judgment content is identical across modes; only the
+a skill returns after each unit of work and is re-entered per event; in polling mode
+it runs the loop itself. The judgment content is identical across modes; only the
 waiting differs, so the two modes cannot drift into two different behaviors.
 
 ## Multi-session
 
 Channel events reach only a top-level session, and a subagent can't be woken
 directly, so a project runs as one orchestrator session that owns the server and
-routes events to per-event subagents (a coordinator per ticket, deliver per PR
-event) — no per-ticket sessions to launch. The CLI has long supported several such
+routes events down to subagents (a coordinator per ticket, and deliver for a PR
+event, reached through whichever agent spawned it) — no per-ticket sessions to
+launch. The CLI has long supported several such
 sessions on different projects at once; each owns a server watching its own
 tickets' PRs, all sharing the one graph DB. Overlap is prevented in the DB: the CLI
 claims a ticket and a slot atomically before dispatching a coordinator, so two

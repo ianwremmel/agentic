@@ -67,7 +67,7 @@ events into the running session. The server declares
 session as a tag:
 
 ```text
-<channel source="dispatch" kind="ci_finished" repo="o/r" pr="7" rollup="failure">
+<channel source="plugin:dispatch:mcp" kind="ci_finished" repo="o/r" pr="7" rollup="failure">
 …pr-status payload…
 </channel>
 ```
@@ -85,8 +85,8 @@ decision.
 | Constraint                    | Consequence for this design                                                        |
 | ----------------------------- | ---------------------------------------------------------------------------------- |
 | Server, not client (no MCP)   | The watch loop can't reach MCP-only sources (Linear); that work is delegated back to the session, which has the MCP client. |
-| Session-scoped lifetime       | Each session spawns its own server; the server lives and dies with it. Always-on = a persistent interactive session (see [Measured behavior of the preview](#measured-behavior-of-the-preview)). |
-| Not always available          | Research preview (flags/protocol may change; custom channels need `--dangerously-load-development-channels`, and so an interactive session until the plugin is allowlisted), Anthropic-auth only (no Bedrock / Vertex / Foundry), org `channelsEnabled` gate. The skills therefore need a non-channel fallback mode. |
+| Session-scoped lifetime       | Each session spawns its own server; the server lives and dies with it. Always-on = a persistent session — interactive, or `--bg` once the plugin is allowlisted (see [Measured behavior of the preview](#measured-behavior-of-the-preview)). |
+| Not always available          | Research preview (flags/protocol may change; a `server:` entry, or an un-allowlisted plugin, needs `--dangerously-load-development-channels` and so an interactive session), Anthropic-auth only (no Bedrock / Vertex / Foundry), org `channelsEnabled` gate. The skills therefore need a non-channel fallback mode. |
 | Injected content              | Event bodies enter the agent's context; the body is the same `dispatch pr status` payload the agent already consumes, so its trust properties are unchanged (see [Injection safety](#injection-safety)). |
 
 The no-MCP boundary is the most interesting of these — it's what makes
@@ -103,6 +103,18 @@ runner's source instead — a distinction worth keeping, since source-read detai
 can change under us without a session ever behaving differently. Where any of it
 contradicts the paragraphs above, it wins.
 
+The `plugin:`-entry half was measured the same way, by installing that server as
+a plugin from a local marketplace and naming the plugin in
+`allowedChannelPlugins`. Registration was read from the runner's `--debug-file`
+output and delivery from the session's own transcript. Two limits on how far
+those runs generalize: the stand-in plugin came from a **local** marketplace
+where `dispatch` will come from a remote one, and the allowlist was the
+`allowedChannelPlugins` route, never the `claude-plugins-official` one. That
+they behave alike is read from the runner's source, where the gate compares the
+entry's plugin and marketplace names against whichever allowlist is in force and
+against the installed plugin's marketplace, and never against anything specific
+to a plugin's contents or its marketplace's kind.
+
 **Delivery.** An event arrives as a user-role message in its own turn:
 
 ```text
@@ -111,22 +123,28 @@ hand-emitted probe event: if you can read this, delivery works
 </channel>
 ```
 
-`source` is the MCP server name, injected by the runner. Events pushed while the
-session is busy queue on the same inbound queue as task notifications and are
-delivered in order as separate turns once the current turn ends. The channel
-layer never merges two events, so all coalescing is the server's job.
+`source` is the MCP server name, injected by the runner. For a plugin-provided
+server that name is the runner's internal `plugin:<plugin>:<server>` — a server
+called `mcp` inside `dispatch` arrives as `source="plugin:dispatch:mcp"`, not
+`dispatch` and not `mcp`. Events pushed while the session is busy queue on the
+same inbound queue as task notifications and are delivered in order as separate
+turns once the current turn ends. The channel layer never merges two events, so
+all coalescing is the server's job.
 
-**Gates, in the order the runner applies them.** Each produces a `skip` with a
-named kind; the first one that trips wins.
+**Gates.** Each produces a `skip` with a named kind; the first one that trips
+wins. The ordering below is read from the runner's source — a session only ever
+reveals the first gate that trips, and gates 1–4 passed in every run here, so
+their relative order was never exercised.
 
-| # | Gate                                       | Skip kind    | Observed here                 |
-| - | ------------------------------------------ | ------------ | ----------------------------- |
-| 1 | server declares the capability             | `capability` | passes                        |
-| 2 | first-party auth (no third-party provider) | `provider`   | passes                        |
-| 3 | feature availability (a remote flag)       | `disabled`   | passes                        |
-| 4 | org `channelsEnabled`                      | `policy`     | passes                        |
-| 5 | server named in the session channel list   | `session`    | passes when named             |
-| 6 | allowlist, or a dev-flagged entry          | `allowlist`  | passes only with the dev flag |
+| # | Gate                                               | Skip kind     | Exercised here                      |
+| - | -------------------------------------------------- | ------------- | ----------------------------------- |
+| 1 | server declares the capability                     | `capability`  | tripped by other MCP servers        |
+| 2 | first-party auth (no third-party provider)         | `provider`    | passed                              |
+| 3 | feature availability (a remote flag)               | `disabled`    | passed                              |
+| 4 | org `channelsEnabled`                              | `policy`      | passed                              |
+| 5 | server named in the session channel list           | `session`     | tripped under `--bg` + the dev flag |
+| 6 | entry's marketplace matches the installed plugin's | `marketplace` | never tripped; always matched       |
+| 7 | allowlist, or a dev-flagged entry                  | `allowlist`   | tripped with no allowlist entry     |
 
 Which orgs gate 4 binds is read from the runner's source, not observed — a
 personal plan passes it unconditionally, so the sessions here never exercised it;
@@ -134,24 +152,49 @@ the source scopes it to claude.ai Team/Enterprise orgs and to console orgs that
 have managed settings. Gates 3 and 4 are outside our control and can start
 failing without warning, so the fallback is not hypothetical.
 
-**Session kind decides whether channels register at all.** The two flags spell
-their arguments `server:<name>` or `plugin:<name>@<marketplace>`; a bare name is
-rejected.
+**`allowedChannelPlugins` replaces the default allowlist; it does not extend
+it.** Observed: setting it and naming a plugin registers that plugin, and a
+plugin it does not name is refused with "not on **your org's** approved channels
+list" where the same plugin with the setting absent is refused with "not on the
+approved channels allowlist". That the Anthropic-maintained set is not consulted
+at all once the setting exists is read from the source, which selects one list or
+the other rather than merging them — the two refusal strings are consistent with
+that but do not prove it on their own. Taking the org route therefore means
+re-listing every other plugin whose channel the org wants to keep.
 
-| Session                 | `--channels`    | `--dangerously-load-development-channels`  |
-| ----------------------- | --------------- | ------------------------------------------ |
-| interactive (TTY)       | honored         | honored, after a startup confirmation      |
-| `--bg` background agent | honored         | dropped — the confirmation cannot be shown |
-| `-p` / print            | never evaluated | never evaluated                            |
+**The gate re-runs on every MCP (re)connect, and only the startup pass says
+why.** Read from the source: the reconnect path evaluates the same gates and
+returns silently when one trips, while the named skip reason is logged only by
+the startup registration pass. The consequence is a reading rule for the runs
+below — absence of a skip line in a debug log is not evidence that a channel
+registered; only `Channel notifications registered` or a delivered event is.
 
-So a `server:`-entry channel needs an interactive session: print mode evaluates
-neither flag, and `--bg` drops the dev flag specifically, which is the only route
-a `server:` entry has past gate 6. Until the plugin is allowlisted the
-orchestrator must therefore be a real TTY (tmux). A `plugin:` entry was not
-tested — the gate reads the installed plugin's marketplace and the allowlist, so
-an allowlisted `plugin:dispatch@agentic` should clear gate 6 under `--bg` too,
-but that needs confirming before the deployment story depends on it. Print mode
-never works either way.
+**Session kind decides which of the two flags survives.** They are both
+entry-taking: `--channels <entry>` and `--dangerously-load-development-channels
+<entry>`, each entry spelled `server:<name>` or `plugin:<name>@<marketplace>`,
+a bare name rejected. The dev flag supplies its own entry — it is not a modifier
+on `--channels`.
+
+| Session                 | `--channels <allowlisted plugin:>` | `--dangerously-load-development-channels <entry>` |
+| ----------------------- | ---------------------------------- | ------------------------------------------------- |
+| interactive (TTY)       | registers; events delivered        | registers; events delivered                       |
+| `--bg` background agent | registers; events delivered        | entry does not survive → skip `session`           |
+| `-p` / print            | registers; events delivered        | no registration; nothing delivered                |
+
+Every cell was run with the same probe server: registration read from the
+`--debug-file` line, delivery confirmed by finding the `<channel …>` turns in
+the session's transcript (`--bg`, TTY) or in the model's own reply (`-p`).
+
+So **an allowlisted `plugin:` entry registers in all three session kinds**, and a
+`--bg` orchestrator is viable once `dispatch` is allowlisted by the
+`allowedChannelPlugins` route measured here. Un-allowlisted, only a TTY works:
+the dev flag is the sole route past gate 7 for such an entry, and it survives
+nowhere else. Under `--bg` the entry is not merely refused but absent — the skip
+is `session`, not `allowlist` — because the launcher persists the job's respawn
+flags through a token allowlist the dev flag is not on, logging `stripped
+non-allowlisted respawnFlags token(s)` in the launching process's debug output.
+`--bg` is otherwise a full TUI in a detached pty, so a missing startup
+confirmation is not what stops it.
 
 **The runner never tells the server it was refused.** Under every skip kind the
 server sees an ordinary MCP handshake, no error, and no response to the
@@ -376,7 +419,8 @@ Two families:
 
 ### Event catalog
 
-Every event carries `source` (set automatically to the server name), a `kind`,
+Every event carries `source` (set by the runner to `plugin:dispatch:mcp` — see
+[Measured behavior of the preview](#measured-behavior-of-the-preview)), a `kind`,
 and a monotonic `seq` for ordering/coalescing. Meta values are strings and meta
 keys match `^[a-zA-Z_][a-zA-Z0-9_]*$` — a hyphenated key is dropped, so it is
 `pr`, never `pr-number`, and a non-string value costs the whole event. Bodies
@@ -503,12 +547,16 @@ untrusted-field rules apply.
 
 ## Deployment and lifecycle
 
-- **Always-on = a persistent interactive session.** Channels deliver only while
-  a session is open, and only an interactive session registers a dev-flagged
-  channel at all, so a participating session runs in a persistent terminal or
-  `tmux` — not `claude -p`, and not `--bg` until the plugin is allowlisted. When
-  it exits, its `dispatch mcp` server exits with it and its waiting stops until
-  it restarts; other sessions' servers are unaffected.
+- **Always-on = a persistent session; which kinds qualify depends on the
+  allowlist.** Channels deliver only while a session is open. Before `dispatch`
+  is allowlisted the only route past the allowlist gate is the dev flag, which
+  needs a real TTY, so the orchestrator runs in a persistent terminal or `tmux`.
+  Once it is allowlisted, an interactive, a `--bg`, and a `-p` session all
+  register it; `--bg` is then the natural home for a long-lived orchestrator, and
+  `-p` stays unusable for a different reason — it exits when its prompt is
+  answered, so it can host events only for as long as that one prompt runs. When
+  a session exits, its `dispatch mcp` server exits with it and its waiting stops
+  until it restarts; other sessions' servers are unaffected.
 - **Restart is cheap; the server holds no durable state.** All durable state is
   in the shared graph DB and on the platforms. On restart a server rehydrates
   its watch set from the DB (this session's open claims and un-merged PRs) — no
@@ -522,12 +570,17 @@ untrusted-field rules apply.
   is on the channel allowlist — the Anthropic-maintained `claude-plugins-official`
   set, or an organization's `allowedChannelPlugins` managed setting — sessions
   load it with `--dangerously-load-development-channels plugin:dispatch@agentic`,
-  which prompts for confirmation at startup. That `plugin:` spelling is the
-  untested half of the spike: only a `server:` entry was exercised. Org
-  `channelsEnabled` must be on for claude.ai Team/Enterprise and for console orgs
-  with managed settings. Document both in the plugin README. Refusal is silent to
-  the server, so the skills stay in `polling` until an acknowledgement lands,
-  rather than waiting for the server to detect a refusal it never sees.
+  which pins the orchestrator to a TTY — measured: that entry registers and
+  delivers in a terminal, and in neither `--bg` (the flag does not survive job
+  persistence) nor `-p`. Allowlisting it lifts the restriction: the dev flag
+  comes off and `--channels plugin:dispatch@agentic` registers, `--bg` included.
+  An org taking the `allowedChannelPlugins` route replaces the default set rather
+  than adding to it, so it must re-list any other plugin channel it relies on.
+  Org `channelsEnabled` must be on for claude.ai Team/Enterprise and for console
+  orgs with managed settings. Document all of this in the plugin README. Refusal
+  is silent to the server, so the skills stay in `polling` until an
+  acknowledgement lands, rather than waiting for the server to detect a refusal
+  it never sees.
 
 ## Relationship to §3.1
 
@@ -559,7 +612,11 @@ vocabulary, coalescing, and the shared-DB signalling contract.
 1. **Channel skeleton.** `dispatch mcp` speaks the channel protocol; declares the
    capability; runs the acknowledgement handshake that establishes the mode
    marker; pushes a hand-triggered test event. Prove delivery into a session
-   end-to-end behind the dev flag.
+   end-to-end behind the dev flag. Also start the allowlist track, since it gates
+   every non-TTY deployment: get `plugin:dispatch@agentic` onto a channel
+   allowlist, confirm it registers under `--bg`, and document in the plugin
+   README both routes and the fact that `allowedChannelPlugins` replaces the
+   default set rather than extending it.
 2. **Mode selection.** Add `channel`/`polling` dynamic loading to `orchestrate`
    and `deliver`, with `polling` = today's behaviour and `channel` a stub that
    yields. No behaviour change when no channel is attached.
@@ -617,6 +674,16 @@ vocabulary, coalescing, and the shared-DB signalling contract.
   servers on the machine is its own. Working directory is the only handle the
   server has (via `roots/list`), and two sessions can share one. Settle this
   before mode selection ships; until then a skill has to be given the registry id.
-- **Allowlisted plugin channels.** The spike exercised only a `server:` entry
-  under the dev flag. Whether `plugin:dispatch@agentic` registers once
-  allowlisted — and so whether a `--bg` orchestrator is viable — is unverified.
+- **Mid-session demotion.** The gate is re-evaluated on every MCP reconnect, and
+  gates 3 and 4 can start failing without warning, so a channel that registered
+  at startup can stop registering while the session lives. The mode marker is
+  one-shot — the probe stops once an acknowledgement lands — so a demoted session
+  would stay in `channel` mode yielding for events that are being dropped. Needs
+  either an acknowledgement TTL with periodic re-probing, or a liveness check the
+  skills run before yielding.
+- **Allowlisting `dispatch` itself.** The registration result comes from a
+  stand-in plugin on a local marketplace, allowlisted through
+  `allowedChannelPlugins`. `plugin:dispatch@agentic` has never been allowlisted
+  or exercised (there is no `dispatch mcp` yet), and the
+  `claude-plugins-official` route was not measured at all; that these behave
+  alike is a source read. Confirm both when the channel skeleton lands.

@@ -71,6 +71,13 @@ optional:
 The label lists derive a task's target-kind and human-interactive flag;
 `maxParallel` sizes the compute-slot ledger (`dispatch graph slot`).
 
+`dispatch mcp` runs the channel server: a stdio MCP subprocess the session
+runner spawns, speaking newline-delimited JSON-RPC on stdin/stdout. There is no
+start or stop — it lives as long as the session, exiting when the runner closes
+stdin or signals it. It exposes no MCP tools; a session steers it by writing the
+graph with ordinary `dispatch` commands. Only framed JSON goes to stdout in this
+mode, so a peer never sees anything it cannot parse.
+
 It is a bash wrapper around `cli/main.mts`. The wrapper checks that Node is
 present and at least 24.18 — the CLI ships as unbuilt TypeScript and relies on
 Node's native type stripping, so there is no build step and no runtime

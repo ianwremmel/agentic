@@ -1,0 +1,67 @@
+import {parseArgsOrUsage} from '../lib/args.mts';
+import type {Command} from '../lib/command.mts';
+import {serve} from '../lib/mcp/server.mts';
+import {pluginVersion} from '../lib/plugin-version.mts';
+import {group} from '../lib/subcommand.mts';
+
+/** The signals a runner uses to take a subprocess down; both mean "stop, cleanly". */
+const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
+
+const server: Command = {
+  name: 'mcp',
+  summary: 'Run the channel server on stdin/stdout.',
+  usage: [
+    'dispatch mcp',
+    '',
+    'Speaks newline-delimited JSON-RPC on stdin/stdout, so it is started by the',
+    'session runner as a subprocess, not from a terminal. It runs until the',
+    'runner closes stdin or signals it, and exposes no tools: a session steers',
+    'it by writing the graph with ordinary dispatch commands.',
+  ].join('\n'),
+
+  async run(argv, {stdin, stdout, log}) {
+    parseArgsOrUsage({
+      args: argv,
+      options: {},
+      allowPositionals: false,
+      strict: true,
+    });
+
+    // Read before serving: reporting a version we could not read would be a
+    // lie told during the handshake, and the manifest is only missing when the
+    // install is broken.
+    const version = await pluginVersion();
+
+    const controller = new AbortController();
+    const stop = (signal: NodeJS.Signals): void => {
+      // Logging is fire-and-forget here: a signal handler cannot await, and
+      // aborting is what actually has to happen.
+      void log.info('stopping on signal', {signal});
+      controller.abort();
+    };
+    for (const signal of STOP_SIGNALS) {
+      process.on(signal, stop);
+    }
+
+    try {
+      await serve({
+        input: stdin,
+        output: stdout,
+        log,
+        version,
+        signal: controller.signal,
+      });
+    } finally {
+      for (const signal of STOP_SIGNALS) {
+        process.off(signal, stop);
+      }
+    }
+  },
+};
+
+export const mcp = group({
+  name: 'mcp',
+  summary: 'Run the channel server the session runner spawns over stdio.',
+  children: [],
+  fallback: server,
+});

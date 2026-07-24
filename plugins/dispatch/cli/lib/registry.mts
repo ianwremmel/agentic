@@ -3,13 +3,14 @@ import assert from 'node:assert';
 import type {Command} from './command.mts';
 import {graph} from '../commands/graph.mts';
 import {greet} from '../commands/greet.mts';
+import {mcp} from '../commands/mcp.mts';
 import {wait} from '../commands/wait.mts';
 
 /**
  * Every command the CLI exposes. Skills reach these through `bin/dispatch`;
  * adding one means adding it here and nowhere else.
  */
-export const COMMANDS: readonly Command[] = [graph, greet, wait];
+export const COMMANDS: readonly Command[] = [graph, greet, mcp, wait];
 
 const BY_NAME = new Map(COMMANDS.map((command) => [command.name, command]));
 assert.equal(

@@ -73,17 +73,21 @@ a skill self-timing it.
 
 Channels are not universally available: they are a research-preview capability,
 require Anthropic authentication, and can be disabled by organization policy.
-Session kind matters too — a `-p`/print session registers no channel at all, and
-a background session registers one only for an allowlisted plugin — so until the
-plugin is allowlisted the server needs an interactive session. A runner that
-declines any of this drops the server's events without telling it, so the server
-learns its own mode from whether the session acknowledges a startup probe. The
-skills therefore keep their existing foreground-loop behavior as a **fallback
-mode** and select between the two the way they already select other behavior
-variants (team vs solo) — by dynamically loading a mode variant. In channel mode
-a skill returns after each unit of work and is re-entered per event; in polling mode
-it runs the loop itself. The judgment content is identical across modes; only the
-waiting differs, so the two modes cannot drift into two different behaviors.
+Session kind matters too. An un-allowlisted plugin registers only in an
+interactive session, because the development-channel flag it depends on takes
+effect nowhere else, so until the plugin is allowlisted the server needs a
+terminal. Once it is allowlisted an interactive or background session both host
+it; a print session registers it too but exits when its prompt is answered, so it
+never outlives the work that started it. A runner that declines any of this drops
+the server's events without telling it, so the server learns its own mode from
+whether the session acknowledges a startup probe. The skills therefore keep their
+existing foreground-loop behavior as a **fallback mode** and select between the
+two the way they already select other
+behavior variants (team vs solo) — by dynamically loading a mode variant. In
+channel mode a skill returns after each unit of work and is re-entered per
+event; in polling mode it runs the loop itself. The judgment content is
+identical across modes; only the waiting differs, so the two modes cannot drift
+into two different behaviors.
 
 Which server a skill is asking about is a separate question, and every skill but
 the one answering a probe has to answer it — only the probe carries a server id,

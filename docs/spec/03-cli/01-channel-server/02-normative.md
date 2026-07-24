@@ -168,11 +168,11 @@ Each event is a `notifications/claude/channel` notification with `content` (the
 tag body, a string) and `meta` (a string→string map rendered as tag attributes).
 Every event MUST carry:
 
-| Attribute | Source        | Meaning                                                        |
-| --------- | ------------- | -------------------------------------------------------------- |
-| `source`  | set by runner | The server name; the server MUST NOT set it.                   |
-| `kind`    | `meta`        | The event kind (tables below).                                 |
-| `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.  |
+| Attribute | Source        | Meaning                                                                                        |
+| --------- | ------------- | ---------------------------------------------------------------------------------------------- |
+| `source`  | set by runner | The runner's name for the server — `plugin:dispatch:mcp`, not `dispatch`. The server MUST NOT set it. |
+| `kind`    | `meta`        | The event kind (tables below).                                                                 |
+| `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.                                  |
 
 The channel layer does not dedupe attributes: a `source` key in `meta` emits a
 second `source` attribute on the tag rather than overriding the runner's. The
@@ -364,7 +364,11 @@ rather than re-register or keep beating.
 ### Distribution
 
 The server ships as part of the `dispatch` CLI (no separate binary). Its channel
-mode is entered via `dispatch mcp`. Registration takes two parts: the MCP server
-declaration (plugin `.mcp.json`) and an entry naming it in the session's channel
-list (`--channels`) — the declaration alone connects the server but registers no
-channel.
+mode is entered via `dispatch mcp`. Registration takes three parts: the MCP
+server declaration (plugin `.mcp.json`), an entry naming it in the session's
+channel list, and that entry clearing the channel allowlist. Entries are spelled
+`plugin:<name>@<marketplace>` or `server:<name>` — a bare name is rejected — and
+reach the session either through `--channels <entry>` or, for local development,
+`--dangerously-load-development-channels <entry>`. The declaration alone connects
+the server but registers no channel, and a named entry that clears no allowlist
+route registers none either.

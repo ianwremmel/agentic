@@ -89,6 +89,14 @@ event; in polling mode it runs the loop itself. The judgment content is
 identical across modes; only the waiting differs, so the two modes cannot drift
 into two different behaviors.
 
+Which server a skill is asking about is a separate question, and every skill but
+the one answering a probe has to answer it — only the probe carries a server id,
+and several sessions run their own servers on one machine. The handshake carries no
+session identity, but the runner puts one in the environment of the server and of
+the commands the session runs, so the server records it and a cold skill reads
+its own. Where that match is not exact the answer is no channel, because a skill
+told it has one when it does not waits for events that never come.
+
 ## Multi-session
 
 Channel events reach only a top-level session, and a subagent can't be woken

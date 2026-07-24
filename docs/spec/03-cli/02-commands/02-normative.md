@@ -33,6 +33,15 @@ It MUST be idempotent: a repeated ack for the same registry id refreshes the
 marker rather than erroring, since the server re-pushes the probe until one
 lands.
 
+It MUST also write its own session id onto that registry row (§3.1.2), replacing
+whatever the server recorded at spawn. This is the one command a session runs
+while the server it answers is already known, so it is where the id a later
+caller matches on gets fixed to the session that actually holds the channel. A
+repeated ack rewrites it, so a server that outlives one session id converges on
+the current one instead of stranding its claims. The acknowledgement itself is
+recorded against the registry id, not the session id, so it never transfers to a
+different server (§3.1.2).
+
 ### `dispatch mcp status`
 
 Report whether channel mode is active, plus basic health: the PRs being watched,
@@ -44,10 +53,21 @@ dispatch mcp status [--server <registry-id>]
 
 Skills call this to select channel vs fallback mode; it reports `active` only for
 a live server whose probe has been acked (§3.1.2). It MUST succeed whether or not
-a server is attached, reporting `inactive` when none is, so a skill always gets an
-answer. `--server` names the registry id to check; a skill woken by a channel
-event has it, and one starting cold does not — see the correlation gap in §3.1.2's
-mode marker.
+a server is attached, reporting `inactive` when it cannot confirm one, so a skill
+always gets an answer. Given no `--server`, it MUST find the server registered
+for the caller's own session id (§3.1.2). Only the `probe` event carries a
+registry id, so every caller except the one answering a probe correlates this
+way. Where that yields no acked live server it MUST report `inactive` with the
+reason (`no-session-id`, `no-server-for-session`, `ambiguous-session`, or
+`awaiting-ack`) rather than report on a server that may belong to another
+session.
+
+`--server` names a registry id explicitly and takes precedence over the match,
+but not over the fail-closed rule: where the caller has a session id of its own
+and the named row does not carry that id, the command MUST report `inactive`
+with `no-server-for-session` rather than answer about another session's server
+(§3.1.2). An operator's terminal carries no session id, which is what makes
+`--server` the way to ask about a specific server.
 
 ---
 

@@ -25,8 +25,10 @@ and a subagent cannot be woken directly by a channel event. So a project runs as
 in-flight ticket's PRs and pushes all events to the orchestrator, which relays each
 to a subagent — a coordinator subagent per `dispatch_ticket`, and the subagent
 handling a PR for each PR/CI trigger (matched by `repo`/`pr`). A subagent MAY be
-long-lived, going idle after each event and resumed by the orchestrator's message
-when the next arrives, or short-lived, spawned per event. Either way the graph DB and
+**resumable** — it returns after each event, and the orchestrator re-addresses it by
+the id it received at spawn, with the earlier turns still in context — or
+short-lived, spawned per event. A resumable subagent holds no process between events,
+so the orchestrator MUST NOT treat it as live. Either way the graph DB and
 `dispatch pr-status` remain the source of truth: a subagent MUST be able to
 reconstruct its state from them (this is also the recovery path after an orchestrator
 restart), and the waiting MUST stay in the server — a subagent MUST NOT run a
@@ -188,7 +190,7 @@ the shared graph DB, not on a coordinating process:
    pid, start time) and heartbeat while its orchestrator session is alive; the
    server dies with the session, so a crashed orchestrator's claims go stale and any
    other server MAY reclaim them via the registry. In channel mode workers are
-   event-driven and dormant between events, so there is no per-worker progress
+   event-driven and have returned between events, so there is no per-worker progress
    heartbeat; §2.6's per-owner heartbeats apply only where workers run continuously
    (polling mode). Detecting an orchestrator whose process lives while its agent loop
    wedges is out of scope for the registry.

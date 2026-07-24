@@ -92,7 +92,7 @@ claims a ticket and a slot atomically before dispatching a coordinator, so two
 orchestrators can't take the same ticket, and the slot ledger enforces the
 machine-wide cap. A server heartbeats while its session is alive, so a crashed
 orchestrator's claims go stale and another server reclaims them; event-driven
-subagents are dormant between events by design, so there is no per-worker
+subagents have returned between events, so there is no per-worker
 heartbeat, and a wedged-but-alive orchestrator is a residual case for a watchdog,
 not the DB. Clearing a reclaimed claim is a DB write any server can do; the
 tracker-side unpark is left to the next dispatch's coordinator to reconcile.

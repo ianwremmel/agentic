@@ -30,8 +30,8 @@ writing one. There is no `usage` field on the contract.
 
 ```
 src/lib/command/          # shared by cli and (future) mcp
-  abstract-command.mts    # AbstractCommand base class + Option/CommandContext types
-  parse.mts               # raw values + positionals -> typed T (coerce, required, choices, default)
+  abstract-command.mts    # AbstractCommand base + Option/OptionsRecord/ParsedOptions/CommandContext types
+  parse.mts               # raw values map -> validated values record (coerce, required, choices, default)
   env.mts                 # assertEnv(command.env, ctx.env) -> EnvironmentError if a key is missing
   discovery.mts           # scan a commands dir -> command tree
   index.mts               # barrel
@@ -54,25 +54,29 @@ src/main.mts              # discover(default dir) + runCli(process.argv)
 
 ## Command contract
 
-A command is a class extending `AbstractCommand`. Each command file exports its
-subclass under the well-known name `Command`:
+A command is a class extending `AbstractCommand`. Each command file declares its
+`options` as a module-level `const` and exports its subclass under the
+well-known name `Command`:
 
 ```ts
 // src/commands/foo/bar.mts
 import {AbstractCommand} from '../../lib/command/index.mts';
+import type {ParsedOptions, CommandContext} from '../../lib/command/index.mts';
+
+const options = {
+  force:  {type: 'boolean', description: 'Skip the confirmation.', positional: false, required: false},
+  count:  {type: 'number',  description: 'How many.', positional: false, required: false, default: 1},
+  format: {type: 'string',  description: 'Output shape.', positional: false, required: true, choices: ['json', 'text']},
+  path:   {type: 'string',  description: 'Target path.', positional: true, required: false},
+} as const;
 
 export class Command extends AbstractCommand {
   readonly name = 'bar';
   readonly summary = 'One line, shown in help.';
   readonly env = [];
-  readonly options = {
-    force:  {type: 'boolean', description: 'Skip the confirmation.', positional: false, required: false},
-    count:  {type: 'number',  description: 'How many.', positional: false, required: false, default: 1},
-    format: {type: 'string',  description: 'Output shape.', positional: false, required: true, choices: ['json', 'text']},
-    path:   {type: 'string',  description: 'Target path.', positional: true, required: false},
-  } as const;
+  readonly options = options;
 
-  async run(parsed, ctx) {
+  async run(parsed: ParsedOptions<typeof options>, ctx: CommandContext): Promise<void> {
     // parsed: {force: boolean; count: number; format: 'json' | 'text'; path?: string}
     // ctx: {log, env}
   }
@@ -99,29 +103,62 @@ interface Option {
 
 ### Type inference
 
-`run(parsed, ctx)` receives a value typed from `this.options`. The base declares
+The base class is **non-generic**. Its framework-facing `run` takes a wide,
+already-validated value; the author overrides `run` with a signature typed from
+their own `options` const via `ParsedOptions<typeof options>`:
 
 ```ts
-abstract run(parsed: ParsedOptions<this['options']>, ctx: CommandContext): Promise<void>;
+abstract class AbstractCommand {
+  abstract readonly name: string;
+  abstract readonly summary: string;
+  abstract readonly env: readonly string[];
+  abstract readonly options: OptionsRecord;
+  abstract run(parsed: Record<string, unknown>, ctx: CommandContext): Promise<void>;
+}
 ```
 
-and the subclass leaves `parsed` unannotated. TypeScript contextually types an
-unannotated override parameter from the base signature, resolving `this['options']`
-to the concrete `as const` literal, so `parsed` is inferred per command.
+Because `run` is a method, TypeScript's method-parameter bivariance lets the
+author's narrower `run(parsed: ParsedOptions<typeof options>, …)` satisfy the
+abstract `run(parsed: Record<string, unknown>, …)`. The framework only ever calls
+the wide form (with the record `parse.mts` produces); the author's body sees the
+precise type. Heterogeneous commands store in one `AbstractCommand[]` because the
+wide `run` signature is identical across all of them.
 
 `ParsedOptions<O>` maps the options record to a value type:
+
+```ts
+type OptionValue<O extends Option> =
+  O extends {readonly type: 'boolean'} ? boolean
+  : O extends {readonly type: 'number'} ? number
+  : O extends {readonly choices: readonly (infer C extends string)[]} ? C
+  : O extends {readonly type: 'string'} ? string
+  : never;
+
+type IsPresent<O extends Option> =
+  O extends {readonly type: 'boolean'} ? true
+  : O extends {readonly required: true} ? true
+  : O extends {readonly default: string | number | boolean} ? true
+  : false;
+
+type PresentKeys<O extends OptionsRecord> = {
+  [K in keyof O]: IsPresent<O[K]> extends true ? K : never;
+}[keyof O];
+
+type ParsedOptions<O extends OptionsRecord> = {
+  [K in PresentKeys<O>]: OptionValue<O[K]>;
+} & {[K in Exclude<keyof O, PresentKeys<O>>]?: OptionValue<O[K]>};
+```
 
 - `boolean` -> `boolean`, always present (a bare flag defaults to `false`).
 - `string` with `choices` -> the union of the choices; without -> `string`.
 - `number` -> `number`.
-- A key is a required property of the result when `required: true` or a `default`
-  is present; otherwise it is optional (`T | undefined`).
+- A key is a required property when `required: true`, `default` is present, or
+  the type is `boolean`; otherwise it is optional.
 
-**Inference is the one implementation risk.** Before building on it, a type-level
-test (`ParsedOptions` applied to a sample options literal, asserted with an
-`expectType`-style helper, plus a real subclass whose `run` body reads typed
-fields) must compile. If TS cannot infer through `this['options']`, **stop and
-ask** how to proceed rather than silently switching to another mechanism.
+This whole arrangement was verified against the repo's `tsconfig.json` before the
+plan was written: author-site types are real (a wrong `expectType` errors), `as
+const` on `options` is required for `choices` to narrow, and no `override`
+keyword is needed to implement the abstract members.
 
 ### CommandContext
 

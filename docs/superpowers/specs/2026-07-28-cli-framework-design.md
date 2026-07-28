@@ -7,21 +7,42 @@ not a hand-maintained registry. The command contract, discovery, and option
 validation live in `lib/command/` so a future MCP server reuses them without
 importing the cli namespace.
 
+## Transport neutrality
+
+`AbstractCommand` describes *what a command is and does*, not how the CLI renders
+it, so the same class backs an MCP tool later. The shared contract is `name`,
+`summary`, `env`, `options`, and `run(parsed, ctx)`:
+
+- `options` is a declarative schema. The cli turns it into argv parsing; MCP
+  turns it into a tool input schema. Validation (`parse.mts`) takes a raw values
+  object, never argv — the cli builds that object from argv, MCP from JSON tool
+  input, and both feed the same validator.
+- `run` receives the parsed value `T` and a `CommandContext` of `{log, env}` —
+  nothing CLI-only (no streams, no argv).
+- Thrown errors are transport-neutral: the cli maps `exitCode`; MCP maps the
+  same classes to its own error shape.
+
+CLI-only concerns stay in `lib/cli/`: `--help`, exit codes, and the **usage
+string, which the cli generates from `name` + `options`** rather than the author
+writing one. There is no `usage` field on the contract.
+
 ## Module layout
 
 ```
 src/lib/command/          # shared by cli and (future) mcp
   abstract-command.mts    # AbstractCommand base class + Option/CommandContext types
   parse.mts               # raw values + positionals -> typed T (coerce, required, choices, default)
+  env.mts                 # assertEnv(command.env, ctx.env) -> EnvironmentError if a key is missing
   discovery.mts           # scan a commands dir -> command tree
   index.mts               # barrel
 src/lib/cli/
-  cli.mts                 # runCli(): argv -> split, dispatch, help, error -> exit code
+  cli.mts                 # runCli(): argv -> split, dispatch, help, generated usage, error -> exit code
   index.mts               # barrel
 src/lib/errors/
   dispatch-error.mts      # base: exit 1, hint, exitCode, toString
   usage-error.mts         # exit 2
-  data-error.mts          # exit 4
+  environment-error.mts   # exit 3
+  definition-error.mts    # a command is defined/registered wrong (exit 1)
   ensure.mts              # ensure() + assertUsage() helpers
   index.mts               # barrel
 src/commands/             # real command files (leaf filename = command name)
@@ -43,13 +64,12 @@ import {AbstractCommand} from '../../lib/command/index.mts';
 export class Command extends AbstractCommand {
   readonly name = 'bar';
   readonly summary = 'One line, shown in help.';
-  readonly usage = 'dispatch foo bar [--force] --format <json|text>';
   readonly env = [];
   readonly options = {
-    force:  {type: 'boolean', description: 'Skip the confirmation.'},
-    count:  {type: 'number',  description: 'How many.', default: 1},
-    format: {type: 'string',  description: 'Output shape.', choices: ['json', 'text'], required: true},
-    path:   {type: 'string',  description: 'Target path.', positional: true},
+    force:  {type: 'boolean', description: 'Skip the confirmation.', positional: false, required: false},
+    count:  {type: 'number',  description: 'How many.', positional: false, required: false, default: 1},
+    format: {type: 'string',  description: 'Output shape.', positional: false, required: true, choices: ['json', 'text']},
+    path:   {type: 'string',  description: 'Target path.', positional: true, required: false},
   } as const;
 
   async run(parsed, ctx) {
@@ -67,8 +87,8 @@ type OptionType = 'string' | 'number' | 'boolean';
 interface Option {
   readonly type: OptionType;
   readonly description: string;
-  readonly positional?: boolean;      // consumes a positional arg instead of a --flag
-  readonly required?: boolean;        // absent -> UsageError
+  readonly positional: boolean;       // consumes a positional arg instead of a --flag
+  readonly required: boolean;         // absent at parse time -> UsageError
   readonly default?: string | number | boolean;
   readonly choices?: readonly string[]; // string only; value outside the set -> UsageError
 }
@@ -100,9 +120,8 @@ to the concrete `as const` literal, so `parsed` is inferred per command.
 **Inference is the one implementation risk.** Before building on it, a type-level
 test (`ParsedOptions` applied to a sample options literal, asserted with an
 `expectType`-style helper, plus a real subclass whose `run` body reads typed
-fields) must compile. If TS cannot infer through `this['options']`, fall back to a
-generic base `AbstractCommand<O extends OptionsRecord>` with the author annotating
-`extends AbstractCommand<typeof …>`; the design records which one shipped.
+fields) must compile. If TS cannot infer through `this['options']`, **stop and
+ask** how to proceed rather than silently switching to another mechanism.
 
 ### CommandContext
 
@@ -127,10 +146,10 @@ path is the invocation path: `commands/foo/bar.mts` -> `foo bar`.
 For every command file:
 
 - The module must export `Command`, and `Command.prototype instanceof
-  AbstractCommand` must hold — else `DataError` (exit 4) naming the file.
+  AbstractCommand` must hold — else `DefinitionError` naming the file.
 - Instantiate with `new Command()`.
 - `instance.name` must equal the file basename (`bar.mts` -> `'bar'`) — else
-  `DataError` naming the file, the declared name, and the expected name.
+  `DefinitionError` naming the file, the declared name, and the expected name.
 
 A directory is a parent node. `foo` can be **both** a runnable command (if
 `commands/foo.mts` exists) and a namespace (from `commands/foo/`). A parent
@@ -159,9 +178,9 @@ Steps:
    to the deepest matching node. Parent/child precedence: when a token matches a
    child name, routing to the child wins over treating it as the parent's
    positional (git-style). Remaining tokens are the command's argv.
-3. **Help mode** prints the deepest matched node's `usage` (or, for a
-   namespace-only node, generated help listing its children) to `stdout` and
-   returns 0.
+3. **Help mode** prints usage for the deepest matched node — a line generated
+   from the command's `name` + `options`, or, for a namespace-only node,
+   generated help listing its children — to `stdout` and returns 0.
 4. **Namespace-only node with no runnable command** and a leftover unknown token
    -> `UsageError` (exit 2) listing the children.
 5. **Runnable node.** Build a `node:util` `parseArgs` config from the command's
@@ -169,9 +188,14 @@ Steps:
    positionals to `positional` options in declared order. Pass raw values +
    positionals to `parse.mts`, which coerces numbers, enforces `required`,
    validates `choices`, and applies `default`s, throwing `UsageError` on any
-   violation. Call `command.run(parsed, {log, env})`.
+   violation. Then `assertEnv(command.env, env)` throws `EnvironmentError`
+   (exit 3) if any declared env key is missing. Call `command.run(parsed,
+   {log, env})`.
 6. **Errors.** A thrown `DispatchError` prints its `toString()` to `stderr` and
    returns its `exitCode`. Any other throw prints a generic line and returns 1.
+
+The env check and option validation both live in `lib/command/`, so the MCP
+server runs the identical guards before invoking a command.
 
 `node:util` `parseArgs` failures (unknown flag, missing option value) are caught
 and rethrown as `UsageError` so they exit 2 instead of crashing.
@@ -184,15 +208,19 @@ old `cli/` (a `hint` written for the agent that has to fix the failure, an
 
 - `DispatchError` — base. `message`, optional `hint`, `exitCode` (default 1),
   `toString()` that renders message + hint.
-- `UsageError` — the CLI was called wrong (unknown flag, missing required, bad
-  choice). Exit 2.
-- `DataError` — bad authoring or discovery fault (name != filename, missing or
-  invalid `Command` export). Exit 4.
+- `UsageError` — the caller invoked the command wrong (unknown flag, missing
+  required, value outside `choices`). Exit 2.
+- `EnvironmentError` — a variable declared in the command's `env` is missing from
+  the environment. The command was right; the environment was not. Exit 3.
+- `DefinitionError` — a command is defined or registered wrong (name != filename,
+  missing or non-`AbstractCommand` `Command` export). This is a bug in the
+  plugin, fixed by editing the command file, so it carries the base exit code 1
+  and a hint naming the file and the fix.
 - `ensure(cond, () => new SomeError(...))` and `assertUsage(cond, message)` —
   assertion helpers that construct the error only on failure.
 
-`EnvironmentError`, `TaggedUsageError`, and the cause-chain rendering from the
-old taxonomy are omitted until a real command needs them.
+`TaggedUsageError` and the cause-chain rendering from the old taxonomy are
+omitted until a real command needs them.
 
 ## Testing
 
@@ -212,13 +240,15 @@ E2E coverage:
 - namespace-only node prints help; unknown token under it -> exit 2;
 - `--help` in every position resolves to the deepest command path;
 - unknown flag / unknown command -> exit 2;
-- missing required option -> exit 2; value outside `choices` -> exit 2.
+- missing required option -> exit 2; value outside `choices` -> exit 2;
+- a command declaring `env` runs when the key is present and exits 3 when it is
+  missing.
 
 Targeted tests where E2E cannot isolate the behavior:
 
-- discovery throws `DataError` when `name` != filename;
-- discovery throws `DataError` when the `Command` export is missing or is not an
-  `AbstractCommand` subclass;
+- discovery throws `DefinitionError` when `name` != filename;
+- discovery throws `DefinitionError` when the `Command` export is missing or is
+  not an `AbstractCommand` subclass;
 - a type-level test that `ParsedOptions` produces the expected value type and
   that a subclass's `run` sees inferred field types.
 

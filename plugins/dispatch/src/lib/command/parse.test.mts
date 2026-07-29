@@ -48,6 +48,22 @@ describe('parseOptions', () => {
     );
   });
 
+  it('rejects Number()-permissive inputs a number option should not accept', () => {
+    for (const bad of ['Infinity', '0x1F', '0b101', ' 3', '1e999']) {
+      assert.throws(
+        () => parseOptions(options, {name: 'ada', count: bad}),
+        UsageError,
+        `expected "${bad}" to be rejected`
+      );
+    }
+  });
+
+  it('accepts negative, decimal, and exponent number literals', () => {
+    assert.equal(parseOptions(options, {name: 'a', count: '-4'}).count, -4);
+    assert.equal(parseOptions(options, {name: 'a', count: '2.5'}).count, 2.5);
+    assert.equal(parseOptions(options, {name: 'a', count: '1e3'}).count, 1000);
+  });
+
   it('rejects a missing required option', () => {
     assert.throws(() => parseOptions(options, {}), UsageError);
   });

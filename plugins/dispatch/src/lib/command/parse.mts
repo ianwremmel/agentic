@@ -36,9 +36,15 @@ export function parseOptions(
 
     const text = String(provided);
     if (option.type === 'number') {
+      // Accept a plain decimal literal only. `Number()` alone would also admit
+      // hex/binary/octal (`0x1F`), `Infinity`, and whitespace-padded input,
+      // yielding a value whose meaning does not match a `number` option; the
+      // regex rejects those, and `Number.isFinite` rejects exponent overflow
+      // (`1e999`).
       const value = Number(text);
       assertUsage(
-        text.trim() !== '' && !Number.isNaN(value),
+        /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(text) &&
+          Number.isFinite(value),
         `option ${key} expects a number, got "${text}"`
       );
       result[key] = value;

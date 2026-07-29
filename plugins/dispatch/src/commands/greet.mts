@@ -23,12 +23,12 @@ export class Command extends AbstractCommand {
   readonly env = [];
   readonly options = options;
 
-  run(
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async run(
     parsed: ParsedOptions<typeof options>,
     ctx: CommandContext
   ): Promise<void> {
     const message = `hello ${parsed.who}`;
     ctx.log.info(parsed.loud ? message.toUpperCase() : message);
-    return Promise.resolve();
   }
 }

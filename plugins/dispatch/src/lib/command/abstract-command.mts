@@ -9,8 +9,12 @@ export interface Option {
   readonly positional: boolean;
   /** Absent at parse time is a usage error. */
   readonly required: boolean;
+  /** Ignored for `boolean` options: an absent boolean flag is always `false`. */
   readonly default?: string | number | boolean;
-  /** String options only; a value outside the set is a usage error. */
+  /**
+   * String options only; a value outside the set is a usage error. Ignored
+   * (has no effect at the type level or at runtime) for `number`/`boolean`.
+   */
   readonly choices?: readonly string[];
 }
 

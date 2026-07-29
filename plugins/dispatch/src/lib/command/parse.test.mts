@@ -65,4 +65,48 @@ describe('parseOptions', () => {
     const parsed = parseOptions(options, {name: 'ada'});
     assert.equal('format' in parsed, false);
   });
+
+  it('coerces a string default for a number option to a number', () => {
+    const withStringDefault: OptionsRecord = {
+      count: {
+        type: 'number',
+        description: 'd',
+        positional: false,
+        required: false,
+        default: '3',
+      },
+    };
+    const parsed = parseOptions(withStringDefault, {});
+    assert.equal(parsed.count, 3);
+    assert.equal(typeof parsed.count, 'number');
+  });
+
+  it('accepts a default that satisfies choices', () => {
+    const withValidDefault: OptionsRecord = {
+      format: {
+        type: 'string',
+        description: 'd',
+        positional: false,
+        required: false,
+        choices: ['json', 'text'],
+        default: 'text',
+      },
+    };
+    const parsed = parseOptions(withValidDefault, {});
+    assert.equal(parsed.format, 'text');
+  });
+
+  it('rejects a default that violates choices', () => {
+    const withInvalidDefault: OptionsRecord = {
+      format: {
+        type: 'string',
+        description: 'd',
+        positional: false,
+        required: false,
+        choices: ['json', 'text'],
+        default: 'xml',
+      },
+    };
+    assert.throws(() => parseOptions(withInvalidDefault, {}), UsageError);
+  });
 });

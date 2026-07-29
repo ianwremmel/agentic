@@ -79,7 +79,11 @@ function walk(root: CommandNode, argv: readonly string[]): Walked {
   return {path, node, rest: tokens.slice(index)};
 }
 
-/** Whether `--help`/`-h` appears anywhere before a `--` terminator. */
+/**
+ * Whether `--help`/`-h` appears anywhere before a `--` terminator. A command
+ * that needs a literal `--help` option value must have its caller pass it
+ * after `--`.
+ */
 function wantsHelp(argv: readonly string[]): boolean {
   for (const token of argv) {
     if (token === '--') return false;

@@ -26,4 +26,16 @@ describe('assertEnv', () => {
         error instanceof EnvironmentError && error.message.includes('REGION')
     );
   });
+
+  it('throws EnvironmentError naming all missing keys when several are absent', () => {
+    assert.throws(
+      () => {
+        assertEnv(['TOKEN', 'REGION'], {});
+      },
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('TOKEN') &&
+        error.message.includes('REGION')
+    );
+  });
 });

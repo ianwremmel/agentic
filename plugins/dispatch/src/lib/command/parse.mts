@@ -12,17 +12,21 @@ export function parseOptions(
   const result: Record<string, unknown> = {};
 
   for (const [key, option] of Object.entries(options)) {
-    const provided = raw[key];
+    let provided: string | number | boolean | undefined = raw[key];
 
     if (provided === undefined) {
       if (option.type === 'boolean') {
         result[key] = false;
-      } else if (option.default !== undefined) {
-        result[key] = option.default;
-      } else {
-        assertUsage(!option.required, `missing required option: ${key}`);
+        continue;
       }
-      continue;
+      if (option.default === undefined) {
+        assertUsage(!option.required, `missing required option: ${key}`);
+        continue;
+      }
+      // Route the default through the same coercion/choices path as a
+      // provided value, so a numeric default given as a string still
+      // resolves to a number and a string default is still validated.
+      provided = option.default;
     }
 
     if (option.type === 'boolean') {

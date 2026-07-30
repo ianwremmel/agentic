@@ -57,17 +57,36 @@ async function handleLine(line: string, ctx: RequestContext): Promise<unknown> {
     return errorResponse(null, new JsonRpcError(-32700, 'parse error'));
   }
 
+  // A notification is defined by the absence of `id`, not by the method it
+  // names — an explicit `null` id is still a request per the current
+  // behavior below.
+  const isNotification = request.id === undefined;
+
+  if (isNotification) {
+    // Never reply to a notification, regardless of how dispatch fares.
+    try {
+      if (request.jsonrpc === '2.0' && typeof request.method === 'string') {
+        await dispatch(request.method, request.params ?? {}, ctx);
+      }
+    } catch {
+      // swallow: notifications get no response, even on failure
+    }
+    return undefined;
+  }
+
   const id = request.id ?? null;
   try {
     if (request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
       throw new JsonRpcError(-32600, 'invalid request');
     }
     const result = await dispatch(request.method, request.params ?? {}, ctx);
-    if (result === undefined) return undefined; // notification
     return {jsonrpc: '2.0', id, result};
   } catch (error) {
     if (error instanceof JsonRpcError) return errorResponse(id, error);
-    throw error;
+    // A non-JsonRpcError from a handler must not kill the read loop for
+    // later lines, so it becomes an internal-error response instead of a
+    // rethrow.
+    return errorResponse(id, new JsonRpcError(-32603, 'internal error'));
   }
 }
 
@@ -118,8 +137,12 @@ function errorResponse(
 
 /** A logger sink that writes each message as a line to a stream (stderr). */
 function stderrSink(stderr: Writable): CoreLogger {
-  const write = (message: string) => {
-    stderr.write(`${message}\n`);
+  const write = (message: string, meta?: Record<string, unknown>) => {
+    stderr.write(
+      meta === undefined
+        ? `${message}\n`
+        : `${message} ${JSON.stringify(meta)}\n`
+    );
   };
   const sink = {} as CoreLogger;
   for (const level of LEVELS) sink[level] = write;

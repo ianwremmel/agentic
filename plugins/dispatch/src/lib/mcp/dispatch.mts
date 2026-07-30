@@ -33,7 +33,7 @@ export async function callTool(
   try {
     const raw: Record<string, string | boolean> = {};
     for (const [key, value] of Object.entries(args)) {
-      if (value === undefined) continue;
+      if (value === undefined || value === null) continue;
       raw[key] =
         typeof value === 'boolean'
           ? value

@@ -5,11 +5,10 @@ it. Nothing here depends on the CLI — `lib/cli` consumes it, and a future MCP
 server will too. `index.mts` is the barrel.
 
 - `abstract-command.mts` — `AbstractCommand`, the `Option` shape, and the
-  `ParsedOptions<typeof options>` type a command uses to type its `run`. The
-  docblocks cover the bivariance override and how presence/`choices` narrow the
-  parsed type.
-- `abstract-command.mts` — also defines `Io` (the command's response channel,
-  distinct from `log`) on `CommandContext`, and the concrete `transports` field.
+  `ParsedOptions<typeof options>` type a command uses to type its `run`; also
+  defines `Io` (the command's response channel, distinct from `log`) and the
+  concrete `transports` field, both on `CommandContext`. The docblocks cover
+  the bivariance override and how presence/`choices` narrow the parsed type.
 - `transports.mts` — `resolveTransports(command)` fills the `transports` partial
   with `{cli: true, mcp: true}` defaults so gating reads definite booleans.
 - `parse.mts` — `parseOptions` turns a raw values map into a validated record

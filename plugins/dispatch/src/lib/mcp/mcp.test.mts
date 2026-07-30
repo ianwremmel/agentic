@@ -163,4 +163,25 @@ describe('runMcpServer', () => {
     assert.equal(parseFailure.error?.code, -32700);
     assert.ok(list.result?.tools);
   });
+
+  it('never responds to a notification, even for an unhandled method', async () => {
+    const res = await serve(
+      feed([
+        {jsonrpc: '2.0', method: 'notifications/cancelled'},
+        {jsonrpc: '2.0', id: 1, method: 'tools/list'},
+      ])
+    );
+    assert.equal(res.length, 1);
+    const [reply] = res;
+    assert.ok(reply);
+    assert.equal(reply.id, 1);
+    assert.ok(reply.result?.tools);
+  });
+
+  it('produces no response for notifications/initialized', async () => {
+    const res = await serve(
+      feed([{jsonrpc: '2.0', method: 'notifications/initialized'}])
+    );
+    assert.equal(res.length, 0);
+  });
 });

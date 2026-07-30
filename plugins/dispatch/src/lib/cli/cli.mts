@@ -4,7 +4,12 @@ import type {Writable} from 'node:stream';
 import type {Logger} from '../logger/index.mts';
 import {parseOptions, assertEnv, resolveTransports} from '../command/index.mts';
 import type {AbstractCommand, CommandNode, Option} from '../command/index.mts';
-import {DispatchError, UsageError, assertUsage} from '../errors/index.mts';
+import {
+  DispatchError,
+  CommandError,
+  UsageError,
+  assertUsage,
+} from '../errors/index.mts';
 
 export interface RunCliOptions {
   readonly argv: readonly string[];
@@ -62,7 +67,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
   } catch (error) {
     if (error instanceof DispatchError) {
       stderr.write(`error: ${error.toString()}\n`);
-      return error.exitCode;
+      return error instanceof CommandError ? error.exitCode : 1;
     }
     stderr.write(`error: ${String(error)}\n`);
     return 1;

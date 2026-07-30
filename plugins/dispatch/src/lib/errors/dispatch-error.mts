@@ -3,10 +3,15 @@ export interface DispatchErrorOptions extends ErrorOptions {
   readonly hint?: string;
 }
 
-/** A failure the caller can act on, as opposed to a crash. */
+/**
+ * An intended, caller-actionable failure, as opposed to a crash — the root of
+ * every deliberate error the plugin throws, so one `instanceof` tells the two
+ * apart. Command failures (`CommandError`) and transport-protocol failures
+ * (`JsonRpcError`) both extend it; the root itself holds no transport-specific
+ * field, only the `hint` and rendering common to all of them.
+ */
 export class DispatchError extends Error {
   override readonly name: string = 'DispatchError';
-  readonly exitCode: number = 1;
   readonly hint: string | undefined;
 
   constructor(message: string, options: DispatchErrorOptions = {}) {

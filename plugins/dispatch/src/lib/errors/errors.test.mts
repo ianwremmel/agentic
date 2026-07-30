@@ -3,6 +3,7 @@ import {describe, it} from 'node:test';
 
 import {
   DispatchError,
+  CommandError,
   UsageError,
   EnvironmentError,
   DefinitionError,
@@ -11,10 +12,8 @@ import {
 } from './index.mts';
 
 describe('error taxonomy', () => {
-  it('DispatchError defaults to exit 1 and renders its message', () => {
-    const error = new DispatchError('boom');
-    assert.equal(error.exitCode, 1);
-    assert.match(error.toString(), /boom/);
+  it('DispatchError renders its message', () => {
+    assert.match(new DispatchError('boom').toString(), /boom/);
   });
 
   it('renders a hint on its own line', () => {
@@ -22,14 +21,19 @@ describe('error taxonomy', () => {
     assert.match(error.toString(), /hint: do the thing/);
   });
 
-  it('assigns an exit code per subclass', () => {
+  it('CommandError defaults to exit 1', () => {
+    assert.equal(new CommandError('boom').exitCode, 1);
+  });
+
+  it('assigns an exit code per command subclass', () => {
     assert.equal(new UsageError('x').exitCode, 2);
     assert.equal(new EnvironmentError('x').exitCode, 3);
     assert.equal(new DefinitionError('x').exitCode, 1);
   });
 
-  it('subclasses are DispatchError instances with their own name', () => {
+  it('command subclasses are CommandError and DispatchError instances', () => {
     const usage = new UsageError('x');
+    assert.ok(usage instanceof CommandError);
     assert.ok(usage instanceof DispatchError);
     assert.equal(usage.name, 'UsageError');
   });

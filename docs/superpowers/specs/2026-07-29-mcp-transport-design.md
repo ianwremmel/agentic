@@ -59,20 +59,33 @@ abstract class AbstractCommand {
 }
 ```
 
-A transport is available unless explicitly `false`. The default `{}` means
-available everywhere, so existing commands need no edit. A command opts out per
-transport:
+A command may declare the field partially — the default `{}` means available
+everywhere, so existing commands need no edit, and a command opts out of a
+single transport without restating the other:
 
 ```ts
 readonly transports = {mcp: false};   // cli-only, e.g. the `mcp` command
 ```
 
-Gating is enforced at each transport, not in the shared tree:
+Consumers never read the raw partial. `lib/command` exports a resolver that
+merges a command's declaration over a fully-populated default, so gating code
+always sees a definite boolean and never touches an undefined property:
 
-- **mcp** — `buildTools` skips any node whose `command.transports.mcp === false`.
-- **cli** — `runCli` treats a node whose `command.transports.cli === false` as
-  if it had no runnable command: hidden from subcommand listings and usage, and
-  an attempt to invoke it is an unknown-command `UsageError` (exit 2).
+```ts
+function resolveTransports(command: AbstractCommand): {cli: boolean; mcp: boolean} {
+  return {cli: true, mcp: true, ...command.transports};
+}
+```
+
+Gating is enforced at each transport, not in the shared tree, and both branch
+on the resolved boolean:
+
+- **mcp** — `buildTools` skips any node where `resolveTransports(command).mcp`
+  is `false`.
+- **cli** — `runCli` treats a node where `resolveTransports(command).cli` is
+  `false` as if it had no runnable command: hidden from subcommand listings and
+  usage, and an attempt to invoke it is an unknown-command `UsageError`
+  (exit 2).
 
 The cli side is symmetric but currently unused (no command opts out of cli); it
 is implemented so the gate means the same thing in both directions.
@@ -149,6 +162,14 @@ writes one JSON response line per request that has an `id`. Server-lifecycle
 diagnostics use a `createLogger` bound to `stderr`, keeping stdout pure
 protocol.
 
+Protocol-level failures are not handled inline at each branch. A handler
+**throws** a `JsonRpcError` (defined in `lib/mcp`, carrying the JSON-RPC `code`
+and `message`), and a single `try/catch` around request dispatch renders any
+`JsonRpcError` into a proper JSON-RPC `error` response
+(`{jsonrpc, id, error: {code, message}}`). This keeps the wire-format
+construction in one place instead of scattering error-object literals through
+the handlers.
+
 Methods handled:
 
 - `initialize` — respond with the protocol version, `serverInfo`, and
@@ -156,13 +177,23 @@ Methods handled:
 - `notifications/initialized` — a notification (no `id`); no response.
 - `tools/list` — respond with `buildTools(tree).defs`.
 - `tools/call` — look up the tool by `params.name` in `byName`, run it via
-  `callTool`, and respond with the result. Unknown tool name -> a `tools/call`
-  result with `isError: true`.
-- any other method -> JSON-RPC error `-32601` (method not found).
+  `callTool`, and respond with the result.
+- any other method -> throw `JsonRpcError(-32601)` (method not found).
 
-A line that is not valid JSON, or a request missing `jsonrpc`/`method`, gets a
-JSON-RPC parse/invalid-request error response; the loop continues to the next
-line. The server runs until stdin closes.
+Two distinct failure layers, deliberately not conflated:
+
+- **Protocol errors** (unknown method, a line that is not valid JSON, a request
+  missing `jsonrpc`/`method`, an unknown tool name in `tools/call`) throw a
+  `JsonRpcError` with the matching code (`-32601` method not found, `-32700`
+  parse error, `-32600` invalid request, `-32602` invalid params). The dispatch
+  `try/catch` turns each into a JSON-RPC `error` response and the loop continues
+  to the next line.
+- **Tool execution failures** (a `DispatchError` from running the command) are
+  *not* protocol errors — MCP models them as a successful `tools/call` whose
+  result carries `isError: true`. `callTool` catches these and returns the
+  error result; they never become a JSON-RPC `error`.
+
+The server runs until stdin closes.
 
 `callTool(command, args, {env})` runs a single command:
 
@@ -240,14 +271,19 @@ Behavior tests, one rule each, following the repo's mock-i/o-not-imports rule.
 - a command whose required option is missing / whose value is outside `choices`
   returns `isError: true` with the hint, not a crash;
 - a command with a missing declared `env` var returns `isError: true`;
-- an unknown method returns JSON-RPC `-32601`;
-- a malformed (non-JSON) input line returns an error response and the loop
-  survives to process the next line.
+- an unknown method throws `JsonRpcError(-32601)`, rendered as a JSON-RPC
+  `error` response;
+- an unknown tool name in `tools/call` returns a JSON-RPC `error` (invalid
+  params), not an `isError` result;
+- a malformed (non-JSON) input line returns a JSON-RPC parse `error` and the
+  loop survives to process the next line.
 
 `lib/command` / `lib/cli`:
 
-- a command's default `transports` is `{}` (available on both);
-- a fixture command with `transports.cli === false` is hidden from cli
-  subcommand listing and exits 2 when invoked;
+- `resolveTransports` fills defaults: a command declaring nothing resolves to
+  `{cli: true, mcp: true}`, and one declaring `{mcp: false}` resolves to
+  `{cli: true, mcp: false}` (the unstated side stays `true`);
+- a fixture command that opts out of cli is hidden from cli subcommand listing
+  and exits 2 when invoked;
 - the greet command emits its greeting through `io` (its E2E assertion moves
   from the recording logger to captured `io`/stdout output).

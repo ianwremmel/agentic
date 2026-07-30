@@ -49,4 +49,13 @@ describe('src/commands tree', () => {
     assert.equal(code, 0);
     assert.equal(out.join(''), 'HELLO ADA\n');
   });
+
+  it('discovers the mcp command but excludes it from the generated tools', async () => {
+    const {buildTools} = await import('./lib/mcp/index.mts');
+    const tree = await discover(COMMANDS);
+    assert.ok(tree.children.has('mcp'), 'the mcp command is discovered');
+    const {byName} = buildTools(tree);
+    assert.ok(!byName.has('mcp'), 'but it opts out of its own transport');
+    assert.ok(byName.has('greet'));
+  });
 });

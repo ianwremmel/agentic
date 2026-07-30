@@ -21,6 +21,6 @@ export class Command extends AbstractCommand {
     parsed: ParsedOptions<typeof options>,
     ctx: CommandContext
   ): Promise<void> {
-    ctx.log.info(`store ${parsed.key ?? '(root)'}`);
+    ctx.io.write(`store ${parsed.key ?? '(root)'}\n`);
   }
 }

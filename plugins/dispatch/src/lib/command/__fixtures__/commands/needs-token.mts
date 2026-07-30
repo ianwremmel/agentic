@@ -14,6 +14,6 @@ export class Command extends AbstractCommand {
     _parsed: ParsedOptions<typeof options>,
     ctx: CommandContext
   ): Promise<void> {
-    ctx.log.info('ok');
+    ctx.io.write('ok\n');
   }
 }

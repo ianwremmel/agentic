@@ -31,9 +31,9 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     if (parsed.format === 'json') {
-      ctx.log.info(JSON.stringify({hello: parsed.who}));
+      ctx.io.write(`${JSON.stringify({hello: parsed.who})}\n`);
     } else {
-      ctx.log.info(`hello ${parsed.who}`);
+      ctx.io.write(`hello ${parsed.who}\n`);
     }
   }
 }

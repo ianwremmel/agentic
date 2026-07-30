@@ -2,7 +2,7 @@ import {parseArgs} from 'node:util';
 import type {Writable} from 'node:stream';
 
 import type {Logger} from '../logger/index.mts';
-import {parseOptions, assertEnv} from '../command/index.mts';
+import {parseOptions, assertEnv, resolveTransports} from '../command/index.mts';
 import type {AbstractCommand, CommandNode, Option} from '../command/index.mts';
 import {DispatchError, UsageError, assertUsage} from '../errors/index.mts';
 
@@ -35,9 +35,9 @@ export async function runCli(options: RunCliOptions): Promise<number> {
     const {node, rest, path} = walked;
     const command = node.command;
 
-    if (command === undefined) {
+    if (command === undefined || !resolveTransports(command).cli) {
       const label = path.length > 0 ? path.join(' ') : 'dispatch';
-      const children = [...node.children.keys()].sort().join(', ');
+      const children = visibleChildNames(node).sort().join(', ');
       throw new UsageError(
         rest.length > 0
           ? `unknown subcommand "${rest[0] ?? ''}" for ${label}`
@@ -178,7 +178,7 @@ function usageText(walked: Walked): string {
     lines.push(node.command.summary);
   }
 
-  if (node.children.size > 0) {
+  if (visibleChildNames(node).length > 0) {
     lines.push('');
     lines.push('subcommands:');
     lines.push(...childLines(node));
@@ -199,8 +199,20 @@ function optionUsage(key: string, option: Option): string {
   return option.required ? `--${key} <${value}>` : `[--${key} <${value}>]`;
 }
 
+/** Child names reachable over the cli: pure namespaces, plus commands whose `cli` transport is on. */
+function visibleChildNames(node: CommandNode): string[] {
+  return [...node.children.entries()]
+    .filter(([, child]) => {
+      const cmd = child.command;
+      return cmd === undefined || resolveTransports(cmd).cli;
+    })
+    .map(([name]) => name)
+    .sort();
+}
+
 function childLines(node: CommandNode): string[] {
-  const names = [...node.children.keys()].sort();
+  const names = visibleChildNames(node);
+  if (names.length === 0) return [];
   const width = Math.max(...names.map((name) => name.length));
   return names.map((name) => {
     const summary = node.children.get(name)?.command?.summary ?? '';

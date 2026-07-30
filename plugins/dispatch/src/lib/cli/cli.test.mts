@@ -93,4 +93,14 @@ describe('runCli', () => {
 
     assert.equal((await run(['needs-token'], {})).code, 3);
   });
+
+  it('hides and refuses a command that opts out of cli', async () => {
+    const invoked = await run(['mcp-only']);
+    assert.equal(invoked.code, 2);
+
+    const help = await run(['--help']);
+    assert.equal(help.code, 0);
+    assert.doesNotMatch(help.out, /mcp-only/);
+    assert.match(help.out, /greet/);
+  });
 });

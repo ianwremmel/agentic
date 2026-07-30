@@ -73,4 +73,8 @@ export abstract class AbstractCommand {
     parsed: Record<string, unknown>,
     ctx: CommandContext
   ): Promise<void>;
+
+  /** Transport availability; absent side defaults to available. Read through
+   *  `resolveTransports`, never directly. */
+  readonly transports: {readonly cli?: boolean; readonly mcp?: boolean} = {};
 }

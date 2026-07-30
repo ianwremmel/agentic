@@ -11,7 +11,6 @@ const COMMANDS = new URL('./commands/', import.meta.url);
 describe('src/commands tree', () => {
   it('discovers and runs the greet command', async () => {
     const tree = await discover(COMMANDS);
-    const lines: string[] = [];
     const sink = {} as CoreLogger;
     for (const level of [
       'error',
@@ -21,12 +20,19 @@ describe('src/commands tree', () => {
       'trace',
       'log',
     ] as const) {
-      sink[level] = (message: string) => {
-        lines.push(message);
+      sink[level] = () => {
+        // no-op: greet's output goes to stdout via io, not the logger
       };
     }
     const noop = new Writable({
       write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const out: string[] = [];
+    const sink2 = new Writable({
+      write(chunk, _encoding, callback) {
+        out.push(String(chunk));
         callback();
       },
     });
@@ -36,11 +42,11 @@ describe('src/commands tree', () => {
       tree,
       log: createLogger(sink),
       env: {},
-      stdout: noop,
+      stdout: sink2,
       stderr: noop,
     });
 
     assert.equal(code, 0);
-    assert.deepEqual(lines, ['HELLO ADA']);
+    assert.equal(out.join(''), 'HELLO ADA\n');
   });
 });

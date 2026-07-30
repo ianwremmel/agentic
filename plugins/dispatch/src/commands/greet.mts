@@ -29,6 +29,6 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     const message = `hello ${parsed.who}`;
-    ctx.log.info(parsed.loud ? message.toUpperCase() : message);
+    ctx.io.write(`${parsed.loud ? message.toUpperCase() : message}\n`);
   }
 }

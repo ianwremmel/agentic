@@ -50,12 +50,21 @@ export type ParsedOptions<O extends OptionsRecord> = {
 };
 
 /**
+ * The command's response channel, distinct from `log` (diagnostics). The cli
+ * writes it to stdout; the MCP server captures it as the tool result.
+ */
+export interface Io {
+  write(chunk: string): void;
+}
+
+/**
  * What a command is handed at run time. The logger is injected so commands stay
  * callable outside a process; `env` is the source for `assertEnv`.
  */
 export interface CommandContext {
   readonly log: Logger;
   readonly env: NodeJS.ProcessEnv;
+  readonly io: Io;
 }
 
 /**

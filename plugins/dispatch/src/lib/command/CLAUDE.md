@@ -8,6 +8,10 @@ server will too. `index.mts` is the barrel.
   `ParsedOptions<typeof options>` type a command uses to type its `run`. The
   docblocks cover the bivariance override and how presence/`choices` narrow the
   parsed type.
+- `abstract-command.mts` — also defines `Io` (the command's response channel,
+  distinct from `log`) on `CommandContext`, and the concrete `transports` field.
+- `transports.mts` — `resolveTransports(command)` fills the `transports` partial
+  with `{cli: true, mcp: true}` defaults so gating reads definite booleans.
 - `parse.mts` — `parseOptions` turns a raw values map into a validated record
   (coerce numbers, enforce `required`, check `choices`, apply defaults). The cli
   builds `raw` from argv; an MCP server would from JSON.

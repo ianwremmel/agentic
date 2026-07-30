@@ -52,7 +52,12 @@ export async function runCli(options: RunCliOptions): Promise<number> {
 
     const parsed = parseCommandArgs(command, rest);
     assertEnv(command.env, env);
-    await command.run(parsed, {log, env});
+    const io = {
+      write: (chunk: string) => {
+        stdout.write(chunk);
+      },
+    };
+    await command.run(parsed, {log, env, io});
     return 0;
   } catch (error) {
     if (error instanceof DispatchError) {

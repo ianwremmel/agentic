@@ -10,7 +10,7 @@ to stderr. `index.mts` is the barrel.
   skipping commands whose `mcp` transport is off.
 - `dispatch.mts` — `callTool` runs one command with a capturing `io` (its output
   is the result text); a `DispatchError` becomes an `isError` result.
-- `json-rpc-error.mts` — `JsonRpcError` (a `DispatchError` carrying a protocol
-  `code`), thrown by the loop for protocol failures (unknown method, malformed
-  request, unknown tool) and rendered into a JSON-RPC `error`. Tool failures are
-  `isError` results, not protocol errors.
+
+The loop throws `JsonRpcError` (in `lib/errors`) for protocol failures (unknown
+method, malformed request, unknown tool) and renders it into a JSON-RPC `error`.
+Tool failures are `isError` results, not protocol errors.

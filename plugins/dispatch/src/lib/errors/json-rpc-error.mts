@@ -1,4 +1,4 @@
-import {DispatchError} from '../errors/index.mts';
+import {DispatchError} from './dispatch-error.mts';
 
 /**
  * A JSON-RPC protocol failure (bad method, malformed request, unknown tool).

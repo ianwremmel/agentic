@@ -9,8 +9,8 @@ to fix it. One class per file; `index.mts` re-exports all of them.
 message + hint, and no transport-specific field. `command-error.mts` —
 `CommandError` extends it for validate/discover/run failures, adding the CLI
 `exitCode`; `usage-error.mts` (2), `environment-error.mts` (3), and
-`definition-error.mts` (1) specialize it. The MCP server's `JsonRpcError` (in
-`lib/mcp`) also extends `DispatchError`, but as a protocol fault it carries a
+`definition-error.mts` (1) specialize it. `json-rpc-error.mts` — `JsonRpcError`
+also extends `DispatchError`, but as the MCP server's protocol fault it carries a
 JSON-RPC `code`, not an `exitCode` — a sibling of `CommandError`, not a command
 failure. `ensure.mts` holds `assertUsage` and the lazy `ensure`.
 

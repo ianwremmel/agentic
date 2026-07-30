@@ -7,7 +7,7 @@ import type {CoreLogger, Logger} from '../logger/index.mts';
 import {buildTools} from './tools.mts';
 import type {BuiltTools} from './tools.mts';
 import {callTool} from './dispatch.mts';
-import {JsonRpcError} from './json-rpc-error.mts';
+import {JsonRpcError} from '../errors/index.mts';
 
 const PROTOCOL_VERSION = '2025-06-18';
 const SERVER_INFO = {name: 'dispatch', version: '1.0.0'};

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import {DispatchError} from '../errors/index.mts';
+import {DispatchError} from './index.mts';
 import {JsonRpcError} from './json-rpc-error.mts';
 
 describe('JsonRpcError', () => {

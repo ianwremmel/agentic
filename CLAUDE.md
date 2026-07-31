@@ -32,6 +32,10 @@ Plugins currently published:
   cross-team sync). Trackers are pluggable: `work-ticket` and `build-graph`
   load a per-tracker adapter skill (`tracker-adapter-<id>`) rather than
   hardcoding one; `tracker-adapter-linear` ships bundled.
+- `plugins/land/` — bring one pull request to completion. The standalone,
+  stateless slice of dispatch: the `deliver` skill plus a TypeScript `pr-status`
+  command, no orchestrator and no database. The unit of work is a PR URL, a
+  ticket URL, or a freeform prompt.
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.

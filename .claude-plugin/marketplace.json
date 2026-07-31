@@ -23,6 +23,13 @@
         "issues",
         "planning"
       ]
+    },
+    {
+      "name": "land",
+      "source": "./plugins/land",
+      "description": "Land one code change: drive a single pull request to merge through a draft PR — CI, reviews, iteration — monitoring until it closes. Stateless; the unit of work is given as a PR URL, a ticket URL, or a freeform prompt.",
+      "category": "development",
+      "tags": ["github", "pull-requests", "ci", "code-review"]
     }
   ]
 }

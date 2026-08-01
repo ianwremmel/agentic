@@ -130,8 +130,7 @@ One line per entry:
 - `<timestamp>` — RFC 3339 with offset, second precision.
 - `<kind>` — `TRANSITION` | `WAIT` | `RESUME` | `BLOCK` | `INFO` | `ERROR`.
 - `ticket=`/`pr=` — full URLs, never bare IDs; `-` when absent.
-- `<pr-state>` — the resolved `<terminal state>`: `draft` | `open` (non-terminal)
-  or `shipped` | `abandoned` (terminal); `-` when no PR.
+- `<pr-state>` — `draft` | `open` | `shipped` | `abandoned`; `-` when no PR.
 
 Kinds `deliver` emits:
 

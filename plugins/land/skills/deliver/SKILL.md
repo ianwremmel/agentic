@@ -218,10 +218,9 @@ Re-checking more often than the schedule is fine; the table is an upper bound.
   right now" or "the caller will check back" orphans the PR. Don't design a
   caller around mid-lifecycle re-dispatch.
 
-At a lifecycle terminal (or a caught operator "stop") remove any worktree you
-created and run the ticket's terminal transition. Nothing persists between runs:
-a run that dies abnormally (API error, OOM, reaping) leaves the PR where it was,
-and the next `/land:deliver <pr-url>` re-derives everything from `pr-status`.
+At a lifecycle terminal (or a caught operator "stop"), follow Universal
+terminal — including advancing the ticket only when `<terminal state>` is
+`shipped`.
 
 Tune the schedule within the run from what you observe: once you've watched this
 repo's CI finish twice, poll on that duration rather than the table's head.

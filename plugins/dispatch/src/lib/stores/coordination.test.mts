@@ -59,6 +59,22 @@ describe('CoordinationStore claims', () => {
     assert.equal(await store.release('T1', 's1'), 'absent');
     await db.close();
   });
+
+  it('lists all claims with their session and actor', async () => {
+    const {db, store} = await fresh();
+    db.run("INSERT INTO node (external_id, kind) VALUES ('T2','ticket')");
+    const at = '2026-07-31T00:00:00Z';
+    await store.claim({node: 'T1', session: 's1', actor: 'c1', claimedAt: at});
+    await store.claim({node: 'T2', session: 's2', claimedAt: at});
+    const rows = [...(await store.claims())].sort((a, b) =>
+      a.node.localeCompare(b.node)
+    );
+    assert.deepEqual(rows, [
+      {node: 'T1', session: 's1', actor: 'c1'},
+      {node: 'T2', session: 's2', actor: null},
+    ]);
+    await db.close();
+  });
 });
 
 describe('CoordinationStore slots', () => {

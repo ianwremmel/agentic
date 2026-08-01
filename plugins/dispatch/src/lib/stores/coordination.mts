@@ -85,6 +85,24 @@ export class CoordinationStore {
     });
   }
 
+  /* eslint-disable @typescript-eslint/no-base-to-string --
+   * Database values are known to be primitives; avoid as-casts per brief. */
+  async claims(): Promise<
+    {node: string; session: string; actor: string | null}[]
+  > {
+    return this.#db
+      .all(
+        `SELECT n.external_id AS node, c.session_id AS session, c.actor
+         FROM claim c JOIN node n ON n.id = c.node_id`
+      )
+      .map((row) => ({
+        node: String(row.node),
+        session: String(row.session),
+        actor: row.actor === null ? null : String(row.actor),
+      }));
+  }
+  /* eslint-enable @typescript-eslint/no-base-to-string */
+
   /**
    * Acquire a compute slot, bounded globally by `max`. Idempotent per
    * `(session, actor)` via the UNIQUE constraint: a re-acquire refreshes.

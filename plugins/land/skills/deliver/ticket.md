@@ -1,17 +1,14 @@
 # deliver — ticket-backed runs
 
-Applies only when Intake resolved a ticket. Everything here is additive — the
-PR lifecycle in your operator-mode file is unchanged.
+Applies only when Intake resolved a ticket.
 
 ## Resolving the tracker
 
 A ticket URL names its own tracker (`linear.app/<workspace>/issue/DEV-123` →
-`linear`); a bare id (`DEV-123`) uses `${user_config.tracker}`. Reach the
-tracker through its MCP server. The Linear bindings below ship with this skill;
-any other tracker is driven best-effort through whatever its own MCP server
-exposes, mapping its states onto the roles below yourself. Escalate to the
-operator rather than guess when a native state's lifecycle meaning is ambiguous
-— a wrong transition strands real work.
+`linear`); a bare id (`DEV-123`) uses `${user_config.tracker}`. Linear bindings
+are below. For any other tracker, map its states onto these roles yourself
+through its MCP server. When a native state's lifecycle meaning is ambiguous,
+ask the operator rather than guess.
 
 ## Roles
 
@@ -27,9 +24,9 @@ Speak these role names, never a tracker's own state names.
 | `canceled`    | Will not be done.                                |
 
 Forward path — `available → in-progress → in-review → delivered`. Never invent
-a native state to fill a gap, and never emit a transition to a role the tracker
-can't express: on a tracker with no `delivered` role the ticket stops at
-`in-review` when the PR ships. Say so and let the operator close it.
+a native state or emit a transition to a role the tracker can't express: with
+no `delivered` state the ticket stops at `in-review` when the PR ships — say so
+and let the operator close it.
 
 ## Transitions
 
@@ -42,32 +39,31 @@ Each is bound to a PR lifecycle edge:
 | `→ delivered`             | `<terminal state="shipped">`, **only if this PR completes the ticket**. |
 
 A ticket that needs more than one PR stays `in-review` when this one lands:
-record the shipped PR in a ticket comment and say which aims remain. `verified`
-is never this skill's to write — it asserts the ticket's aims were validated,
-which outlives the PR. `delivered` is where a run ends.
+record the shipped PR in a ticket comment and say which aims remain. Never
+write `verified`; a run ends at `delivered`.
 
 `<terminal state="abandoned">` transitions nothing. Report the closure on the
-ticket and stop; whether the ticket is dead is the operator's call.
+ticket and stop.
 
-Every transition emits a `TRANSITION` log line and a state-change comment
-([format](./reference.md#operational-logging)) — on the ticket, since these are
-ticket-level.
+Every transition emits a `TRANSITION` log line and a state-change comment on
+the ticket ([format](./reference.md#operational-logging)).
 
 ## Claim
 
-Steps 1–3 run before the first push, in order:
+Steps 1–3 run before the first push:
 
-1. Resolve the current role. A `started` role held by a **different** platform
-   identity means someone else is on it — stop and report.
+1. Resolve the current role and act on it:
+   - `available` — claimable; continue.
+   - `in-progress` or `in-review` assigned to **you** — a resumed run. Skip
+     steps 2–3; don't re-emit the transition.
+   - `in-progress` or `in-review` assigned to **anyone else** — they are on it.
+     Report and stop.
+   - anything else, including a native state that maps to no role — not
+     claimable. Report and stop; moving it is the operator's call.
 2. Assign the ticket to yourself.
-3. Emit `available → in-progress`, unless it is already `in-progress` as you
-   (a resumed run) — then don't re-emit.
-4. Comment the PR URL on the ticket once the PR exists, and put the ticket's
-   full URL (never a bare id) in the PR body.
-
-A terminal ticket (`verified`, `canceled`) is not claimable — report and stop.
-A ticket sitting in a backlog or paused state moves through `available` first,
-never straight to `in-progress`.
+3. Emit `available → in-progress`.
+4. Once the PR exists, comment its URL on the ticket, and put the ticket's full
+   URL (never a bare id) in the PR body.
 
 ## Linear bindings
 
@@ -79,10 +75,9 @@ never straight to `in-progress`.
 | assign self    | `save_issue(id, assignee="me")`                                                                               |
 | transition     | `save_issue(id, state=<substate mapping to the target role>)`                                                 |
 | ticket comment | `save_comment(issueId, body)`                                                                                 |
-| react          | `unsupported` — no reaction call in the Linear MCP server; use the text tokens                                |
+| react          | `unsupported` — use the text tokens                                                                           |
 
-Read the team's substates with `list_issue_statuses(team)` and match by name,
-case-insensitively:
+Match `list_issue_statuses(team)` names case-insensitively:
 
 | Native substate | Role          |
 | --------------- | ------------- |
@@ -98,5 +93,4 @@ case-insensitively:
 guess — a team's custom `Blocked` sits in Linear's `Unstarted` group and is not
 `available`.
 
-Linear tickets are per-team: read the ticket's team before writing a state, and
-never reuse another team's substate names.
+Read the ticket's team before writing a state; substates are per-team.

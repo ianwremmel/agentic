@@ -46,10 +46,9 @@ three forms; resolve it before Setup:
   ticket-backed ([`ticket.md`](./ticket.md)).
 - **Freeform prompt** — no PR, no ticket. The prompt is the brief.
 
-The brief's source changes nothing downstream: same gates, same lifecycle, same
-terminal. A ticket-backed run additionally keeps the ticket's role in sync and
-claims it before the first push ([`ticket.md`](./ticket.md)); a run with no
-ticket skips every ticket step.
+Gates, lifecycle, and terminal are the same for all three. A ticket-backed run
+also keeps the ticket's role in sync and claims it before the first push; a run
+with no ticket skips every ticket step.
 
 Stop and ask the operator when the input names more than one PR, or when the
 brief is too thin to write a test plan against. Never invent scope.
@@ -229,7 +228,6 @@ repo's CI finish twice, poll on that duration rather than the table's head.
 
 ## References
 
-The machine marker + sparkle wrapper, terminal signals, engagement mechanics,
-actionability, and the log-line format live in
-[`reference.md`](./reference.md). Ticket resolution, claiming, and role sync
-live in [`ticket.md`](./ticket.md).
+Machine marker and sparkle wrapper, terminal signals, engagement mechanics,
+actionability, log-line format: [`reference.md`](./reference.md). Ticket
+resolution, claiming, role sync: [`ticket.md`](./ticket.md).

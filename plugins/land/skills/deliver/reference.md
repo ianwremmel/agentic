@@ -36,8 +36,10 @@ block after the marker:
 
 The sparkle (U+2728) sits alone, one blank line in from the body each side.
 Never with dedicated credentials. The plan-comment sentinel
-`<!-- agent-plan:<agent-id> -->` goes **inside** the body (after the marker,
-and after the opening sparkle where one applies), never as the leading line.
+`<!-- agent-plan:<agent-id> -->` goes **inside** the body, **alone on its own
+line** (after the marker, and after the opening sparkle where one applies),
+never as the leading line. Appended to a prose line it doesn't match, and the
+comment stays actionable forever.
 
 ## Terminal signals
 
@@ -80,8 +82,8 @@ engagement is two parts:
 1. **Notification** — the venue your credentials file prescribes.
 2. **Engagement comment** — a top-level PR comment carrying the
    `<!-- agent-reply:<agent-id> -->` marker AND, inside the body (after the
-   opening sparkle where one applies), an engagement sentinel
-   `<!-- agent-engagement:<agent-id> -->`. Posted in both
+   opening sparkle where one applies) and alone on its own line, an engagement
+   sentinel `<!-- agent-engagement:<agent-id> -->`. Posted in both
    credential modes (the notification venues aren't PR comments the operator
    can react to). It anchors reaction-/reply-based Gate 6 signals.
 
@@ -100,9 +102,9 @@ dismissed`.
 
 A comment or thread is **non-actionable** iff any of:
 
-- it's one of the calling agent's artifact comments — a line-anchored
-  `agent-plan` or `agent-engagement` sentinel AND author = the calling gh
-  identity (the author match keeps a human quoting a marker actionable).
+- it's one of the calling agent's artifact comments — an `agent-plan` or
+  `agent-engagement` sentinel AND author = the calling gh identity (the author
+  match keeps a human quoting a marker actionable).
 - the newest comment was written by the calling agent (author = calling
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
   terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional

@@ -121,12 +121,12 @@ call a change delivered on any signal other than this attribute.
 
 ## Reading PR state
 
-**`pr-status` is the only way you look at the PR.** Never `gh pr view`, `gh pr
-checks`, `gh api …/comments|/reviews`, or an MCP PR read: every gate and every
-actionability decision comes from its XML and the cache files it writes. Read
-full text from the cache, not from the API. `gh` and MCP are for **writes** —
-reply, react, request review, mark ready. Data the snapshot doesn't carry (a
-thread's file and line, say) you may fetch directly.
+**Every gate and actionability decision comes from `pr-status` XML and the cache
+files it writes** — never from `gh pr view`, `gh pr checks`, `gh api
+…/comments|/reviews`, or an MCP PR read. Read full text from the cache. Direct
+reads are allowed only for a field the snapshot omits: a thread's file and line,
+the PR body at intake. `gh` and MCP are otherwise for **writes** — reply, react,
+request review, mark ready.
 
 A review still being drafted is invisible here by design. Don't chase it; wait
 for `pr-status` to surface it.
@@ -147,9 +147,7 @@ settled still reads as open. That is expected, and never grounds to reopen it.
 | Actionable `<comment>` or `<thread>` (gates 4–5)      | Reply (commit link **or** one-line dismissal naming what's dismissed) and apply a terminal signal. **Never resolve the thread** — even your own; that's a human's call, and the terminal signal already suppresses re-evaluation. |
 | Actionable `<annotation>` (gate 3)                    | Fix the code, OR dismiss it: write the rationale to the path in `cache=` with `.md` swapped for `.ack` (a sibling file, not a child), and record it in the plan comment or commit body. |
 
-Reply to every reviewer item — a commit link, or a one-line dismissal naming
-what you dismissed. Silence is non-conforming. Humans get more deference than
-bots.
+Humans get more deference than bots.
 
 ## Cross-cutting behaviors
 
@@ -220,9 +218,6 @@ is an upper bound.
 - **Ending the turn while the run is still going** — returning early for "no work
   right now" or "the caller will check back" orphans the PR. Don't design a
   caller around mid-lifecycle re-dispatch.
-
-When the run ends, follow **Ending the run** — including advancing the ticket
-only when `<terminal state>` is `shipped`.
 
 Tune the schedule within the run from what you observe: once you've watched this
 repo's CI finish twice, poll on that duration rather than the table's head.

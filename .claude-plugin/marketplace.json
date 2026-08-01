@@ -23,6 +23,13 @@
         "issues",
         "planning"
       ]
+    },
+    {
+      "name": "land",
+      "source": "./plugins/land",
+      "description": "Bring one pull request to completion: draft it, drive CI and reviews, iterate, and monitor until it merges or closes. Started from a PR URL, a ticket URL, or a freeform prompt.",
+      "category": "development",
+      "tags": ["github", "pull-requests", "ci", "code-review"]
     }
   ]
 }

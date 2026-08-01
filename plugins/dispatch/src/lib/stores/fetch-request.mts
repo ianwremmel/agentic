@@ -62,6 +62,13 @@ export class FetchRequestStore {
     );
   }
 
+  /**
+   * Enqueue a ticket request. The existence check and insert execute atomically in a
+   * transaction to prevent two processes racing past the check and both inserting for
+   * the same ticket. The check deliberately matches any existing row, including one
+   * already resolved `missing`, so a ticket the tracker does not have is not
+   * requested again for the rest of the refresh.
+   */
   async enqueueTicket(input: {
     source: string;
     ticket: string;
@@ -172,6 +179,8 @@ export class FetchRequestStore {
        VALUES (?, ?, ?, ?)`,
       [source, kind, payload, at]
     );
+    // The id must be read back per-connection: several dispatch processes write this
+    // table concurrently, and a table-wide "highest id" would return another process's row.
     const row = this.#db.get('SELECT last_insert_rowid() AS id');
     ensure(
       row !== undefined,

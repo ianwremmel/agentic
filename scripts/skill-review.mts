@@ -9,6 +9,14 @@
  *
  * Reads the standard pre-push ref lines from stdin:
  *   <local-ref> <local-sha> <remote-ref> <remote-sha>
+ *
+ * Files are reviewed concurrently. git opens the connection to the remote
+ * before it runs this hook and holds it idle until the hook returns, so hook
+ * wall-clock is charged against the remote's idle timeout: GitHub closes the
+ * connection somewhere under seven minutes, and git then dies of SIGPIPE
+ * writing the pack — whatever the verdict was. One review takes ~70-90 s, so
+ * reviewing serially put any push touching five or more skill files past that
+ * limit and made the gate unpassable by construction.
  */
 
 import {execFile, spawn} from 'node:child_process';
@@ -17,6 +25,13 @@ import {pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Concurrent reviews. Each one is a `claude` process, so this bounds load on a
+ * change that touches many skill files while keeping the common case (a
+ * handful) to a single wave.
+ */
+const REVIEW_CONCURRENCY = 8;
 
 export const ZERO_SHA = '0'.repeat(40);
 
@@ -133,11 +148,12 @@ export function verdictFrom(report: string): 'pass' | 'block' {
 }
 
 /**
- * Run the reviewer on one file, streaming its report to stdout while
- * capturing it. 'error' means the reviewer itself failed — no report exists.
+ * Run the reviewer on one file. The report is buffered rather than streamed:
+ * reviews run concurrently, and interleaved chunks would shred every report.
+ * It is written in one call when the reviewer finishes, so each file's block
+ * lands whole. 'error' means the reviewer itself failed — no report exists.
  */
 async function review(file: string): Promise<'pass' | 'block' | 'error'> {
-  process.stdout.write(`\n=== skill-review: ${file} ===\n`);
   const child = spawn(
     'claude',
     [
@@ -155,19 +171,43 @@ async function review(file: string): Promise<'pass' | 'block' | 'error'> {
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => {
     report += chunk;
-    process.stdout.write(chunk);
   });
   return new Promise((resolve) => {
     child.on('error', (error: Error) => {
-      process.stderr.write(`skill-review: ${error.message}\n`);
+      process.stderr.write(`skill-review: ${file}: ${error.message}\n`);
       resolve('error');
     });
     // 'close', not 'exit': 'exit' can fire before stdout is fully consumed,
     // truncating the report and turning a clean verdict into a false block.
     child.on('close', (code) => {
+      process.stdout.write(`\n=== skill-review: ${file} ===\n${report}`);
       resolve(code === 0 ? verdictFrom(report) : 'error');
     });
   });
+}
+
+/**
+ * Map `fn` over `items` with at most `limit` in flight, returning results in
+ * input order regardless of completion order. Workers pull from a shared
+ * cursor rather than running fixed batches, so a slow item never idles the
+ * others behind a barrier.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (let index = cursor++; index < items.length; index = cursor++) {
+      results[index] = await fn(items[index] as T);
+    }
+  };
+  await Promise.all(
+    Array.from({length: Math.min(limit, items.length)}, worker)
+  );
+  return results;
 }
 
 async function readStdin(): Promise<string> {
@@ -197,14 +237,11 @@ async function main(): Promise<boolean> {
     return true;
   }
   process.stdout.write(
-    `skill-review: reviewing ${String(files.length)} changed skill file(s)\n`
+    `skill-review: reviewing ${String(files.length)} changed skill file(s), ` +
+      `up to ${String(REVIEW_CONCURRENCY)} at a time\n`
   );
-  const failed: string[] = [];
-  for (const file of files) {
-    if ((await review(file)) === 'block') {
-      failed.push(file);
-    }
-  }
+  const verdicts = await mapWithConcurrency(files, REVIEW_CONCURRENCY, review);
+  const failed = files.filter((_, index) => verdicts[index] === 'block');
   if (failed.length > 0) {
     process.stderr.write(
       '\nskill-review: blocking verdict(s) above stop the push. Act on the ' +

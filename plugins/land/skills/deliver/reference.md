@@ -37,9 +37,8 @@ block after the marker:
 The sparkle (U+2728) sits alone, one blank line in from the body each side.
 Never with dedicated credentials. The plan-comment sentinel
 `<!-- agent-plan:<agent-id> -->` goes **inside** the body, **alone on its own
-line** (after the marker, and after the opening sparkle where one applies),
-never as the leading line and never sharing a line with prose — it won't match,
-and the comment stays actionable forever.
+line**, after the marker and after the opening sparkle where one applies.
+Anything else won't match, and the comment stays actionable forever.
 
 ## Terminal signals
 
@@ -134,6 +133,8 @@ One line per entry:
 - `<timestamp>` — RFC 3339 with offset, second precision.
 - `<kind>` — `TRANSITION` | `WAIT` | `RESUME` | `BLOCK` | `INFO` | `ERROR`.
 - `ticket=`/`pr=` — full URLs, never bare IDs; `-` when absent.
+- `ticket-role=` — a role name from [`ticket.md`](./ticket.md); `-` on
+  PR-only runs.
 - `<pr-state>` — `draft` | `open` | `shipped` | `abandoned`; `-` when no PR.
 
 Kinds `deliver` emits:

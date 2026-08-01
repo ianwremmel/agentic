@@ -60,8 +60,9 @@ terminal-tagged reply instead.
 | `rocket` | Terminal — shipped / merged / applied |
 | `eyes`   | Non-terminal — seen, in progress      |
 
-Text tokens — every thread reply, and any platform without reactions. Must be
-the **last non-empty line**. Emit only these three. The reader is more lenient
+Text tokens are the terminal mechanism on threads, and on any platform without
+reactions. When you emit one it must be the **last non-empty line**. Emit only
+these three. The reader is more lenient
 than the writer: `pr-status` also accepts `✓`, `✅`, `acknowledged`, `wontfix`,
 `dismissed`, and `resolved`, so a reviewer's stray "resolved" can settle an
 item — don't rely on it, and don't add to this set:
@@ -100,11 +101,7 @@ it instead: the agent is awaiting approval, not finished.
 
 ## Actionability
 
-`pr-status` classifies each item `actionable="true|false"` by the rules below;
-how to consume the flag (sole task source, cache-only reads, `pending`
-semantics) is covered by `SKILL.md`'s cross-cutting behaviors. A reviewer's
-`<reviews>` record walks `pending | commented | changes_requested | approved |
-dismissed`.
+`pr-status` classifies each item `actionable="true|false"` by the rules below.
 
 A comment or thread is **non-actionable** iff any of:
 
@@ -132,7 +129,6 @@ One line per entry:
 ```
 
 - `<timestamp>` — RFC 3339 with offset, second precision.
-- `<kind>` — `TRANSITION` | `WAIT` | `RESUME` | `BLOCK` | `INFO` | `ERROR`.
 - `ticket=`/`pr=` — full URLs, never bare IDs; `-` when absent.
 - `ticket-role=` — a role name from [`ticket.md`](./ticket.md); `-` on
   PR-only runs.

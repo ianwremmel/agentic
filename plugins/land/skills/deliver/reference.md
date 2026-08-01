@@ -110,10 +110,8 @@ A comment or thread is **non-actionable** iff any of:
   match keeps a human quoting a marker actionable).
 - the newest comment was written by the calling agent (author = calling
   identity) AND carries an `agent-reply` marker AND its last non-empty line is a
-  terminal signal (`Done.`/`Declined.`/`Shipped.`, case-insensitive, optional
-  trailing period, or `✓`/`✅`). The author match keys on the gh-authenticated
-  login; `pr-status` exits early if it can't resolve that login (a `gh api user`
-  failure is fatal, since it's the only identity source).
+  terminal token from the table above (case-insensitive, trailing period
+  optional). The author match keys on the gh-authenticated login.
 - the calling agent reacted to it with a terminal reaction (`+1`/`-1`/`rocket`;
   comments only). Top-level comments have no reply threading, so this is the
   only signal that can settle a comment someone else authored.
@@ -153,5 +151,5 @@ format. Body exactly:
 
 ```text
 State: <prev-role> → <new-role>
-Rationale: <one line; required for corrective, park, and cancel transitions>
+Rationale: <one line>
 ```

@@ -144,10 +144,8 @@ settled still reads as open. That is expected, and never grounds to reopen it.
 | ----------------------------------------------------- | ------------------------------------------------------------------------- |
 | `<merge-conflicts present="true"/>` (gate 2)          | Rebase or merge the target branch; resolve.                               |
 | `<checks state="failing">` (gate 1)                   | Diagnose root cause; fix.                                                 |
-| Actionable `<comment>` or `<thread>` (gates 4–5)      | Reply (commit link **or** one-line dismissal naming what's dismissed) and apply a terminal signal. **Never resolve the thread** — even your own; that's a human's call, and the terminal signal already suppresses re-evaluation. |
+| Actionable `<comment>` or `<thread>` (gates 4–5)      | Reply (commit link **or** one-line dismissal naming what's dismissed) and apply a terminal signal. Dismissing a bot's point needs only that line; dismissing a human's needs you to say why their concern doesn't apply — if you can't say it, do what they asked. **Never resolve the thread** — even your own; that's a human's call, and the terminal signal already suppresses re-evaluation. |
 | Actionable `<annotation>` (gate 3)                    | Fix the code, OR dismiss it: write the rationale to the path in `cache=` with `.md` swapped for `.ack` (a sibling file, not a child), and record it in the plan comment or commit body. |
-
-Humans get more deference than bots.
 
 ## Cross-cutting behaviors
 

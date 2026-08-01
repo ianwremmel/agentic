@@ -22,7 +22,7 @@ describe('assertInstant', () => {
       () => {
         assertInstant('07/31/2026', '--at');
       },
-      (err: unknown) => err instanceof DataError && /--at/u.test(err.message)
+      (err: unknown) => err instanceof DataError && err.message.includes('--at')
     );
   });
 });

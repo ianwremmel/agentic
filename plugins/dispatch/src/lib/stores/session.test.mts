@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
 import {Database} from '../db/database.mts';
+import {DataError} from '../errors/index.mts';
 import {SessionStore} from './session.mts';
 
 async function fresh(): Promise<{db: Database; store: SessionStore}> {
@@ -108,6 +109,45 @@ describe('SessionStore', () => {
     assert.equal(removed, 1);
     assert.equal(await store.getSession('old'), null);
     assert.ok(await store.getSession('fresh'));
+    await db.close();
+  });
+
+  it('register rejects a malformed startedAt or heartbeatAt', async () => {
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.register({
+        id: 's1',
+        startedAt: '07/31/2026',
+        heartbeatAt: '2026-07-31T00:00:00.000Z',
+      }),
+      (err: unknown) => err instanceof DataError
+    );
+    await assert.rejects(
+      store.register({
+        id: 's1',
+        startedAt: '2026-07-31T00:00:00.000Z',
+        heartbeatAt: 'not-a-time',
+      }),
+      (err: unknown) => err instanceof DataError
+    );
+    await db.close();
+  });
+
+  it('heartbeat rejects a malformed timestamp', async () => {
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.heartbeat('s1', 'not-a-time'),
+      (err: unknown) => err instanceof DataError
+    );
+    await db.close();
+  });
+
+  it('sweepStale rejects a malformed timestamp', async () => {
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.sweepStale('07/31/2026', 300),
+      (err: unknown) => err instanceof DataError
+    );
     await db.close();
   });
 });

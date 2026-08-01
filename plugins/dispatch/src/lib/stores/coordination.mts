@@ -1,4 +1,5 @@
 import type {Database} from '../db/database.mts';
+import {assertInstant} from '../db/time.mts';
 import {DataError, ensure} from '../errors/index.mts';
 import {isOutcome, OUTCOMES} from '../model/status.mts';
 import type {OutcomeKind} from '../model/status.mts';
@@ -35,6 +36,7 @@ export class CoordinationStore {
     branch?: string;
     claimedAt: string;
   }): Promise<ClaimResult> {
+    assertInstant(input.claimedAt, 'claimedAt');
     return this.#db.transaction(() => {
       const node = findNode(this.#db, input.node);
       if (node === null) return {outcome: 'unknown-node'};
@@ -113,6 +115,7 @@ export class CoordinationStore {
     max: number;
     acquiredAt: string;
   }): Promise<'acquired' | 'refreshed' | 'full'> {
+    assertInstant(input.acquiredAt, 'acquiredAt');
     return this.#db.transaction(() => {
       const held = this.#db.get(
         'SELECT 1 FROM slot WHERE session_id = ? AND actor = ?',
@@ -179,6 +182,7 @@ export class CoordinationStore {
           hint: 'drop retryable, or report the failure as outcome "failed".',
         })
     );
+    assertInstant(report.recordedAt, 'recordedAt');
     await this.#db.transaction(() => {
       const node = findNode(this.#db, report.node);
       ensure(

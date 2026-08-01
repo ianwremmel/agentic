@@ -1,4 +1,5 @@
 import type {Database} from '../db/database.mts';
+import {assertInstant} from '../db/time.mts';
 import type {Session} from '../model/types.mts';
 
 /* eslint-disable @typescript-eslint/require-await --
@@ -23,6 +24,8 @@ export class SessionStore {
     startedAt: string;
     heartbeatAt: string;
   }): Promise<void> {
+    assertInstant(session.startedAt, 'startedAt');
+    assertInstant(session.heartbeatAt, 'heartbeatAt');
     this.#db.run(
       `INSERT INTO session (id, host, pid, started_at, heartbeat_at)
        VALUES (?, ?, ?, ?, ?)
@@ -40,6 +43,7 @@ export class SessionStore {
   }
 
   async heartbeat(id: string, at: string): Promise<boolean> {
+    assertInstant(at, 'at');
     return (
       this.#db.run('UPDATE session SET heartbeat_at = ? WHERE id = ?', [
         at,
@@ -59,6 +63,7 @@ export class SessionStore {
    * number of sessions removed (their claims and slots cascade).
    */
   async sweepStale(now: string, windowSeconds: number): Promise<number> {
+    assertInstant(now, 'now');
     return this.#db.run(
       'DELETE FROM session WHERE unixepoch(?) - unixepoch(heartbeat_at) > ?',
       [now, windowSeconds]

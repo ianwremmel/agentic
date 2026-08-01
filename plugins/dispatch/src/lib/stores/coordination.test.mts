@@ -35,6 +35,15 @@ describe('CoordinationStore claims', () => {
     await db.close();
   });
 
+  it('rejects a malformed claimedAt', async () => {
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.claim({node: 'T1', session: 's1', claimedAt: 'not-a-time'}),
+      (err: unknown) => err instanceof DataError
+    );
+    await db.close();
+  });
+
   it('reports an unknown node', async () => {
     const {db, store} = await fresh();
     assert.equal(
@@ -121,6 +130,20 @@ describe('CoordinationStore slots', () => {
     );
     await db.close();
   });
+
+  it('rejects a malformed acquiredAt', async () => {
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.acquireSlot({
+        session: 's1',
+        actor: 'w1',
+        max: 1,
+        acquiredAt: 'not-a-time',
+      }),
+      (err: unknown) => err instanceof DataError
+    );
+    await db.close();
+  });
 });
 
 describe('CoordinationStore recordOutcome', () => {
@@ -160,6 +183,24 @@ describe('CoordinationStore recordOutcome', () => {
           retryable: true,
           detail: null,
           recordedAt: '2026-07-31T00:00:00Z',
+        },
+        {session: 's1'}
+      ),
+      (err: unknown) => err instanceof DataError
+    );
+    await db.close();
+  });
+
+  it('rejects a malformed recordedAt', async () => {
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.recordOutcome(
+        {
+          node: 'T1',
+          outcome: 'delivered',
+          retryable: null,
+          detail: null,
+          recordedAt: '07/31/2026',
         },
         {session: 's1'}
       ),

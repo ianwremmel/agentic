@@ -291,8 +291,8 @@ lib/stores/   one store per concept:
                                                      anomalies, counts, cursor reads
                 session.mts      SessionStore      — register / heartbeat / close / sweepStale
                 coordination.mts CoordinationStore — claims + slots + outcomes
-                materialize.mts  shared internal   — placeholder create/promote, id-kind
-                                                     conflict, edge-legality-on-promotion
+                materialize.mts  shared internal   — placeholder create/promote,
+                                                     id-kind conflict
 ```
 
 A store is organized around a concept, not restricted to one table: a single

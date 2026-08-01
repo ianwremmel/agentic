@@ -19,6 +19,6 @@ Every Gate 6 form is available, including the formal
 ## Review rules
 
 A platform may refuse a review request from a bot account (Copilot on GitHub
-does). If refused, log `ERROR`, say so on the PR, and continue to the next
-state — the request is not required, so this is not a `BLOCK`.
-`copilot_available: false` skips the phase.
+does). If refused, log `ERROR`, say so on the PR, and take your operator-mode
+file's *Copilot unavailable* branch — the request is not required, so this is
+not a `BLOCK`. `copilot_available: false` skips the Copilot review phase.

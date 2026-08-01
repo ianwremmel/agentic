@@ -47,8 +47,8 @@ stateDiagram-v2
     private_review_requested --> private_review_requested_changes: operator changes_requested
     private_review_requested --> private_review_approved: gate 6 satisfied
 
-    private_review_commented --> ready_for_private_review: addressed · gates 1-5 · re-request
-    private_review_requested_changes --> ready_for_private_review: addressed · gates 1-5 · re-request (required to unblock)
+    private_review_commented --> ready_for_private_review: addressed · gates 1-5 · re-engage
+    private_review_requested_changes --> ready_for_private_review: addressed · gates 1-5 · re-engage (required to unblock)
 
     private_review_approved --> ready_for_public_review: operator cleared draft
 
@@ -82,8 +82,8 @@ stateDiagram-v2
 | `copilot_commented`                | Address each actionable Copilot item; push fix(es).                                                             | no       |
 | `ready_for_private_review`         | Engage the operator while in draft: post the engagement comment (agent-reply marker + `<!-- agent-engagement:<agent-id> -->` sentinel) and notify via your credentials file's venue. | no       |
 | `private_review_requested`         | Await the operator's signal.                                                                                    | reviewer |
-| `private_review_commented`         | Address each item; push; re-request.                                                                            | no       |
-| `private_review_requested_changes` | Address; push; **re-request required** — blocks public review.                                                  | no       |
+| `private_review_commented`         | Address each item; push; re-engage.                                                                            | no       |
+| `private_review_requested_changes` | Address; push; **re-engage required** — blocks public review.                                                  | no       |
 | `private_review_approved`          | **Don't clear draft** — the operator does. Poll until the PR is no longer a draft, then → `ready_for_public_review`. | reviewer |
 | `ready_for_public_review`          | Request review from team reviewer(s), **excluding the operator**. Never self-request.                           | no       |
 | `public_review_requested`          | Await the public reviewer.                                                                                      | reviewer |

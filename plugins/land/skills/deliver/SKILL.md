@@ -205,7 +205,8 @@ is invoked directly or dispatched as a subagent.
 
 For waits past the Bash timeout (~10 min), split into shorter intervals (a
 30-min wait ≈ 5×6-min `sleep`s, each followed by a cheap `pr-status` check).
-Re-checking more often than the schedule is fine; the table is an upper bound.
+Re-checking more often than the schedule is fine (never under 60 s); the table
+is an upper bound.
 
 **Forbidden** (each has stranded a PR):
 

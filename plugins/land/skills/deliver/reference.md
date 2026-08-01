@@ -38,8 +38,8 @@ The sparkle (U+2728) sits alone, one blank line in from the body each side.
 Never with dedicated credentials. The plan-comment sentinel
 `<!-- agent-plan:<agent-id> -->` goes **inside** the body, **alone on its own
 line** (after the marker, and after the opening sparkle where one applies),
-never as the leading line. Appended to a prose line it doesn't match, and the
-comment stays actionable forever.
+never as the leading line and never sharing a line with prose — it won't match,
+and the comment stays actionable forever.
 
 ## Terminal signals
 
@@ -141,6 +141,7 @@ Kinds `deliver` emits:
 | `WAIT`       | Entering a poll; message names the venue and awaited outcome.                           |
 | `RESUME`     | The awaited condition is met and work resumes.                                          |
 | `ERROR`      | Errors surfaced but not immediately fatal.                                              |
+| `BLOCK`      | A "report and stop" path — an unclaimable ticket, a refused required request.            |
 | `TRANSITION` | (Ticket-backed runs) a ticket role change.                                              |
 
 Each ticket role change also gets a state-change comment on the ticket, in wire

@@ -18,7 +18,10 @@ When an engagement edge fires (your operator-mode file says which), the
 review-request API can't target the operator (see above), so notify by:
 
 1. a ticket comment tagging the operator, when the work has a ticket;
-2. otherwise, the out-of-band channel this install provides.
+2. otherwise, the session — say plainly that you are waiting on the operator's
+   approval and what you're waiting for. With no ticket and no review request,
+   the engagement comment reaches nobody: it lands under the operator's own
+   account, which the platform does not notify.
 
 Operator identity is `operator_login` — here the shared/authenticated account.
 Also post the engagement comment — marker + `agent-engagement` sentinel

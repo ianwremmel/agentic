@@ -21,6 +21,7 @@ signals count too.
 
 ## Review rules
 
-The agent MAY use alternative human credentials supplied for the purpose to
-request a review type the platform restricts to human accounts (e.g. Copilot
-review on GitHub).
+A platform may restrict a review type to human accounts (Copilot on GitHub
+refuses a bot-account request). This plugin defines no second credential to
+work around that: if the request is refused, say so on the PR and continue to
+the next state. Set `copilot_available: false` to skip the phase outright.

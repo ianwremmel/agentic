@@ -19,7 +19,8 @@ any of them:
 - The operator is `${user_config.operator_login}`.
 - The operator mode is `${user_config.operator_mode}`.
 - The credential mode is `${user_config.credential_mode}`.
-- Copilot review available: `${user_config.copilot_available}`.
+- Copilot review available: `${user_config.copilot_available}`. When `false`,
+  take your operator-mode file's *Copilot unavailable* branch out of `draft`.
 - The worktree base is `${user_config.worktree_base}`.
 
 Before any other work, read the two files for this environment — and only
@@ -105,16 +106,20 @@ a gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
 
 From any state: PR closed, or operator "stop" → read `<terminal>` from
 `pr-status` → acknowledge with a terminal signal → `merged` → `done`.
-`<terminal state>` is binary — *did the change ship*, not *how*:
+`<terminal state>` answers *did the change ship*, not *how*:
 
 - **`shipped`** — change present in base (merged, fast-forward, or squash/rebase
   by external tooling). Acknowledge delivered (`Shipped.`/`rocket`), then run the
   ticket's terminal transition ([`ticket.md`](./ticket.md)).
 - **`abandoned`** — closed with change absent. Acknowledge not-delivered
-  (`Declined.`/`-1`), don't advance the ticket. Surface any `error=` breadcrumb — never claim delivery on
-  a guess.
+  (`Declined.`/`-1`), don't advance the ticket. Surface any `error=` breadcrumb
+  — never claim delivery on a guess.
+- **`open`** or **`draft`** — the PR is still live, so this is an operator
+  "stop", not a closure. Leave the PR open and the ticket where it is, report
+  where you stopped and what remains, and stop. Never close the PR yourself.
 
-On any closure, remove any worktree you created.
+On a closure, remove any worktree you created. On an operator stop, leave it —
+a resumed run reuses it.
 
 ## Per-concern handling
 

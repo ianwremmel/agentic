@@ -1,4 +1,5 @@
 import type {Database} from '../db/database.mts';
+import {DataError, ensure} from '../errors/index.mts';
 import {assertInstant} from '../db/time.mts';
 
 /* eslint-disable @typescript-eslint/require-await --
@@ -70,13 +71,15 @@ export class FetchRequestStore {
     const payload = JSON.stringify({
       ticket: input.ticket,
     } satisfies TicketPayload);
-    const existing = this.#db.get(
-      `SELECT id FROM fetch_request
-       WHERE source = ? AND kind = 'fetch_ticket' AND payload = ?`,
-      [input.source, payload]
-    );
-    if (existing !== undefined) return null;
-    return this.#insert(input.source, 'fetch_ticket', payload, input.at);
+    return this.#db.transaction(() => {
+      const existing = this.#db.get(
+        `SELECT id FROM fetch_request
+         WHERE source = ? AND kind = 'fetch_ticket' AND payload = ?`,
+        [input.source, payload]
+      );
+      if (existing !== undefined) return null;
+      return this.#insert(input.source, 'fetch_ticket', payload, input.at);
+    });
   }
 
   async undelivered(): Promise<FetchRequest[]> {
@@ -169,10 +172,12 @@ export class FetchRequestStore {
        VALUES (?, ?, ?, ?)`,
       [source, kind, payload, at]
     );
-    const row = this.#db.get(
-      'SELECT id FROM fetch_request ORDER BY id DESC LIMIT 1'
+    const row = this.#db.get('SELECT last_insert_rowid() AS id');
+    ensure(
+      row !== undefined,
+      () => new DataError('a fetch request just inserted must exist')
     );
-    return row === undefined ? 0 : Number(row.id);
+    return Number(row.id);
   }
 }
 

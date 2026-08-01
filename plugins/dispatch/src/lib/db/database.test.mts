@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import {describe, it} from 'node:test';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {after, describe, it} from 'node:test';
 
 import {EnvironmentError} from '../errors/index.mts';
 import {Database} from './database.mts';
@@ -54,5 +57,52 @@ describe('Database', () => {
       (err: unknown) => err instanceof EnvironmentError
     );
     await db.close();
+  });
+});
+
+// The rest of the suite runs against ':memory:', where WAL is a no-op and no
+// file is ever created. These exercise the on-disk path the shared database
+// actually uses: WAL, directory creation, persistence across reopen, and the
+// version refusal against a real file rather than the static guard.
+describe('Database (file-backed)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dispatch-db-'));
+  after(() => {
+    rmSync(dir, {recursive: true, force: true});
+  });
+
+  it('creates the directory and enables WAL and foreign keys on a real file', async () => {
+    const db = await Database.open(join(dir, 'nested', 'wal.db'));
+    assert.equal(db.get('PRAGMA journal_mode')?.journal_mode, 'wal');
+    assert.equal(db.get('PRAGMA foreign_keys')?.foreign_keys, 1);
+    await db.close();
+  });
+
+  it('persists rows across a close and reopen of the same file', async () => {
+    const path = join(dir, 'persist.db');
+
+    const db = await Database.open(path);
+    db.run("INSERT INTO node (external_id, kind) VALUES ('P1', 'project')");
+    db.run('INSERT INTO project (node_id, name) VALUES (?, ?)', [
+      Number(db.get("SELECT id FROM node WHERE external_id = 'P1'")?.id),
+      'Platform',
+    ]);
+    await db.close();
+
+    const reopened = await Database.open(path);
+    assert.equal(reopened.get('SELECT name FROM project')?.name, 'Platform');
+    await reopened.close();
+  });
+
+  it('refuses to reopen a file written by another schema version', async () => {
+    const path = join(dir, 'version.db');
+
+    const db = await Database.open(path);
+    db.run("UPDATE meta SET value = '999' WHERE key = 'schema_version'");
+    await db.close();
+
+    await assert.rejects(
+      Database.open(path),
+      (err: unknown) => err instanceof EnvironmentError
+    );
   });
 });

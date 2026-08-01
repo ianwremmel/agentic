@@ -1,8 +1,7 @@
 # deliver — shared credentials
 
-The agent shares the operator's platform credentials
-(`credential_mode: shared`): every post lands under the operator's own
-account. Two consequences drive everything below: readers can't tell agent
+The agent posts with the operator's own account (`credential_mode: shared`), so
+`operator_login` is also the authenticated account. Readers can't tell agent
 posts from the operator's by author, and a review request can never target the
 operator (the platform refuses requests naming the authenticated account).
 
@@ -14,18 +13,18 @@ how readers tell agent posts from the operator's own.
 
 ## Operator notification
 
-When an engagement edge fires (your operator-mode file says which), the
-review-request API can't target the operator (see above), so notify by:
+When an engagement edge fires (your operator-mode file says which), post the
+engagement comment — marker + `agent-engagement` sentinel
+([mechanics](./reference.md#operator-engagement)) — then notify the operator
+separately, since a review request can't reach them:
 
 1. a ticket comment tagging the operator, when the work has a ticket;
-2. otherwise, the session — say plainly that you are waiting on the operator's
-   approval and what you're waiting for. With no ticket and no review request,
-   the engagement comment reaches nobody: it lands under the operator's own
-   account, which the platform does not notify.
+2. otherwise, in the session: say you are waiting on the operator's approval and
+   what for.
 
-Operator identity is `operator_login` — here the shared/authenticated account.
-Also post the engagement comment — marker + `agent-engagement` sentinel
-([mechanics](./reference.md#operator-engagement)).
+The engagement comment never notifies anyone — it posts under the operator's
+own account — but it still anchors the reaction- and reply-based Gate 6
+signals.
 
 ## Gate 6 signals
 

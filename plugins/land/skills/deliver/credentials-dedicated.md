@@ -18,7 +18,6 @@ Every Gate 6 form is available, including the formal
 
 ## Review rules
 
-GitHub refuses a Copilot review request made from a bot account. If refused,
-log `ERROR`, post a PR comment saying so, and take your operator-mode file's
-*Copilot unavailable* branch. The request isn't required, so this isn't a
-`BLOCK`.
+GitHub may refuse a Copilot review request from a bot account. On refusal, log
+`ERROR`, post a PR comment saying so, and take your operator-mode file's
+*Copilot unavailable* branch. A refused request is not a `BLOCK`.

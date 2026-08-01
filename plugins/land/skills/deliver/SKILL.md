@@ -110,8 +110,8 @@ From any state: PR closed, or operator "stop" → read `<terminal>` from
 - **`shipped`** — change present in base (merged, fast-forward, or squash/rebase
   by external tooling). Acknowledge delivered (`Shipped.`/`rocket`), then run the
   ticket's terminal transition ([`ticket.md`](./ticket.md)).
-- **`abandoned`** — closed with change absent. Acknowledge not-delivered, don't
-  advance the ticket. Surface any `error=` breadcrumb — never claim delivery on
+- **`abandoned`** — closed with change absent. Acknowledge not-delivered
+  (`Declined.`/`-1`), don't advance the ticket. Surface any `error=` breadcrumb — never claim delivery on
   a guess.
 
 On any closure, remove any worktree you created.

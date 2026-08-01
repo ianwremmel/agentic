@@ -20,7 +20,8 @@ any of them:
 - The operator mode is `${user_config.operator_mode}`.
 - The credential mode is `${user_config.credential_mode}`.
 - Copilot review available: `${user_config.copilot_available}`. When `false`,
-  take your operator-mode file's *Copilot unavailable* branch out of `draft`.
+  skip the Copilot review stage; your operator-mode file has the edge that
+  leaves `draft` without it.
 - The worktree base is `${user_config.worktree_base}`.
 
 Before any other work, read the two files for this environment — and only
@@ -37,22 +38,23 @@ operator to set `operator_mode` (`solo` or `team`) and `credential_mode`
 
 ## Intake
 
-One run drives exactly one PR to one terminal. The input arrives in one of
+One run drives exactly one PR to completion. The input arrives in one of
 three forms; resolve it before Setup:
 
 - **PR URL or number** — that PR, via the Resume path in Setup. The brief is its
   body plus its plan comment; a ticket link in the body makes the run
-  ticket-backed.
+  ticket-backed. The snapshot carries neither, so read them from the API once,
+  here at intake.
 - **Ticket URL or bare id** — no PR yet. The ticket is the brief and the run is
   ticket-backed ([`ticket.md`](./ticket.md)).
 - **Freeform prompt** — no PR, no ticket. The prompt is the brief.
 
-Gates, lifecycle, and terminal are the same for all three. A ticket-backed run
+Gates, lifecycle, and ending are the same for all three. A ticket-backed run
 also keeps the ticket's role in sync and claims it before the first push; a run
 with no ticket skips every ticket step.
 
 Stop and ask the operator when the input names more than one PR, or when the
-brief is too thin to write a test plan against. Never invent scope.
+brief is too thin to tell when the change is done. Never invent scope.
 
 ## Setup
 
@@ -61,8 +63,9 @@ brief is too thin to write a test plan against. Never invent scope.
 2. **Open PR** (skip if one already exists for the branch):
    - `git commit --allow-empty -m "chore: open PR [skip ci]"` — never amend or
      squash this commit.
-   - Push; open a **draft** PR. Body: Motivation, Ticket link (omit if none —
-     no bare IDs), Test plan. **No execution plan in the body.**
+   - Push; open a **draft** PR. Body: Motivation, and the ticket link when
+     there is one (full URL, never a bare id). **No execution plan in the
+     body.**
    - Post the plan as a top-level comment with `<!-- agent-plan:<agent-id> -->`
      inside the wire-format body (after the marker/sparkle, not as the first
      line; see [`reference.md`](./reference.md#wire-format)). Pin if supported.
@@ -72,7 +75,9 @@ brief is too thin to write a test plan against. Never invent scope.
 
 ## Gates
 
-Seven binary signals read from each `pr-status` XML:
+Seven binary signals. Gates 1-5 are read from each `pr-status` XML; gates 6
+and 7 are review outcomes, and may arrive somewhere the XML can't show (see
+your credentials file):
 
 1. **CI** — `<checks state="passing">` (rollup treats neutral/success as
    passing; repo can suppress non-blocking checks via `informational="true"`).
@@ -80,15 +85,9 @@ Seven binary signals read from each `pr-status` XML:
 3. **No actionable annotations** — zero `<annotation actionable="true">`.
 4. **No actionable comments** — zero `<comment actionable="true">`.
 5. **No actionable threads** — zero `<thread actionable="true">`.
-6. **Operator-approved** (always required). Which signal forms are available —
-   and the lifecycle stage where it's satisfied — come from your credentials
-   and operator-mode files. The full set:
-   - `<review mode="human" role="operator" state="approved">` (dedicated
-     credentials only), or
-   - `<reaction emoji="+1">` from the operator on the engagement comment, or
-   - a "go ahead"/"lgtm"/"ready" reply from the operator (on the
-     engagement comment, the ticket, or out-of-band), or
-   - a ticket-side approval (e.g. operator status transition).
+6. **Operator-approved** (always required). Your credentials file lists the
+   signal forms that exist in this environment; your operator-mode file names
+   the stage that satisfies it.
 7. **Team-approved** (team operator mode only; trivially satisfied in solo).
    Defined in your operator-mode file.
 
@@ -102,63 +101,60 @@ transition edge change state.
 a gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
 "addressing concerns in place," not advancing the lifecycle.
 
-### Universal terminal
+### Ending the run
 
-From any state: PR closed, or operator "stop" → read `<terminal>` from
-`pr-status`, acknowledge with a terminal signal, and take the matching branch.
-A closure ends the run at `merged` → `done`; an operator stop on a live PR ends
-it where it stands. `<terminal state>` answers *did the change ship*, not *how*:
+Two things end a run: the PR closes, or the operator says stop. Nothing else —
+not a finished plan, not green CI, not a review request, not "there's nobody
+left to ask." Re-decide this from the current `pr-status` every tick; never
+carry a "stop when X" rule forward from an earlier one.
 
-- **`shipped`** — change present in base (merged, fast-forward, or squash/rebase
-  by external tooling). Acknowledge delivered (`Shipped.`/`rocket`), then run the
-  ticket's terminal transition ([`ticket.md`](./ticket.md)).
-- **`abandoned`** — closed with change absent. Acknowledge not-delivered
-  (`Declined.`/`-1`), don't advance the ticket. Surface any `error=` breadcrumb
-  — never claim delivery on a guess.
-- **`open`** or **`draft`** — the PR is still live, so this is an operator
-  "stop", not a closure. Leave the PR open and the ticket where it is, report
-  where you stopped and what remains, and stop. Never close the PR yourself.
+On either, read `<terminal state>` and do exactly what its row says:
 
-On a closure, remove any worktree you created. On an operator stop, leave it —
-a resumed run reuses it.
+| `<terminal state>` | What happened                        | Do                                                                                                              |
+| ------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `shipped`          | The change is in the base branch.    | React `rocket` and reply `Shipped.`; run the ticket's final transition ([`ticket.md`](./ticket.md)); delete the worktree you created. |
+| `abandoned`        | PR closed, change not in base.       | React `-1` and reply `Declined.`; report the closure on the ticket but don't advance its role; quote any `error=` attribute verbatim; delete the worktree you created. |
+| `open` / `draft`   | PR still live — the operator stopped you. | Post what you finished and what is left; leave the PR open, the ticket untouched, and the worktree in place for a resumed run. Never close the PR. |
+
+`shipped` covers a squash or rebase landing, not just a merge commit. Never
+call a change delivered on any signal other than this attribute.
+
+## Reading PR state
+
+**`pr-status` is the only way you look at the PR.** Never `gh pr view`, `gh pr
+checks`, `gh api …/comments|/reviews`, or an MCP PR read: every gate and every
+actionability decision comes from its XML and the cache files it writes. Read
+full text from the cache, not from the API. `gh` and MCP are for **writes** —
+reply, react, request review, mark ready. Data the snapshot doesn't carry (a
+thread's file and line, say) you may fetch directly.
+
+A review still being drafted is invisible here by design. Don't chase it; wait
+for `pr-status` to surface it.
 
 ## Per-concern handling
 
-Apply to **every** actionable item, not just the first.
+Address **every** actionable item, not just the first. `actionable="true"` is
+your only task source: work the item, then reply and apply a terminal signal so
+it settles. An item marked `actionable="false"` carries a `reason=` (`resolved`,
+`agent-artifact`, `agent-terminal-reply`, `acked`) — leave it alone. `<summary>`
+recaps what an item *says*, never whether it's resolved, so an item you already
+settled still reads as open. That is expected, and never grounds to reopen it.
 
 | XML signal                                            | Action                                                                    |
 | ----------------------------------------------------- | ------------------------------------------------------------------------- |
 | `<merge-conflicts present="true"/>` (gate 2)          | Rebase or merge the target branch; resolve.                               |
 | `<checks state="failing">` (gate 1)                   | Diagnose root cause; fix.                                                 |
 | Actionable `<comment>` or `<thread>` (gates 4–5)      | Reply (commit link **or** one-line dismissal naming what's dismissed) and apply a terminal signal. **Never resolve the thread** — even your own; that's a human's call, and the terminal signal already suppresses re-evaluation. |
-| Actionable `<annotation>` (gate 3)                    | Fix the code, OR dismiss with a `<cache>/$id.ack` carrying the rationale (also record it in the plan comment or commit body). |
+| Actionable `<annotation>` (gate 3)                    | Fix the code, OR dismiss it: write the rationale to the path in `cache=` with `.md` swapped for `.ack` (a sibling file, not a child), and record it in the plan comment or commit body. |
+
+Reply to every reviewer item — a commit link, or a one-line dismissal naming
+what you dismissed. Silence is non-conforming. Humans get more deference than
+bots.
 
 ## Cross-cutting behaviors
 
 Apply in every state.
 
-- **Read PR state only through `pr-status`.** Every gate and actionability
-  decision comes from a `pr-status` XML snapshot and the cache it wrote — never
-  `gh pr view`, `gh pr checks`, `gh api …/comments|/reviews`, or MCP PR reads.
-  For full text, read the cache file `pr-status` already wrote. You may directly
-  fetch *emergent* data the snapshot doesn't cover, but routine `gh`/MCP calls
-  are *writes only* (reply, request review, mark ready, react — never resolve
-  threads). A review still being *drafted* (unsubmitted) is invisible by design;
-  don't chase it — wait for `pr-status` to surface it.
-- **`actionable` is the sole task source.** Drive every decision off
-  `actionable="true|false"`. A non-actionable item also carries `reason=`
-  (`resolved`, `agent-artifact`, `agent-terminal-reply`, `acked`). A `<summary>`
-  is a **reading aid, not a work queue**: read it plus the new cache content when
-  an item is actionable; ignore it as context when not. A summary describes the
-  item's *content*, not its *resolution*, so an item you already terminal-tagged
-  reads as if the point still stands — expected. Never let summary prose
-  re-actionable a suppressed item.
-- **A `pending` review is in-flight, not absent.** Each reviewer appears once
-  under `<reviews>` walking `pending → commented | changes_requested |
-  approved | dismissed`. An outstanding request overrides a prior verdict back
-  to `pending` (re-requested Copilot/operator). While any reviewer is `pending` — especially
-  a `mode="bot"` one — inline threads can still land minutes later, so a stable
-  thread set is **not** convergence. Keep polling until `pending` clears.
 - **Pre-push review.** Before every significant push, run two adversarial
   passes:
   1. *Spec-aware* — spec/docs + PR contents: find every drift from the spec
@@ -175,25 +171,25 @@ Apply in every state.
   dismissal naming it). Skip pre-push review only for non-significant pushes
   (the empty open commit, whitespace/format-only, trivial typo/lint); if unsure,
   treat as significant.
-- **Reply to every reviewer item** — commit link or dismissal rationale.
-  Silence is non-conforming. Humans get more deference than bots.
 - **Plan comment is the living plan.** Edit in place: check off done steps,
   strike abandoned ones with a one-line rationale (don't delete), append new
-  ones. The PR body's Motivation/Test plan stay stable.
-- **First green.** Gate 1 needs a green rollup on the **current head commit**. A
-  green from an earlier push doesn't count.
-- **Heartbeats.** While polling, emit INFO heartbeats (see
-  [`reference.md`](./reference.md#operational-logging); `ticket=-` when none).
-- **Termination is narrow.** Only PR closure or explicit operator "stop"
-  terminates. Plan completion, green CI, review requests, `ready_for_merge`, and
-  "nobody to ask" do not. The agent runs the loop through itself (see Polling) and
-  is never re-prodded.
-- **Re-derive termination each tick** from the current `pr-status`. Never carry
-  "if X then stop" across ticks — the loop amplifies them.
+  ones. The PR body stays stable.
+- **First green.** Gate 1 needs a green rollup on the **current head commit** —
+  the commit you intend to leave `draft` with. A green from an earlier push
+  doesn't count.
 
 ## Polling
 
-Adaptive, not fixed. **Never poll faster than once per minute.**
+Adaptive, not fixed. **Never poll faster than once per minute.** Emit an INFO
+heartbeat each time round ([`reference.md`](./reference.md#operational-logging);
+`ticket=-` when there's no ticket).
+
+A `pending` review is in-flight, not absent. Each reviewer appears once under
+`<reviews>`, walking `pending → commented | changes_requested | approved |
+dismissed`; a fresh request overrides any earlier verdict back to `pending`.
+While anyone is `pending` — a `mode="bot"` reviewer especially — inline threads
+can still land minutes later, so an unchanging thread set is **not**
+convergence. Keep polling until `pending` clears.
 
 | Waiting on                             | Schedule                                                                                 |
 | -------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -205,7 +201,7 @@ Adaptive, not fixed. **Never poll faster than once per minute.**
 
 The agent **is** the poll loop — inline, sequential foreground tool calls
 (`Bash` `sleep`, then a `pr-status` re-read and any reactive work). Stay
-continuously active in the current turn until a lifecycle terminal; never yield
+continuously active in the current turn until the run ends; never yield
 the turn, hand off to a wakeup, or expect re-prodding. Holds whether `deliver`
 is invoked directly or dispatched as a subagent.
 
@@ -221,13 +217,12 @@ is an upper bound.
   process polls forever while the agent is reaped; the PR sits orphaned.
 - **`Monitor` as the poll vehicle** — the armed-monitor wake observably fails on
   long polls. Use foreground `sleep`.
-- **Ending the turn before a lifecycle terminal** — returning early for "no work
+- **Ending the turn while the run is still going** — returning early for "no work
   right now" or "the caller will check back" orphans the PR. Don't design a
   caller around mid-lifecycle re-dispatch.
 
-At a lifecycle terminal (or a caught operator "stop"), follow Universal
-terminal — including advancing the ticket only when `<terminal state>` is
-`shipped`.
+When the run ends, follow **Ending the run** — including advancing the ticket
+only when `<terminal state>` is `shipped`.
 
 Tune the schedule within the run from what you observe: once you've watched this
 repo's CI finish twice, poll on that duration rather than the table's head.

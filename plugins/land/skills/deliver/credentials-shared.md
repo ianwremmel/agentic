@@ -1,9 +1,11 @@
 # deliver — shared credentials
 
 The agent posts with the operator's own account (`credential_mode: shared`), so
-`operator_login` is also the authenticated account. Readers can't tell agent
-posts from the operator's by author, and a review request can never target the
-operator (the platform refuses requests naming the authenticated account).
+`operator_login` is also the authenticated account. Three consequences: readers
+can't tell agent posts from the operator's by author; a review request can never
+target the operator; and the operator can only leave `commented` reviews on this
+PR, never `approved` or `changes_requested`. GitHub refuses all three on your
+own PR.
 
 ## Wire format
 
@@ -28,9 +30,18 @@ signals.
 
 ## Gate 6 signals
 
-A formal approved review is impossible on a PR the shared account authored
-(the platform refuses self-review), so Gate 6 arrives only in the non-formal
-forms of `SKILL.md`'s Gate 6 list: reaction, reply, or ticket-side approval.
+`pr-status` will never report `<review role="operator" state="approved">` here —
+the platform refuses self-review, so that element cannot exist on this PR. Don't
+wait for it. Any one of these satisfies the gate instead:
+
+- `<reaction emoji="+1">` on the engagement comment. **Never react to your own
+  engagement comment in this mode** — you and the operator post under one login,
+  so a `+1` you added there is indistinguishable from their approval and you
+  would clear your own gate. The sentinel already keeps that comment
+  non-actionable, so it never needs a terminal signal from you;
+- a "go ahead" / "lgtm" / "ready" reply from the operator, on the engagement
+  comment, the ticket, or out of band;
+- a ticket-side approval, such as an operator status transition.
 
 ## Reading reviews — the inverse rule
 

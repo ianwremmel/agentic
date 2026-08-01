@@ -2,8 +2,7 @@
 
 The operator is the only human in the loop (`operator_mode: solo`): after
 Copilot review (where available), the agent clears draft and engages the
-operator as the public reviewer. There is no private review stage — the
-`private_review_*` states do not exist here.
+operator as the public reviewer.
 
 ## Gates 6–7 in solo
 
@@ -66,7 +65,7 @@ stateDiagram-v2
 | `public_review_requested_changes` | Address; push; **re-engage required** — blocks merge.                                                           | no       |
 | `public_review_approved`          | Confirm gates 1–5 still hold; else fix in place.                                                                | no       |
 | `ready_for_merge`                 | Await merge. **Don't self-merge unless instructed.**                                                            | merge    |
-| `merged`                          | Handle per Universal terminal in `SKILL.md`; remove any worktree you created.                                   | no       |
+| `merged`                          | Handle per **Ending the run** in `SKILL.md`.                                                                    | no       |
 | `done`                            | Terminal.                                                                                                       | —        |
 
 ## No formal review

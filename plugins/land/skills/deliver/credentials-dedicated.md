@@ -13,11 +13,22 @@ review from `operator_login` and post the engagement comment — marker +
 
 ## Gate 6 signals
 
-Every Gate 6 form is available, including the formal
-`<review mode="human" role="operator" state="approved">`.
+Every form is available here. Any one satisfies the gate:
+
+- `<review mode="human" role="operator" state="approved">` — the formal
+  approval, and the one to expect;
+- `<reaction emoji="+1">` from the operator on the engagement comment;
+- a "go ahead" / "lgtm" / "ready" reply from the operator, on the engagement
+  comment, the ticket, or out of band;
+- a ticket-side approval, such as an operator status transition.
 
 ## Review rules
 
-GitHub may refuse a Copilot review request from a bot account. On refusal, log
-`ERROR`, post a PR comment saying so, and take your operator-mode file's
-*Copilot unavailable* branch. A refused request is not a `BLOCK`.
+GitHub may refuse a Copilot review request from a bot account. Local context —
+this repo's `CLAUDE.md`, `AGENTS.md`, or its docs — may name the way around it,
+usually a second GitHub token in an environment variable to make the request
+with. Look there first and use what it names.
+
+With no such credential available, log `ERROR`, post a PR comment saying the
+request was refused, and take your operator-mode file's *Copilot unavailable*
+branch. A refused request is not a `BLOCK`.

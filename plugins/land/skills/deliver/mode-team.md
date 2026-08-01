@@ -1,10 +1,11 @@
 # deliver — team operator mode
 
 The operator directs the agent but is one of several humans
-(`operator_mode: team`): a private operator pre-review while the PR is draft,
-then public team review with the operator **excluded**. The operator — never
-the agent — clears draft between the two. The public stage is a plain review
-request, not an engagement.
+(`operator_mode: team`). Review happens in two stages. First the operator
+reviews alone, while the PR is still a draft. Then the operator — never the
+agent — clears draft, and the rest of the team reviews, with the operator
+**excluded** from that second set. The team stage is a plain review request,
+not an engagement.
 
 ## Gates 6–7 in team
 
@@ -91,7 +92,7 @@ stateDiagram-v2
 | `public_review_requested_changes`  | Address; push; **re-request required** — blocks merge.                                                          | no       |
 | `public_review_approved`           | Confirm gates 1–5 still hold; else fix in place.                                                                | no       |
 | `ready_for_merge`                  | Await merge. **Don't self-merge unless instructed.**                                                            | merge    |
-| `merged`                           | Handle per Universal terminal in `SKILL.md`; remove any worktree you created.                                   | no       |
+| `merged`                           | Handle per **Ending the run** in `SKILL.md`.                                                                    | no       |
 | `done`                             | Terminal.                                                                                                       | —        |
 
 ## No eligible reviewer

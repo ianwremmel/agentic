@@ -4,8 +4,9 @@
 
 One skill, `deliver`, drives a single change from nothing to merged: open a
 draft PR, write the code, triage CI, answer every reviewer, and keep polling
-until the PR closes. It is stateless — nothing persists between runs, and every
-decision is re-derived from the PR itself on each tick.
+until the PR closes. There is no database and no ledger — every decision is
+re-derived from the PR itself on each tick. The only thing on disk is the
+`pr-status` cache described below.
 
 Start it from any of three inputs:
 
@@ -61,7 +62,8 @@ pr-status 42
 
 Each comment, thread, and annotation carries `actionable="true|false"` — the
 skill's sole task source — plus a `reason=` when suppressed and a `cache=` path
-to the full text. `<terminal>` answers *did the change ship*, surviving squash
+to the full text. Top-level comments are fully paginated; review threads are
+capped at the first 100. `<terminal>` answers *did the change ship*, surviving squash
 and rebase merges by comparing content rather than commits.
 
 Requires `gh` and `jq` on `PATH`, and must run inside the repo's git worktree.

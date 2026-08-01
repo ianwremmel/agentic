@@ -37,8 +37,9 @@ block after the marker:
 The sparkle (U+2728) sits alone, one blank line in from the body each side.
 Never with dedicated credentials. The plan-comment sentinel
 `<!-- agent-plan:<agent-id> -->` goes **inside** the body, **alone on its own
-line**, after the marker and after the opening sparkle where one applies.
-Anything else won't match, and the comment stays actionable forever.
+line** — that is what `pr-status` matches, and a sentinel sharing a line with
+prose is not seen at all, leaving the comment actionable forever. Place it
+after the marker, and after the opening sparkle where one applies.
 
 ## Terminal signals
 
@@ -60,8 +61,10 @@ terminal-tagged reply instead.
 | `eyes`   | Non-terminal — seen, in progress      |
 
 Text tokens — every thread reply, and any platform without reactions. Must be
-the **last non-empty line**. Emit these three; `pr-status` also reads `✓` and
-`✅` as terminal:
+the **last non-empty line**. Emit only these three. The reader is more lenient
+than the writer: `pr-status` also accepts `✓`, `✅`, `acknowledged`, `wontfix`,
+`dismissed`, and `resolved`, so a reviewer's stray "resolved" can settle an
+item — don't rely on it, and don't add to this set:
 
 | Token       | Meaning               |
 | ----------- | --------------------- |

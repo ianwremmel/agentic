@@ -35,7 +35,7 @@ Each is bound to a PR lifecycle edge:
 | Ticket edge               | Fires when                                                             |
 | ------------------------- | ---------------------------------------------------------------------- |
 | `available → in-progress` | Claiming, before the first push (below).                               |
-| `in-progress → in-review` | The agent first engages a reviewer — the edge out of `draft`.          |
+| `in-progress → in-review` | The PR leaves `draft` — whichever edge your operator-mode file takes.  |
 | `→ delivered`             | `<terminal state="shipped">`, **only if this PR completes the ticket**. |
 
 A ticket that needs more than one PR stays `in-review` when this one lands:

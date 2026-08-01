@@ -13,7 +13,7 @@ review from `operator_login` and post the engagement comment — marker +
 
 ## Gate 6 signals
 
-Every form is available here. Any one satisfies the gate:
+All four forms exist here; any one satisfies the gate:
 
 - `<review mode="human" role="operator" state="approved">` — the formal
   approval, and the one to expect;
@@ -24,11 +24,10 @@ Every form is available here. Any one satisfies the gate:
 
 ## Review rules
 
-GitHub may refuse a Copilot review request from a bot account. Local context —
-this repo's `CLAUDE.md`, `AGENTS.md`, or its docs — may name the way around it,
-usually a second GitHub token in an environment variable to make the request
-with. Look there first and use what it names.
+GitHub may refuse a Copilot review request from a bot account. Check this repo's
+`CLAUDE.md`, `AGENTS.md`, and docs for the workaround — usually a second GitHub
+token in an environment variable to request with — and use what they name.
 
 With no such credential available, log `ERROR`, post a PR comment saying the
 request was refused, and take your operator-mode file's *Copilot unavailable*
-branch. A refused request is not a `BLOCK`.
+branch. A refused Copilot request is not a `BLOCK`.

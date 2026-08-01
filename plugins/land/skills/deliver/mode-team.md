@@ -101,6 +101,6 @@ If no non-self, non-operator reviewer exists in `ready_for_public_review`,
 skip the request but still transition to `public_review_requested` and keep
 polling on the reviewer cadence. Gate 7 is then unreachable — the PR merges
 out-of-band, the agent observes closure on a poll, and `merged → done` fires.
-This is also the sole-reviewer case: the operator approves privately, clears
-draft, and merges themselves; merge fires the universal-terminal edge straight
-out of `public_review_requested`. "Nobody to ask" never terminates.
+Same for the sole-reviewer case: the operator approves privately, clears draft,
+and merges. A closed PR ends the run from any state — see **Ending the run** in
+`SKILL.md`. "Nobody to ask" never terminates.

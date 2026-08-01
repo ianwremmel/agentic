@@ -1,0 +1,92 @@
+import type {Database} from '../db/database.mts';
+import type {Session} from '../model/types.mts';
+
+/* eslint-disable @typescript-eslint/require-await --
+ * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
+
+/**
+ * Sessions: one row per live MCP server process, the only liveness primitive.
+ * Claims and slots reference a session and cascade when it is deleted — on a
+ * clean `close`, or when `sweepStale` reaps a process whose heartbeat stopped.
+ */
+export class SessionStore {
+  readonly #db: Database;
+
+  constructor(db: Database) {
+    this.#db = db;
+  }
+
+  async register(session: {
+    id: string;
+    host?: string | null;
+    pid?: number | null;
+    startedAt: string;
+    heartbeatAt: string;
+  }): Promise<void> {
+    this.#db.run(
+      `INSERT INTO session (id, host, pid, started_at, heartbeat_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         host = excluded.host, pid = excluded.pid,
+         heartbeat_at = excluded.heartbeat_at`,
+      [
+        session.id,
+        session.host ?? null,
+        session.pid ?? null,
+        session.startedAt,
+        session.heartbeatAt,
+      ]
+    );
+  }
+
+  async heartbeat(id: string, at: string): Promise<boolean> {
+    return (
+      this.#db.run('UPDATE session SET heartbeat_at = ? WHERE id = ?', [
+        at,
+        id,
+      ]) > 0
+    );
+  }
+
+  /** Clean exit: delete the session; its claims and slots cascade. */
+  async close(id: string): Promise<boolean> {
+    return this.#db.run('DELETE FROM session WHERE id = ?', [id]) > 0;
+  }
+
+  /**
+   * Reap sessions whose heartbeat is older than `windowSeconds` before `now`.
+   * The staleness sweep is the only place liveness is judged by age. Returns the
+   * number of sessions removed (their claims and slots cascade).
+   */
+  async sweepStale(now: string, windowSeconds: number): Promise<number> {
+    return this.#db.run(
+      'DELETE FROM session WHERE unixepoch(?) - unixepoch(heartbeat_at) > ?',
+      [now, windowSeconds]
+    );
+  }
+
+  async getSession(id: string): Promise<Session | null> {
+    const row = this.#db.get(
+      `SELECT id, host, pid, started_at, heartbeat_at
+       FROM session WHERE id = ?`,
+      [id]
+    );
+    if (row === undefined) return null;
+    const host =
+      row.host === null
+        ? null
+        : typeof row.host === 'string'
+          ? row.host
+          : // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            String(row.host);
+    return {
+      id: String(row.id),
+      host,
+      pid: row.pid === null ? null : Number(row.pid),
+      startedAt: String(row.started_at),
+      heartbeatAt: String(row.heartbeat_at),
+    };
+  }
+}
+
+/* eslint-enable @typescript-eslint/require-await */

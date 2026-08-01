@@ -23,6 +23,50 @@ describe('SessionStore', () => {
     await db.close();
   });
 
+  it('heartbeat updates heartbeat_at and reports whether a row matched', async () => {
+    const {db, store} = await fresh();
+    await store.register({
+      id: 's1',
+      startedAt: '2026-07-31T00:00:00.000Z',
+      heartbeatAt: '2026-07-31T00:00:00.000Z',
+    });
+    assert.equal(await store.heartbeat('s1', '2026-07-31T00:05:00.000Z'), true);
+    assert.equal(
+      (await store.getSession('s1'))?.heartbeatAt,
+      '2026-07-31T00:05:00.000Z'
+    );
+    assert.equal(
+      await store.heartbeat('does-not-exist', '2026-07-31T00:05:00.000Z'),
+      false
+    );
+    await db.close();
+  });
+
+  it('register upserts host/pid/heartbeat but leaves started_at intact', async () => {
+    const {db, store} = await fresh();
+    await store.register({
+      id: 's1',
+      host: 'mac',
+      pid: 42,
+      startedAt: '2026-07-31T00:00:00.000Z',
+      heartbeatAt: '2026-07-31T00:00:00.000Z',
+    });
+    await store.register({
+      id: 's1',
+      host: 'linux',
+      pid: 99,
+      startedAt: '2026-07-31T01:00:00.000Z',
+      heartbeatAt: '2026-07-31T00:10:00.000Z',
+    });
+    const session = await store.getSession('s1');
+    assert.ok(session);
+    assert.equal(session.host, 'linux');
+    assert.equal(session.pid, 99);
+    assert.equal(session.heartbeatAt, '2026-07-31T00:10:00.000Z');
+    assert.equal(session.startedAt, '2026-07-31T00:00:00.000Z');
+    await db.close();
+  });
+
   it("close cascades the session's claims and slots", async () => {
     const {db, store} = await fresh();
     await store.register({

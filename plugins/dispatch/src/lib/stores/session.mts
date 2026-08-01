@@ -65,6 +65,8 @@ export class SessionStore {
     );
   }
 
+  /* eslint-disable @typescript-eslint/no-base-to-string --
+   * Database values are known to be primitives; avoid as-casts per brief. */
   async getSession(id: string): Promise<Session | null> {
     const row = this.#db.get(
       `SELECT id, host, pid, started_at, heartbeat_at
@@ -72,21 +74,15 @@ export class SessionStore {
       [id]
     );
     if (row === undefined) return null;
-    const host =
-      row.host === null
-        ? null
-        : typeof row.host === 'string'
-          ? row.host
-          : // eslint-disable-next-line @typescript-eslint/no-base-to-string
-            String(row.host);
     return {
       id: String(row.id),
-      host,
+      host: row.host === null ? null : String(row.host),
       pid: row.pid === null ? null : Number(row.pid),
       startedAt: String(row.started_at),
       heartbeatAt: String(row.heartbeat_at),
     };
   }
+  /* eslint-enable @typescript-eslint/no-base-to-string */
 }
 
 /* eslint-enable @typescript-eslint/require-await */

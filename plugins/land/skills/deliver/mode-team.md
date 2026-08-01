@@ -1,10 +1,10 @@
 # deliver — team operator mode
 
 The operator directs the agent but is one of several humans
-(`operator_mode: team`): the operator gets a **private pre-review while the PR
-is still draft**; once they approve, the operator — never the agent — clears
-draft, and the agent engages the rest of the team as public reviewers with the
-operator **excluded** from that set.
+(`operator_mode: team`): a private operator pre-review while the PR is draft,
+then public team review with the operator **excluded**. The operator — never
+the agent — clears draft between the two. The public stage is a plain review
+request, not an engagement.
 
 ## Gates 6–7 in team
 

@@ -105,8 +105,9 @@ a gate-1–5 failure (CI broke, conflict, new actionable item). That fix is
 ### Universal terminal
 
 From any state: PR closed, or operator "stop" → read `<terminal>` from
-`pr-status` → acknowledge with a terminal signal → `merged` → `done`.
-`<terminal state>` answers *did the change ship*, not *how*:
+`pr-status`, acknowledge with a terminal signal, and take the matching branch.
+A closure ends the run at `merged` → `done`; an operator stop on a live PR ends
+it where it stands. `<terminal state>` answers *did the change ship*, not *how*:
 
 - **`shipped`** — change present in base (merged, fast-forward, or squash/rebase
   by external tooling). Acknowledge delivered (`Shipped.`/`rocket`), then run the
@@ -179,8 +180,8 @@ Apply in every state.
 - **Plan comment is the living plan.** Edit in place: check off done steps,
   strike abandoned ones with a one-line rationale (don't delete), append new
   ones. The PR body's Motivation/Test plan stay stable.
-- **First green.** Gate 1 needs a green rollup achieved *after* the agent first
-  attempts to leave `draft`. Earlier greens don't count.
+- **First green.** Gate 1 needs a green rollup on the **current head commit**. A
+  green from an earlier push doesn't count.
 - **Heartbeats.** While polling, emit INFO heartbeats (see
   [`reference.md`](./reference.md#operational-logging); `ticket=-` when none).
 - **Termination is narrow.** Only PR closure or explicit operator "stop"

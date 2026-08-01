@@ -49,7 +49,9 @@ next poll. Anything else means "still working." The agent signals finished
 opened. Platform-resolved threads are read (see
 [Actionability](#actionability)) but never written by the agent.
 
-Reactions (preferred where supported):
+Reactions settle a **top-level comment** and are preferred there. They never
+settle a thread — `pr-status` doesn't read them on threads; use a
+terminal-tagged reply instead.
 
 | Reaction | Meaning                               |
 | -------- | ------------------------------------- |
@@ -58,7 +60,9 @@ Reactions (preferred where supported):
 | `rocket` | Terminal — shipped / merged / applied |
 | `eyes`   | Non-terminal — seen, in progress      |
 
-Text tokens (platforms without reactions) — must be the **last non-empty line**:
+Text tokens — every thread reply, and any platform without reactions. Must be
+the **last non-empty line**. Emit these three; `pr-status` also reads `✓` and
+`✅` as terminal:
 
 | Token       | Meaning               |
 | ----------- | --------------------- |

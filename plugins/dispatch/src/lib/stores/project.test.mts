@@ -16,6 +16,7 @@ describe('ProjectStore', () => {
     assert.deepEqual(await store.getProject('P1'), {
       id: 'P1',
       name: 'Platform',
+      source: null,
     });
     await store.upsertProject({id: 'P1', name: 'Platform Renamed'});
     assert.equal((await store.getProject('P1'))?.name, 'Platform Renamed');
@@ -53,6 +54,18 @@ describe('ProjectStore', () => {
       db.get("SELECT 1 FROM node WHERE external_id='P1'"),
       undefined
     );
+    await db.close();
+  });
+
+  it('round-trips the tracker source', async () => {
+    const db = await Database.open(':memory:');
+    const store = new ProjectStore(db);
+    await store.upsertProject({id: 'P', name: 'Proj', source: 'linear'});
+    assert.deepEqual(await store.getProject('P'), {
+      id: 'P',
+      name: 'Proj',
+      source: 'linear',
+    });
     await db.close();
   });
 });

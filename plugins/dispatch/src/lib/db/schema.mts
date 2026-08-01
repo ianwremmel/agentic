@@ -5,7 +5,7 @@
  * runtime state), so a bump's recovery is "delete the file and re-sync" — there
  * is no migration machinery.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS node (
 
 CREATE TABLE IF NOT EXISTS project (
   node_id INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
-  name    TEXT NOT NULL
+  name    TEXT NOT NULL,
+  source  TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS milestone (
@@ -118,9 +119,32 @@ CREATE TABLE IF NOT EXISTS cursor (
   value  TEXT NOT NULL
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS ticket_project    ON ticket (project_id);
-CREATE INDEX IF NOT EXISTS milestone_project ON milestone (project_id);
-CREATE INDEX IF NOT EXISTS pr_ticket         ON pr (ticket_id);
-CREATE INDEX IF NOT EXISTS edge_blocked      ON edge (blocked);
-CREATE INDEX IF NOT EXISTS claim_session     ON claim (session_id);
+/* A refresh must outlive the staleness sweep that reaps its session, which is the case takeover exists for. */
+CREATE TABLE IF NOT EXISTS refresh (
+  source                TEXT PRIMARY KEY,
+  state                 TEXT NOT NULL CHECK (state IN ('scanning','resolving','idle')),
+  session_id            TEXT,
+  projects              TEXT NOT NULL,
+  pending_cursor        TEXT,
+  started_at            TEXT NOT NULL,
+  completed_at          TEXT,
+  completion_emitted_at TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS fetch_request (
+  id           INTEGER PRIMARY KEY,
+  source       TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('scan_project','fetch_ticket')),
+  payload      TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  delivered_at TEXT,
+  resolution   TEXT CHECK (resolution IN ('materialized','missing'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS ticket_project      ON ticket (project_id);
+CREATE INDEX IF NOT EXISTS milestone_project   ON milestone (project_id);
+CREATE INDEX IF NOT EXISTS pr_ticket           ON pr (ticket_id);
+CREATE INDEX IF NOT EXISTS edge_blocked        ON edge (blocked);
+CREATE INDEX IF NOT EXISTS claim_session       ON claim (session_id);
+CREATE INDEX IF NOT EXISTS fetch_request_open  ON fetch_request (source, resolution);
 `;

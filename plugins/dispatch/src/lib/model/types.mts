@@ -4,6 +4,8 @@ import type {OutcomeKind, PrOrigin, Status, TargetKind} from './status.mts';
 export interface Project {
   id: string;
   name: string;
+  /** The tracker this project came from; null until a write names one. */
+  source: string | null;
 }
 
 export interface Milestone {

@@ -13,13 +13,18 @@ export class ProjectStore {
     this.#db = db;
   }
 
-  async upsertProject(project: {id: string; name: string}): Promise<void> {
+  async upsertProject(project: {
+    id: string;
+    name: string;
+    source?: string | null;
+  }): Promise<void> {
     await this.#db.transaction(() => {
       const nodeId = materialize(this.#db, project.id, 'project');
       this.#db.run(
-        `INSERT INTO project (node_id, name) VALUES (?, ?)
-         ON CONFLICT(node_id) DO UPDATE SET name = excluded.name`,
-        [nodeId, project.name]
+        `INSERT INTO project (node_id, name, source) VALUES (?, ?, ?)
+         ON CONFLICT(node_id) DO UPDATE SET
+           name = excluded.name, source = excluded.source`,
+        [nodeId, project.name, project.source ?? null]
       );
     });
   }
@@ -51,16 +56,23 @@ export class ProjectStore {
     });
   }
 
+  /* eslint-disable @typescript-eslint/no-base-to-string --
+   * Database values are known to be primitives; avoid as-casts per brief. */
   async getProject(id: string): Promise<Project | null> {
     const row = this.#db.get(
-      `SELECT n.external_id AS id, p.name AS name
+      `SELECT n.external_id AS id, p.name AS name, p.source AS source
        FROM project p JOIN node n ON n.id = p.node_id
        WHERE n.external_id = ?`,
       [id]
     );
     if (row === undefined) return null;
-    return {id: String(row.id), name: String(row.name)};
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      source: row.source === null ? null : String(row.source),
+    };
   }
+  /* eslint-enable @typescript-eslint/no-base-to-string */
 }
 
 /* eslint-enable @typescript-eslint/require-await */

@@ -1,16 +1,15 @@
 # land — shared credentials
 
 The agent posts with the operator's own account, so `operator_login` is also the
-authenticated account. Three consequences: readers
-can't tell agent posts from the operator's by author; a review request can never
-target the operator; and the operator can only leave `commented` reviews on this
-PR, never `approved` or `changes_requested`. GitHub refuses all three on your
-own PR.
+authenticated account. Consequences: author doesn't distinguish
+agent posts from operator posts; GitHub refuses a review request aimed at the
+operator, and refuses operator `approved` / `changes_requested` reviews on this
+PR — `commented` only.
 
 ## Wire format
 
-Author alone can't identify an agent post here, so the body inside the marker
-([wire format](./reference.md#wire-format)) is wrapped in a sparkle block:
+The body inside the marker ([wire format](./reference.md#wire-format)) is
+wrapped in a sparkle block:
 
 ```text
 <!-- agent-reply:<agent-id> -->
@@ -27,8 +26,9 @@ The sparkle (U+2728) sits alone on its line, one blank line in from the body on
 each side. **A terminal token goes after the closing sparkle**, as shown:
 `pr-status` reads the last non-empty line and nothing else, so a token inside
 the block is never seen — the closing sparkle is that line — and the item stays
-actionable forever. Reactions are unaffected, and a sentinel is matched wherever
-it sits, so it may stay inside the block.
+actionable forever. Reactions are unaffected; a sentinel is matched anywhere in
+the comment as long as it is alone on its line, so it may stay inside the
+block.
 
 ## Operator notification
 

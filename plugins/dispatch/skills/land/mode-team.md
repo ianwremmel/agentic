@@ -7,21 +7,19 @@ reviews. The team stage is a plain review request, not an engagement.
 
 ## Gates 6–7 in team
 
-- **Gate 6 (operator-approved)** is satisfied during `private_review_*`. The
-  operator clearing draft counts: it is theirs alone to do here, so
-  `<terminal state>` moving off `draft` is an approval signal in its own right.
-  A `+1` on the engagement comment and an `approved` review count too.
+- **Gate 6 (operator-approved)** is satisfied during `private_review_*`. Draft
+  clearing is one of its signals here: it is the operator's alone to do, so
+  `<terminal state>` moving off `draft` is an approval in its own right. The
+  remaining signals are the ones your credentials file lists.
 - **Gate 7 (team-approved)** is satisfied during `public_review_*`: at least
   one `<review mode="human" role="team" state="approved">` from a non-self,
   non-operator reviewer and no current `changes_requested`.
 
 ## Draft clearing
 
-The agent **never** clears draft. After Gate 6, poll until the PR is no longer
-a draft (reviewer cadence), then proceed to `ready_for_public_review`.
-
-Draft clearing before any other Gate 6 signal arrives is itself that signal —
-take it and move to `ready_for_public_review`.
+The agent **never** clears draft; the operator does. Poll on the reviewer
+cadence until the PR is no longer a draft, then proceed to
+`ready_for_public_review`.
 
 ## Lifecycle
 
@@ -84,7 +82,7 @@ stateDiagram-v2
 | `private_review_requested`         | Await the operator's signal.                                                                                    | reviewer |
 | `private_review_commented`         | Address each item; push; re-engage.                                                                            | no       |
 | `private_review_requested_changes` | Address; push; **re-engage required** — blocks public review.                                                  | no       |
-| `private_review_approved`          | **Don't clear draft** — the operator does. Poll until the PR is no longer a draft, then → `ready_for_public_review`. | reviewer |
+| `private_review_approved`          | Poll until the PR is no longer a draft (see Draft clearing), then → `ready_for_public_review`.                   | reviewer |
 | `ready_for_public_review`          | Request review from team reviewer(s), **excluding the operator**. Never self-request.                           | no       |
 | `public_review_requested`          | Await the public reviewer.                                                                                      | reviewer |
 | `public_review_commented`          | Address each item; push; re-request.                                                                            | no       |

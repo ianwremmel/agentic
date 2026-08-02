@@ -77,11 +77,11 @@ brief is too thin to tell when the change is done. Never invent scope.
 
 ## Gates
 
-Seven binary signals, all read from the `pr-status` XML. Gates 6 and 7 have XML
-signals like the rest — an `approved` review, a `+1` reaction on the engagement
-comment, `<terminal state>` leaving `draft` — and your credentials and
-operator-mode files name which ones count here. Only an approval given on the
-ticket or out of band is invisible to the snapshot:
+Seven binary signals. Gates 1–5 and most gate 6/7 signals come from the
+`pr-status` XML — an `approved` review, a `+1` reaction on the engagement
+comment, `<terminal state>` leaving `draft`; your credentials and operator-mode
+files name which ones count here. An approval given on the ticket or out of
+band never reaches the snapshot — accept it when you see it:
 
 1. **CI** — `<checks state="passing">` (rollup treats neutral/success as
    passing; repo can suppress non-blocking checks via `informational="true"`).

@@ -50,7 +50,8 @@ terminal-tagged reply instead.
 | `eyes`   | Non-terminal — seen, in progress      |
 
 Text tokens are the terminal mechanism on threads, and on any platform without
-reactions. When you emit one it must be the **last non-empty line**. Emit only
+reactions. When you emit one it must be the **last non-empty line of the whole
+comment** — after any closing wrapper your credentials file adds, not inside it. Emit only
 these three. The reader is more lenient
 than the writer: `pr-status` also accepts `✓`, `✅`, `acknowledged`, `wontfix`,
 `dismissed`, and `resolved`, so a reviewer's stray "resolved" can settle an
@@ -78,9 +79,9 @@ engagement is two parts:
 1. **Notification** — the venue your credentials file prescribes.
 2. **Engagement comment** — a top-level PR comment with the
    `<!-- agent-reply:<agent-id> -->` marker on its first line and the
-   engagement sentinel `<!-- agent-engagement:<agent-id> -->` alone on the last
-   line of the body. Post it in both credential modes; it anchors the reaction-
-   and reply-based Gate 6 signals.
+   engagement sentinel `<!-- agent-engagement:<agent-id> -->` alone on a line of
+   its own anywhere after it. Post it in both credential modes; it anchors the
+   reaction- and reply-based Gate 6 signals.
 
 The sentinel makes the comment classify **non-actionable** (like the plan
 comment) — without it, the agent's own soliciting comment stays actionable

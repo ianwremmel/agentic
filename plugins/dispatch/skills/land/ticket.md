@@ -7,8 +7,8 @@ Applies only when Intake resolved a ticket.
 A ticket URL names its own tracker (`linear.app/<workspace>/issue/DEV-123` →
 `linear`); a bare id (`DEV-123`) uses `${user_config.tracker}`. Linear bindings
 are below. For any other tracker, map its states onto these roles yourself
-through its MCP server. When a native state's lifecycle meaning is ambiguous,
-ask the operator rather than guess.
+through its MCP server. A native state whose role is ambiguous maps to no
+role — see Claim.
 
 ## Roles
 
@@ -86,8 +86,7 @@ Match `list_issue_statuses(team)` names case-insensitively:
 | Done            | `verified`    |
 | Canceled        | `canceled`    |
 
-`Delivered` is a custom substate. A substate this table doesn't name maps to no role: ask the
-operator. A team's custom `Blocked` sits in Linear's `Unstarted` group and is
+`Delivered` is a custom substate. A substate this table doesn't name maps to no role. A team's custom `Blocked` sits in Linear's `Unstarted` group and is
 not `available`.
 
 Read the ticket's team before writing a state; substates are per-team.

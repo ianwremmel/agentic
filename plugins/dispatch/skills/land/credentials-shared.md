@@ -23,7 +23,26 @@ body in a sparkle block:
 ```
 
 The sparkle (U+2728) sits alone on its line, one blank line in from the body on
-each side. Sentinels that go inside the body go after the opening sparkle.
+each side.
+
+**A terminal token goes after the closing sparkle**, as the last non-empty line
+of the whole comment:
+
+```text
+<!-- agent-reply:<agent-id> -->
+✨
+
+Fixed in abc1234.
+
+✨
+
+Done.
+```
+
+`pr-status` reads the last non-empty line of the body and nothing else, so a
+token placed inside the block is never seen — the closing sparkle is the last
+line, and the item stays actionable forever. Reactions are unaffected. A
+sentinel is matched wherever it sits, so it may stay inside the block.
 
 ## Operator notification
 

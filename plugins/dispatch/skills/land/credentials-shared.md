@@ -1,4 +1,4 @@
-# deliver — shared credentials
+# land — shared credentials
 
 The agent posts with the operator's own account (`credential_mode: shared`), so
 `operator_login` is also the authenticated account. Three consequences: readers
@@ -9,9 +9,21 @@ own PR.
 
 ## Wire format
 
-Every agent post carries the machine marker **and wraps the body in the
-sparkle block** ([wire format](./reference.md#wire-format)) — the sparkle is
-how readers tell agent posts from the operator's own.
+Because author alone can't identify an agent post here, every one carries the
+machine marker ([wire format](./reference.md#wire-format)) **and** wraps its
+body in a sparkle block:
+
+```text
+<!-- agent-reply:<agent-id> -->
+✨
+
+{body}
+
+✨
+```
+
+The sparkle (U+2728) sits alone on its line, one blank line in from the body on
+each side. Sentinels that go inside the body go after the opening sparkle.
 
 ## Operator notification
 

@@ -1,8 +1,12 @@
-# deliver — dedicated credentials
+# land — dedicated credentials
 
-The agent has its own account (`credential_mode: dedicated`). Posts carry the
-machine marker alone — **never add the sparkle wrapper**
-([wire format](./reference.md#wire-format)).
+The agent has its own account (`credential_mode: dedicated`), so its posts are
+already distinguishable by author.
+
+## Wire format
+
+The machine marker ([wire format](./reference.md#wire-format)) and then the body,
+plain. Add no wrapper, banner, or decoration around it.
 
 ## Operator notification
 

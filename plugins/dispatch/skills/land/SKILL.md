@@ -1,9 +1,9 @@
 ---
-name: deliver
-description: Drive one code change to merge through a draft PR — CI, reviews, iteration, monitor until close. Starts from a PR URL, a ticket URL, or a freeform prompt. Use whenever the unit of work is "land this change."
+name: land
+description: Take a single pull request to completion — draft it, drive CI and reviews, iterate, and monitor until it merges or closes. Starts from a PR URL, a ticket URL, or a freeform prompt. Stateless, one PR per run. Use whenever the unit of work is "land this change" and nothing broader.
 ---
 
-# deliver
+# land
 
 Land a code change via a PR. Each tick: run `pr-status <pr>`, address every
 actionable concern, then evaluate the gates to decide whether to transition.
@@ -34,7 +34,7 @@ these two; the other mode files describe environments you are not in:
 
 If either file does not exist, the config value is invalid — stop and ask the
 operator to set `operator_mode` (`solo` or `team`) and `credential_mode`
-(`dedicated` or `shared`) in the land plugin config.
+(`dedicated` or `shared`) in the dispatch plugin config.
 
 ## Intake
 
@@ -67,8 +67,9 @@ brief is too thin to tell when the change is done. Never invent scope.
      there is one (full URL, never a bare id). **No execution plan in the
      body.**
    - Post the plan as a top-level comment with `<!-- agent-plan:<agent-id> -->`
-     inside the wire-format body (after the marker/sparkle, not as the first
-     line; see [`reference.md`](./reference.md#wire-format)). Pin if supported.
+     inside the wire-format body, on its own line and never first — the marker
+     is first (see [`reference.md`](./reference.md#wire-format)). Pin if
+     supported.
 3. **Resume.** PR exists → reuse worktree, skip the open sequence, find the plan
    comment by its `agent-plan` marker (post one if missing). Never open a second
    PR or rewrite the body.
@@ -88,8 +89,8 @@ your credentials file):
 6. **Operator-approved** (always required). Your credentials file lists the
    signal forms that exist in this environment; your operator-mode file names
    the stage that satisfies it.
-7. **Team-approved** (team operator mode only; trivially satisfied in solo).
-   Defined in your operator-mode file.
+7. **Any second approval your operator-mode file requires.** That file says
+   whether one exists here and what satisfies it.
 
 Gates 1–5 are evaluated every tick outside `starting`/`done`. **Gate failures
 are fixed in place — they don't change state.** Only the conditions on a
@@ -198,7 +199,7 @@ convergence. Keep polling until `pending` clears.
 The agent **is** the poll loop — inline, sequential foreground tool calls
 (`Bash` `sleep`, then a `pr-status` re-read and any reactive work). Stay
 continuously active in the current turn until the run ends; never yield
-the turn, hand off to a wakeup, or expect re-prodding. Holds whether `deliver`
+the turn, hand off to a wakeup, or expect re-prodding. Holds whether `land`
 is invoked directly or dispatched as a subagent.
 
 For waits past the Bash timeout (~10 min), split into shorter intervals (a
@@ -222,6 +223,6 @@ repo's CI finish twice, poll on that duration rather than the table's head.
 
 ## References
 
-Machine marker and sparkle wrapper, terminal signals, engagement mechanics,
-actionability, log-line format: [`reference.md`](./reference.md). Ticket
+Machine marker, terminal signals, engagement mechanics, actionability,
+log-line format: [`reference.md`](./reference.md). Ticket
 resolution, claiming, role sync: [`ticket.md`](./ticket.md).

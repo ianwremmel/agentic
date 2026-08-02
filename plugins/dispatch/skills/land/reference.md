@@ -1,17 +1,16 @@
-# deliver — protocol reference
+# land — protocol reference
 
 ## Roles
 
 - **Agent** — the agentic coding assistant doing the work (this skill).
 - **Operator** — the one individual directing the agent; almost certainly
-  human; the only human with stop authority. Shares platform credentials with
-  the agent when `credential_mode` is `shared`.
+  human; the only human with stop authority.
 - **Reviewer** — any participant leaving review feedback (Copilot, another agent,
   or a human). The operator may also be a reviewer.
 
-The credential mode is plugin config (`credential_mode`: `dedicated` — the
-agent has its own account; `shared` — the agent uses the operator's), stated
-in the skill's Environment section. Never infer it from account names.
+The credential mode is plugin config, stated in the skill's Environment
+section and described by your credentials file. Never infer it from account
+names.
 
 ## Wire format
 
@@ -22,24 +21,14 @@ machine marker as its **first line**, alone, no leading whitespace:
 <!-- agent-reply:<agent-id> -->
 ```
 
-With **shared credentials**, the body is additionally wrapped in a sparkle
-block after the marker:
+That marker is the whole of the universal format. Your credentials file gives
+the body format for this environment — follow it exactly, and add nothing it
+doesn't call for.
 
-```text
-<!-- agent-reply:land -->
-✨
-
-{body}
-
-✨
-```
-
-The sparkle (U+2728) sits alone, one blank line in from the body each side.
-Never with dedicated credentials. The plan-comment sentinel
-`<!-- agent-plan:<agent-id> -->` goes **inside** the body, **alone on its own
-line** — that is what `pr-status` matches, and a sentinel sharing a line with
-prose is not seen at all, leaving the comment actionable forever. Place it
-after the marker, and after the opening sparkle where one applies.
+The plan-comment sentinel `<!-- agent-plan:<agent-id> -->` goes **inside** the
+body, **alone on its own line** — that is what `pr-status` matches, and a
+sentinel sharing a line with prose is not seen at all, leaving the comment
+actionable forever. It never comes first; the marker does.
 
 ## Terminal signals
 
@@ -83,14 +72,14 @@ item — don't rely on it, and don't add to this set:
 
 ### Operator engagement
 
-`deliver` engages the operator on the edge your operator-mode file marks. Each
+`land` engages the operator on the edge your operator-mode file marks. Each
 engagement is two parts:
 
 1. **Notification** — the venue your credentials file prescribes.
 2. **Engagement comment** — a top-level PR comment carrying the
    `<!-- agent-reply:<agent-id> -->` marker AND, inside the body (after the
-   opening sparkle where one applies) and alone on its own line, an engagement
-   sentinel `<!-- agent-engagement:<agent-id> -->`. Posted in both
+   body) and alone on its own line, an engagement sentinel
+   `<!-- agent-engagement:<agent-id> -->`. Posted in both
    credential modes (the notification venues aren't PR comments the operator
    can react to). It anchors reaction-/reply-based Gate 6 signals.
 
@@ -134,7 +123,7 @@ One line per entry:
   PR-only runs.
 - `<pr-state>` — `draft` | `open` | `shipped` | `abandoned`; `-` when no PR.
 
-Kinds `deliver` emits:
+Kinds `land` emits:
 
 | Kind         | When                                                                                    |
 | ------------ | --------------------------------------------------------------------------------------- |

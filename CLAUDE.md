@@ -18,11 +18,9 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ├── .claude-plugin/marketplace.json   # marketplace catalog
 ├── .claude/agents/                   # repo-dev subagents (not shipped)
 ├── plugins/                          # Claude Code plugins
-│   ├── dispatch/
-│   │   ├── bin/dispatch              # CLI entry point (bash wrapper)
-│   │   └── cli/                      # CLI sources + colocated tests (.mts)
-│   └── land/
-│       └── bin/pr-status             # PR state snapshot (bash)
+│   └── dispatch/
+│       ├── bin/dispatch              # CLI entry point (bash wrapper)
+│       └── cli/                      # CLI sources + colocated tests (.mts)
 ├── scripts/                          # repo tooling (git hook bodies)
 └── docs/                             # spec + design docs
 ```
@@ -33,12 +31,11 @@ Plugins currently published:
   tracked work items (PR lifecycle plus ticket triage, planning, status, and
   cross-team sync). Trackers are pluggable: `work-ticket` and `build-graph`
   load a per-tracker adapter skill (`tracker-adapter-<id>`) rather than
-  hardcoding one; `tracker-adapter-linear` ships bundled.
-- `plugins/land/` — one skill (`deliver`) plus `bin/pr-status`: take a single
-  PR to completion, started from a PR URL, a ticket URL, or a prompt. Stateless
-  — no CLI, no database. Its `deliver` skill is a copy of the one in
-  `dispatch`; the two are meant to converge on one source later, so a change to
-  either usually belongs in both.
+  hardcoding one; `tracker-adapter-linear` ships bundled. Its `land` skill is
+  the standalone single-PR path — stateless, started from a PR URL, a ticket
+  URL, or a prompt — beside `deliver`, which is the one `work-ticket`
+  dispatches. `land` began as a copy of `deliver`; they are meant to converge,
+  so a fix to either usually belongs in both.
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.

@@ -1,4 +1,4 @@
-# deliver — solo operator mode
+# land — solo operator mode
 
 The operator is the only human in the loop (`operator_mode: solo`): after
 Copilot review (where available), the agent clears draft and engages the
@@ -7,7 +7,7 @@ operator as the public reviewer.
 ## Gates 6–7 in solo
 
 - **Gate 6 (operator-approved)** is satisfied during `public_review_*`.
-- **Gate 7 (team-approved)** is trivially satisfied — never evaluated.
+- **Gate 7** — there is no second approver in this mode. Never evaluated.
 
 ## Draft clearing
 

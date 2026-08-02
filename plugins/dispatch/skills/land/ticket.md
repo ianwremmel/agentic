@@ -1,4 +1,4 @@
-# deliver — ticket-backed runs
+# land — ticket-backed runs
 
 Applies only when Intake resolved a ticket.
 

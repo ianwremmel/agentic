@@ -1,4 +1,4 @@
-# deliver — team operator mode
+# land — team operator mode
 
 The operator directs the agent but is one of several humans
 (`operator_mode: team`). Review happens in two stages. First the operator

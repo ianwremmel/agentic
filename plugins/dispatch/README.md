@@ -18,6 +18,24 @@ See the [root README](/README.md#install) for marketplace setup.
 
 Once installed, the plugin's skills appear under the `dispatch:` namespace. Run `/help` from inside Claude Code to list them.
 
+## `land` vs `deliver`
+
+Both drive one pull request to merge, and they are not interchangeable.
+
+`deliver` is the PR half of the orchestration stack: `work-ticket` dispatches
+one instance per PR, and it expects that context — a ticket already claimed, a
+dispatch brief, the graph and slot bookkeeping handled by its caller.
+
+`land` is the standalone version. It takes a PR URL, a ticket URL, or a plain
+prompt, resolves that to a brief itself, and drives the one PR to completion.
+It keeps no state between runs — no CLI, no database — and re-derives every
+decision from `pr-status` each tick. A ticket-backed run claims its ticket and
+syncs the role (`in-progress` → `in-review` → `delivered`), but it never
+decomposes work, walks a dependency graph, or dispatches anything.
+
+Reach for `land` when the unit of work is one PR. Reach for `work-ticket` (and
+through it, `deliver`) when the unit of work is a ticket that may need several.
+
 ## Tracker adapters
 
 `work-ticket` speaks an abstract role vocabulary (`available`, `in-progress`, `in-review`, `delivered`, `verified`, …) and an abstract set of ticket operations; `build-graph` sweeps a tracker's projects through the same per-tracker lens. A **tracker adapter** — a skill named `tracker-adapter-<id>` — maps a platform's native states onto those roles, binds each ticket operation to a concrete tool call, and supplies the graph fetch and field mapping. Both skills prefer the adapter and fall back to best-effort use of the tracker's native MCP server when none is installed — an adapter records the state mappings and quirks best effort would have to work out from scratch. Working tickets reliably on Jira, GitLab, or an in-house tool therefore means adding a `tracker-adapter-<id>` skill — in your repo's `.claude/skills/`, personally, or via a plugin — not editing the skills.

@@ -16,11 +16,11 @@ authority. Role glossary in [`reference.md`](./reference.md#roles).
 Fixed by plugin config. State these in your first status output; never infer
 any of them:
 
-- The operator is `${user_config.operator_login}`.
-- The operator mode is `${user_config.operator_mode}`.
-- The credential mode is `${user_config.credential_mode}`.
-- Copilot review available: `${user_config.copilot_available}`.
-- The worktree base is `${user_config.worktree_base}`.
+- Operator: `${user_config.operator_login}`
+- Operator mode: `${user_config.operator_mode}`
+- Credential mode: `${user_config.credential_mode}`
+- Copilot review available: `${user_config.copilot_available}`
+- Worktree base: `${user_config.worktree_base}`
 
 Before any other work, read these two files — and only these variants, not the
 other mode or credentials files:
@@ -129,7 +129,8 @@ call a change delivered on any signal other than this attribute.
 files it writes** — never from `gh pr view`, `gh pr checks`, `gh api
 …/comments|/reviews`, or an MCP PR read. Read full text from the cache. Direct
 reads are allowed only for a field the snapshot omits: a thread's file and line,
-and the PR body and plan comment at intake. `gh` and MCP are otherwise for **writes** — reply, react,
+the PR body and plan comment at intake, and an approval given on the ticket or
+out of band. `gh` and MCP are otherwise for **writes** — reply, react,
 request review, mark ready.
 
 A review still being drafted is invisible here by design. Don't chase it; wait

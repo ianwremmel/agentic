@@ -29,6 +29,13 @@ export class CursorStore {
   async clearCursor(source: string): Promise<boolean> {
     return this.#db.run('DELETE FROM cursor WHERE source = ?', [source]) > 0;
   }
+
+  /** Clear every cursor. The graph-wide rebuild deletes all sources' nodes, so
+   *  every source must re-sync from scratch or it silently keeps a cursor
+   *  pointing past data that no longer exists. */
+  async clearAllCursors(): Promise<number> {
+    return this.#db.run('DELETE FROM cursor');
+  }
 }
 
 /* eslint-enable @typescript-eslint/require-await */

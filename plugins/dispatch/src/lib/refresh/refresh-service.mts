@@ -52,7 +52,10 @@ export class RefreshService {
 
     if (input.rebuild) {
       await this.#db.transaction(() => this.#db.run('DELETE FROM node'));
-      await this.#cursors.clearCursor(input.source);
+      // The delete is graph-wide, so every source's cursor must reset with it —
+      // otherwise another tracker's next delta sync starts past data that no
+      // longer exists and never re-fetches it.
+      await this.#cursors.clearAllCursors();
     }
 
     const at = this.#now();
@@ -145,6 +148,16 @@ export class RefreshService {
       if (source === null) continue;
       const row = await this.#refreshes.get(source);
       if (row?.state === 'scanning') continue;
+      // A refresh that closed but still owes its completion push is not fair
+      // game to reopen — a placeholder markMissing deliberately left unknown
+      // would otherwise erase the pending completion on every later reconcile.
+      if (
+        row !== null &&
+        row.completedAt !== null &&
+        row.completionEmittedAt === null
+      ) {
+        continue;
+      }
       if (row === null || row.state === 'idle') {
         await this.#refreshes.openResolving({source, sessionId: null, at});
       }
@@ -157,7 +170,7 @@ export class RefreshService {
       if (row.pendingCursor !== null) {
         await this.#cursors.setCursor(row.source, row.pendingCursor);
       }
-      await this.#requests.clear(row.source);
+      await this.#requests.clearExceptMissing(row.source);
       await this.#refreshes.close(row.source, at);
     }
   }

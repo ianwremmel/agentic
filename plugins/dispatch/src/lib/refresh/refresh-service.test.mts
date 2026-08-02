@@ -182,6 +182,38 @@ describe('RefreshService', () => {
     await h.db.close();
   });
 
+  it('reconcile does not reopen a refresh whose only outstanding id was marked missing', async () => {
+    const h = await fresh();
+    await h.service.startScan({
+      source: 'linear',
+      projects: ['P'],
+      sessionId: null,
+      rebuild: false,
+    });
+    await h.tickets.upsertTicket(ticket('T1', 'P'));
+    await h.edges.addEdge('GONE', 'T1');
+    await h.service.completeScan({source: 'linear', cursor: 'tok'});
+    await h.service.markMissing('GONE');
+
+    await h.service.reconcile();
+
+    const after = await h.refreshes.get('linear');
+    assert(after !== null);
+    assert.equal(after.state, 'idle');
+    assert.notEqual(after.completedAt, null);
+    assert.equal(after.completionEmittedAt, null);
+
+    const goneRequests = (await h.requests.bySource('linear')).filter(
+      (r) =>
+        r.kind === 'fetch_ticket' &&
+        'ticket' in r.payload &&
+        r.payload.ticket === 'GONE'
+    );
+    assert.equal(goneRequests.length, 1);
+    assert.equal(goneRequests[0]?.resolution, 'missing');
+    await h.db.close();
+  });
+
   it('rejects markMissing for an id nobody asked for', async () => {
     const h = await fresh();
     await assert.rejects(
@@ -218,6 +250,26 @@ describe('RefreshService', () => {
     assert(request !== undefined);
     assert.deepEqual(request.payload, {projects: ['P'], cursor: null});
     assert.equal(await h.tickets.getTicket('T1'), null);
+    await h.db.close();
+  });
+
+  it("rebuild clears every source's cursor, not only the one being rebuilt", async () => {
+    const h = await fresh();
+    await new ProjectStore(h.db).upsertProject({
+      id: 'P2',
+      name: 'P2',
+      source: 'work-ticket',
+    });
+    await h.cursors.setCursor('linear', 'tok1');
+    await h.cursors.setCursor('work-ticket', 'tok2');
+    await h.service.startScan({
+      source: 'linear',
+      projects: ['P'],
+      sessionId: null,
+      rebuild: true,
+    });
+    assert.equal(await h.cursors.getCursor('linear'), null);
+    assert.equal(await h.cursors.getCursor('work-ticket'), null);
     await h.db.close();
   });
 

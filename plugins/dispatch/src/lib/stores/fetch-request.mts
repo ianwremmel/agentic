@@ -168,6 +168,20 @@ export class FetchRequestStore {
     return this.#db.run('DELETE FROM fetch_request WHERE source = ?', [source]);
   }
 
+  /**
+   * Forget every request for a source except the `missing` tombstones. Those
+   * are what stop a ticket the tracker does not have from being requested
+   * again, so a refresh that closes must leave them behind; only an explicit
+   * new scan forgets them.
+   */
+  async clearExceptMissing(source: string): Promise<number> {
+    return this.#db.run(
+      `DELETE FROM fetch_request
+       WHERE source = ? AND (resolution IS NULL OR resolution <> 'missing')`,
+      [source]
+    );
+  }
+
   #insert(
     source: string,
     kind: FetchKind,

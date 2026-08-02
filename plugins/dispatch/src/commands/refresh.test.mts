@@ -7,6 +7,7 @@ import {describe, it} from 'node:test';
 import {runCommand} from '../lib/command/test-support.mts';
 import {withDatabase} from '../lib/db/index.mts';
 import {nowIso} from '../lib/db/time.mts';
+import {RefreshService} from '../lib/refresh/index.mts';
 import {
   CursorStore,
   EdgeStore,
@@ -186,5 +187,45 @@ describe('refresh', () => {
     const env = await tempEnv();
     const out = await runCommand(new StatusCommand(), {tracker: 'linear'}, env);
     assert.equal(out, 'refresh linear none\n');
+  });
+
+  it('status lists a still-open request but omits one already resolved', async () => {
+    const env = await tempEnv();
+    await runCommand(
+      new RefreshCommand(),
+      {tracker: 'linear', project: 'P'},
+      env
+    );
+    await withDatabase(undefined, env, async (db) => {
+      await new ProjectStore(db).upsertProject({
+        id: 'P',
+        name: 'P',
+        source: 'linear',
+      });
+      await new TicketStore(db).upsertTicket(ticket('T1', 'P'));
+      await new EdgeStore(db).addEdge('RESOLVED', 'T1');
+      await new EdgeStore(db).addEdge('OPEN', 'T1');
+    });
+    // `done` moves the refresh to `resolving`, which is what lets reconcile
+    // chase the two placeholders left by the edges above into fetch_ticket
+    // requests (reconcile skips placeholder-chasing while `scanning`).
+    await runCommand(
+      new DoneCommand(),
+      {tracker: 'linear', cursor: 'tok'},
+      env
+    );
+    await withDatabase(undefined, env, (db) =>
+      new RefreshService(db).markMissing('RESOLVED')
+    );
+
+    const out = await runCommand(new StatusCommand(), {tracker: 'linear'}, env);
+    assert.ok(
+      out.includes('OPEN'),
+      `expected the still-open request to be listed, got: ${out}`
+    );
+    assert.ok(
+      !out.includes('RESOLVED'),
+      `expected the resolved request to be omitted, got: ${out}`
+    );
   });
 });

@@ -54,6 +54,8 @@ Steps 1–3 run before the first push:
    - `available` — claimable; continue.
    - `in-progress` or `in-review` assigned to **you** — a resumed run. Skip
      steps 2–3; don't re-emit the transition.
+   - `in-progress` or `in-review` **unassigned** — claimable; continue with
+     steps 2–3 but don't emit the transition, it is already there.
    - `in-progress` or `in-review` assigned to **anyone else** — they are on it.
      Report and stop.
    - anything else, including a native state that maps to no role — not

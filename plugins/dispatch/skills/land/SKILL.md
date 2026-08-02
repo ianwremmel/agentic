@@ -24,7 +24,8 @@ any of them:
   leaves `draft` without it.
 - The worktree base is `${user_config.worktree_base}`.
 
-Before any other work, read only these two files:
+Before any other work, read these two files — and only these variants, not the
+other mode or credentials files:
 
 - `mode-${user_config.operator_mode}.md` — the lifecycle, states, and review
   gates for this operator mode.
@@ -158,11 +159,10 @@ Apply in every state.
      claim-vs-implementation gap (judged against the PR's own commit
      messages/identifiers/comments).
 
-  Use a **model family distinct from the authoring one** for both passes where
-  the install has one (e.g. Codex `codex:adversarial-review`/`codex:rescue` when
-  Claude authored). A second subagent on the authoring model does NOT count.
-  Only where no distinct family exists may both fall back to authoring-model
-  subagents (weaker — extra caution). Triage every finding (act, or one-line
+  Run both passes on a model family distinct from the authoring one (e.g. Codex
+  `codex:adversarial-review`/`codex:rescue` when Claude authored). A subagent on
+  the authoring model counts only when the install has no distinct family —
+  weaker, so take extra caution. Triage every finding (act, or one-line
   dismissal naming it). Skip pre-push review only for non-significant pushes
   (the empty open commit, whitespace/format-only, trivial typo/lint); if unsure,
   treat as significant.
@@ -202,8 +202,7 @@ is invoked directly or dispatched as a subagent.
 
 For waits past the Bash timeout (~10 min), split into shorter intervals (a
 30-min wait ≈ 5×6-min `sleep`s, each followed by a cheap `pr-status` check).
-Re-checking more often than the schedule is fine (never under 60 s); the table
-is an upper bound.
+The table is an upper bound; re-checking sooner is fine.
 
 **Forbidden** (each has stranded a PR):
 

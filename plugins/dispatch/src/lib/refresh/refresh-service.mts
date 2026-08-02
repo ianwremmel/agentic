@@ -1,6 +1,6 @@
 import type {Database} from '../db/database.mts';
 import {nowIso} from '../db/time.mts';
-import {ensure, UsageError} from '../errors/index.mts';
+import {DataError, ensure, UsageError} from '../errors/index.mts';
 import {
   CursorStore,
   FetchRequestStore,
@@ -8,7 +8,7 @@ import {
   RefreshStore,
 } from '../stores/index.mts';
 import type {FetchRequest, RefreshRow, RefreshState} from '../stores/index.mts';
-import {sourceForPlaceholder, unknownNodeIds} from './placeholders.mts';
+import {placeholdersBySource} from './placeholders.mts';
 
 /**
  * Every decision about what to fetch next and when a refresh is done. All of it
@@ -47,6 +47,10 @@ export class RefreshService {
       row.completionEmittedAt === null;
     const busy = row !== null && (row.state !== 'idle' || finishing);
     if (busy && (await this.#refreshes.hasLiveSession(input.source))) {
+      // Resuming must put the outstanding instructions back on the wire: the
+      // caller is a session that asked again because it is holding nothing, and
+      // the drain only pushes rows it has not already marked delivered.
+      await this.#requests.redeliver(input.source);
       return {resumed: true};
     }
 
@@ -93,14 +97,22 @@ export class RefreshService {
     if (input.cursor !== null) {
       await this.#refreshes.setPendingCursor(input.source, input.cursor);
     }
+    await this.#requests.resolveScan(input.source);
     await this.#refreshes.setState(input.source, 'resolving');
     await this.reconcile();
 
     const after = await this.#refreshes.get(input.source);
+    ensure(
+      after !== null,
+      () =>
+        new DataError(`the ${input.source} refresh vanished mid-completion`, {
+          hint: 'another process deleted the refresh row; rerun `dispatch refresh --tracker <id> --project <id>`.',
+        })
+    );
     const pending = (await this.#requests.openTickets())
       .filter((request) => request.source === input.source)
       .map((request) => request.ticket);
-    return {state: after?.state ?? 'idle', pending};
+    return {state: after.state, pending};
   }
 
   /** The tracker has no such ticket; stop asking for it. */
@@ -143,14 +155,14 @@ export class RefreshService {
 
     // A scan writes edges before their endpoints, so under one every reference
     // is briefly dangling; chasing them there would ask for most of the project.
-    for (const externalId of unknownNodeIds(this.#db)) {
-      const source = sourceForPlaceholder(this.#db, externalId);
-      if (source === null) continue;
+    // The state is read once per source, before any per-placeholder work, so a
+    // scan pays nothing for the placeholders it is still filling in.
+    for (const [source, externalIds] of placeholdersBySource(this.#db)) {
       const row = await this.#refreshes.get(source);
       if (row?.state === 'scanning') continue;
       // A refresh that closed but still owes its completion push is not fair
-      // game to reopen — a placeholder markMissing deliberately left unknown
-      // would otherwise erase the pending completion on every later reconcile.
+      // game to reopen — blanking the completion fields here would leave the
+      // session that is waiting on the event waiting forever.
       if (
         row !== null &&
         row.completedAt !== null &&
@@ -158,10 +170,24 @@ export class RefreshService {
       ) {
         continue;
       }
-      if (row === null || row.state === 'idle') {
-        await this.#refreshes.openResolving({source, sessionId: null, at});
+      // The state advances only once a request exists to justify it.
+      // `enqueueTicket` returns null for an id that is already queued or
+      // already resolved `missing`, and a `resolving` refresh with nothing
+      // outstanding closes on the next pass and owes another completion — for
+      // a `missing` tombstone, which is permanent, that repeats on every write.
+      let resolving = row !== null && row.state === 'resolving';
+      for (const externalId of externalIds) {
+        const enqueued = await this.#requests.enqueueTicket({
+          source,
+          ticket: externalId,
+          at,
+        });
+        if (enqueued === null) continue;
+        if (!resolving) {
+          await this.#refreshes.openResolving({source, sessionId: null, at});
+          resolving = true;
+        }
       }
-      await this.#requests.enqueueTicket({source, ticket: externalId, at});
     }
 
     for (const row of await this.#refreshes.active()) {

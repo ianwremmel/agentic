@@ -19,6 +19,16 @@ describe('resolveDbPath', () => {
     assert.equal(resolveDbPath(undefined, {DISPATCH_DB: '/env.db'}), '/env.db');
     assert.equal(
       resolveDbPath(undefined, {XDG_STATE_HOME: '/state'}),
+      path.join('/state', 'dispatch', 'graph-v2.db')
+    );
+  });
+
+  // The legacy `dispatch graph …` CLI defaults to `dispatch/graph.db` at a
+  // schema version of its own, and either tree refuses a file recorded at the
+  // other's version. Sharing the default filename bricks whichever ran second.
+  it('does not default to the file the legacy CLI owns', () => {
+    assert.notEqual(
+      resolveDbPath(undefined, {XDG_STATE_HOME: '/state'}),
       path.join('/state', 'dispatch', 'graph.db')
     );
   });

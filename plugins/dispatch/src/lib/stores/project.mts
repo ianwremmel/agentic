@@ -57,7 +57,8 @@ export class ProjectStore {
   }
 
   /* eslint-disable @typescript-eslint/no-base-to-string --
-   * Database values are known to be primitives; avoid as-casts per brief. */
+   * SQLite hands back `unknown`; `String()` converts a primitive rather than
+   * asserting a type the row has not been checked for. */
   async getProject(id: string): Promise<Project | null> {
     const row = this.#db.get(
       `SELECT n.external_id AS id, p.name AS name, p.source AS source

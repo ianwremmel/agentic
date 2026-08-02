@@ -99,6 +99,37 @@ export class FetchRequestStore {
       .map(toRequest);
   }
 
+  /**
+   * Mark a source's scan instruction answered. Nothing else resolves it —
+   * `openCount` ignores it, and the refresh's own state holds the scan open —
+   * so without this it stays outstanding for the life of the refresh and
+   * `redeliver` would put a finished scan back on the wire, whose `refresh
+   * done` the CLI would then refuse for having no scan in progress.
+   */
+  async resolveScan(source: string): Promise<number> {
+    return this.#db.run(
+      `UPDATE fetch_request SET resolution = 'materialized'
+       WHERE source = ? AND kind = 'scan_project' AND resolution IS NULL`,
+      [source]
+    );
+  }
+
+  /**
+   * Offer every unresolved request for a source to the channel again by
+   * clearing its delivery mark. Nothing acknowledges a channel push, so a
+   * delivery mark records that the server wrote the event, not that a session
+   * received it. Re-delivering costs the agent a duplicate instruction it will
+   * satisfy idempotently; not re-delivering leaves it waiting on an event that
+   * is already marked sent, with nothing to time it out.
+   */
+  async redeliver(source: string): Promise<number> {
+    return this.#db.run(
+      `UPDATE fetch_request SET delivered_at = NULL
+       WHERE source = ? AND resolution IS NULL`,
+      [source]
+    );
+  }
+
   async markDelivered(id: number, at: string): Promise<void> {
     assertInstant(at, 'at');
     this.#db.run('UPDATE fetch_request SET delivered_at = ? WHERE id = ?', [
@@ -205,7 +236,8 @@ export class FetchRequestStore {
 }
 
 /* eslint-disable @typescript-eslint/no-base-to-string --
- * Database values are known to be primitives; avoid as-casts per brief. */
+ * SQLite hands back `unknown`; `String()` converts a primitive rather than
+ * asserting a type the row has not been checked for. */
 function toRequest(row: Record<string, unknown>): FetchRequest {
   return {
     id: Number(row.id),

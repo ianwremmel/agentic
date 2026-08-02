@@ -12,6 +12,13 @@ const execFileAsync = promisify(execFile);
 /** The bash wrapper under test — the same path skills invoke. */
 export const DISPATCH_BIN = path.join(import.meta.dirname, 'bin', 'dispatch');
 
+/** The MCP wrapper under test — the same path `.mcp.json` names. */
+export const DISPATCH_MCP_BIN = path.join(
+  import.meta.dirname,
+  'bin',
+  'dispatch-mcp'
+);
+
 export interface DispatchResult {
   readonly code: number;
   readonly stdout: string;
@@ -23,6 +30,8 @@ export interface DispatchOptions {
   readonly env?: NodeJS.ProcessEnv;
   /** Written to the CLI's stdin, the way a skill pipes a payload to it. */
   readonly input?: string;
+  /** Which wrapper to run; defaults to `bin/dispatch`. */
+  readonly bin?: string;
 }
 
 /**
@@ -34,9 +43,9 @@ export interface DispatchOptions {
  */
 export async function runDispatch(
   args: readonly string[],
-  {env = {}, input}: DispatchOptions = {}
+  {env = {}, input, bin = DISPATCH_BIN}: DispatchOptions = {}
 ): Promise<DispatchResult> {
-  const child = spawn(DISPATCH_BIN, [...args], {
+  const child = spawn(bin, [...args], {
     env: {
       PATH: process.env.PATH ?? '',
       HOME: process.env.HOME ?? '',

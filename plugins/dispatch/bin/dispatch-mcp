@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# dispatch-mcp — the MCP server entry point declared in .mcp.json.
+#
+# Usage: dispatch-mcp [args...]
+#
+# The server lives at src/main.mts, which is not the entry `dispatch` runs by
+# default, and the MCP loader's handling of a server's `env` block is not
+# specified — an environment it replaces rather than merges would leave
+# bin/dispatch without a PATH to find node on. So the entry is set here, and the
+# exec goes through bin/dispatch to keep the Node version gate in the path.
+
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly here
+
+export DISPATCH_ENTRY="${here}/../src/main.mts"
+
+exec "${here}/dispatch" mcp "$@"

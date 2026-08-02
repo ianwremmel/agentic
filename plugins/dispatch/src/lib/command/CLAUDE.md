@@ -18,6 +18,9 @@ server will too. `index.mts` is the barrel.
   that the environment lacks.
 - `discovery.mts` — `discover` walks a commands dir into a `CommandNode` tree
   (folder path = invocation path).
+- `test-support.mts` — `runCommand` (runs a command as a transport would and
+  returns its `io` output) plus the fixtures every command test needs:
+  `tempEnv()` for a throwaway graph database and `ticket()` for a blank ticket.
 
 Keep CLI-only concerns (argv, streams, usage strings) out so the contract stays
 reusable.

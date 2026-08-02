@@ -11,38 +11,42 @@ import {
 } from '../../lib/stores/index.mts';
 import {Command} from './rm.mts';
 
-describe('ticket rm', () => {
-  it('removes an existing ticket', async () => {
+describe('edge rm', () => {
+  it('removes an existing edge', async () => {
     const env = await tempEnv();
-    await withDatabase(undefined, env, async (db) => {
-      await new ProjectStore(db).upsertProject({
-        id: 'P',
-        name: 'P',
-        source: 'linear',
-      });
-      await new TicketStore(db).upsertTicket(ticket('T1', 'P'));
-    });
-
-    const out = await runCommand(new Command(), {id: 'T1'}, env);
-
-    assert.equal(out, 'removed ticket T1 existed=true\n');
-    const stored = await withDatabase(undefined, env, (db) =>
-      new TicketStore(db).getTicket('T1')
+    await withDatabase(undefined, env, (db) =>
+      new EdgeStore(db).addEdge('A', 'B')
     );
-    assert.equal(stored, null);
+
+    const output = await runCommand(
+      new Command(),
+      {blocker: 'A', blocked: 'B'},
+      env
+    );
+
+    assert.equal(output, 'removed edge A -> B existed=true\n');
+    const edges = await withDatabase(undefined, env, (db) =>
+      new EdgeStore(db).edges()
+    );
+    assert.deepEqual(edges, []);
   });
 
-  it('reports existed=false for a ticket that was never declared', async () => {
+  it('reports existed=false for an edge that was never added', async () => {
     const env = await tempEnv();
 
-    const out = await runCommand(new Command(), {id: 'NOPE'}, env);
+    const output = await runCommand(
+      new Command(),
+      {blocker: 'A', blocked: 'B'},
+      env
+    );
 
-    assert.equal(out, 'removed ticket NOPE existed=false\n');
+    assert.equal(output, 'removed edge A -> B existed=false\n');
   });
 
   // Pins that the command calls `RefreshService.reconcile()`, not just its own
-  // store write. The fixture seeds a placeholder this call does not touch, so
-  // only the reconcile pass can turn it into a `fetch_ticket` request.
+  // store write. Removing an edge can leave the graph owing a fetch it was not
+  // owing before, so the pass has to run here too; the fixture seeds a
+  // placeholder this command does not touch, which only reconcile chases.
   it('reconciles after writing, chasing a placeholder left by other state', async () => {
     const env = await tempEnv();
     await withDatabase(undefined, env, async (db) => {
@@ -55,7 +59,7 @@ describe('ticket rm', () => {
       await new EdgeStore(db).addEdge('GONE', 'T1');
     });
 
-    await runCommand(new Command(), {id: 'NOPE'}, env);
+    await runCommand(new Command(), {blocker: 'X', blocked: 'Y'}, env);
 
     const openTickets = await withDatabase(undefined, env, (db) =>
       new FetchRequestStore(db).openTickets()

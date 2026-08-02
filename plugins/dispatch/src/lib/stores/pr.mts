@@ -66,7 +66,8 @@ export class PrStore {
   }
 
   /* eslint-disable @typescript-eslint/no-base-to-string --
-   * Database values are known to be primitives; avoid as-casts per brief. */
+   * SQLite hands back `unknown`; `String()` converts a primitive rather than
+   * asserting a type the row has not been checked for. */
   async getPr(id: string): Promise<Pr | null> {
     const row = this.#db.get(
       `SELECT n.external_id AS id, tn.external_id AS ticket, p.origin, p.repo,

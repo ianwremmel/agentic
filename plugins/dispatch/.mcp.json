@@ -1,11 +1,8 @@
 {
   "mcpServers": {
     "dispatch": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/dispatch",
-      "args": ["mcp"],
-      "env": {
-        "DISPATCH_ENTRY": "${CLAUDE_PLUGIN_ROOT}/src/main.mts"
-      }
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/dispatch-mcp",
+      "args": []
     }
   }
 }

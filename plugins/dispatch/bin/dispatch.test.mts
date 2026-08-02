@@ -13,9 +13,9 @@ describe('bin/dispatch node preflight', () => {
   });
 
   it('honors DISPATCH_ENTRY, running an alternate entry point through the same wrapper', async () => {
-    // .mcp.json points the MCP server here so its spawn goes through the same
-    // node floor check as the legacy `cli/` tree, rather than a second,
-    // unchecked entry path. `mcp` exists only as a command in `src/commands`,
+    // `bin/dispatch-mcp` points the MCP server here so its spawn goes through
+    // the same node floor check as the legacy `cli/` tree, rather than a
+    // second, unchecked entry path. `mcp` exists only as a command in `src/commands`,
     // not in the legacy `cli/commands` tree, so it distinguishes which tree
     // actually ran rather than asserting on output the two trees share.
     const entry = path.join(import.meta.dirname, '..', 'src', 'main.mts');

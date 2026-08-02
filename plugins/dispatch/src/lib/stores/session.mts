@@ -79,7 +79,8 @@ export class SessionStore {
   }
 
   /* eslint-disable @typescript-eslint/no-base-to-string --
-   * Database values are known to be primitives; avoid as-casts per brief. */
+   * SQLite hands back `unknown`; `String()` converts a primitive rather than
+   * asserting a type the row has not been checked for. */
   async getSession(id: string): Promise<Session | null> {
     const row = this.#db.get(
       `SELECT id, host, pid, started_at, heartbeat_at

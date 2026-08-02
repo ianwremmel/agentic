@@ -88,7 +88,8 @@ export class CoordinationStore {
   }
 
   /* eslint-disable @typescript-eslint/no-base-to-string --
-   * Database values are known to be primitives; avoid as-casts per brief. */
+   * SQLite hands back `unknown`; `String()` converts a primitive rather than
+   * asserting a type the row has not been checked for. */
   async claims(): Promise<
     {node: string; session: string; actor: string | null}[]
   > {
@@ -220,7 +221,8 @@ export class CoordinationStore {
   }
 
   /* eslint-disable @typescript-eslint/no-base-to-string --
-   * Database values are known to be primitives; avoid as-casts per brief. */
+   * SQLite hands back `unknown`; `String()` converts a primitive rather than
+   * asserting a type the row has not been checked for. */
   async getOutcome(node: string): Promise<Outcome | null> {
     const row = this.#db.get(
       `SELECT n.external_id AS node, o.outcome, o.retryable, o.detail, o.recorded_at

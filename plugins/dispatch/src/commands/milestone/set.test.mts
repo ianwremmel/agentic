@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import path from 'node:path';
 import {describe, it} from 'node:test';
 
-import {runCommand} from '../../lib/command/test-support.mts';
+import {runCommand, tempEnv, ticket} from '../../lib/command/test-support.mts';
 import {withDatabase} from '../../lib/db/index.mts';
-import type {Ticket} from '../../lib/model/index.mts';
 import {
   EdgeStore,
   FetchRequestStore,
@@ -15,28 +11,6 @@ import {
   TicketStore,
 } from '../../lib/stores/index.mts';
 import {Command} from './set.mts';
-
-async function tempEnv(): Promise<NodeJS.ProcessEnv> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-cmd-'));
-  return {DISPATCH_DB: path.join(dir, 'graph.db')};
-}
-
-function ticket(id: string, project: string): Ticket {
-  return {
-    id,
-    project,
-    url: `https://example.test/${id}`,
-    title: id,
-    status: 'available',
-    targetKind: 'pr',
-    requiresHuman: false,
-    injected: false,
-    priority: null,
-    branchHint: null,
-    labels: [],
-    updatedAt: null,
-  };
-}
 
 describe('milestone set', () => {
   it('records the milestone under its project', async () => {

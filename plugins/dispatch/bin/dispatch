@@ -13,9 +13,9 @@
 # Set DISPATCH_NODE to run against a specific Node binary. The wrapper's own
 # records honor DISPATCH_LOG_LEVEL (the CLI's --log-level flag is parsed later,
 # by the CLI itself). Set DISPATCH_ENTRY to run a different entry point through
-# the same version gate — e.g. the MCP server (`src/main.mts`) declared in
-# `.mcp.json`, which needs the floor check this wrapper exists to enforce but
-# does not itself live behind `dispatch <command>`.
+# the same version gate — the MCP server (`src/main.mts`) is one: `bin/dispatch-mcp`
+# sets it and execs this wrapper, so the server's spawn clears the same floor
+# without living behind `dispatch <command>`.
 
 set -euo pipefail
 

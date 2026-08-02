@@ -182,10 +182,15 @@ all three now arrive in the instruction or belong to the CLI.
 ## Plumbing
 
 `withDatabase(flags, env, fn)` in `lib/db` resolves the path (`--db`, then
-`DISPATCH_DB`, then `$XDG_STATE_HOME/dispatch/graph.db`), opens, and closes in a
-`finally` so no command leaves a lock for the next tick to wait out. A shared
+`DISPATCH_DB`, then `$XDG_STATE_HOME/dispatch/graph-v2.db`), opens, and closes in
+a `finally` so no command leaves a lock for the next tick to wait out. A shared
 `DB_OPTION` const gives every command the same flag. The server's drain opens its
 own short-lived handle; WAL is already on.
+
+The default filename is not `graph.db`: the legacy `dispatch graph …` CLI owns
+that file at a schema version of its own, and either tree refuses a file recorded
+at the other's version. They coexist under one directory until the legacy tree is
+retired.
 
 Two new stores beside the existing ones:
 

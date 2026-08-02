@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import path from 'node:path';
 import {describe, it} from 'node:test';
 
-import {runCommand} from '../../lib/command/test-support.mts';
+import {runCommand, tempEnv, ticket} from '../../lib/command/test-support.mts';
 import {withDatabase} from '../../lib/db/index.mts';
-import {ProjectStore} from '../../lib/stores/index.mts';
+import {
+  EdgeStore,
+  FetchRequestStore,
+  ProjectStore,
+  TicketStore,
+} from '../../lib/stores/index.mts';
 import {Command} from './rm.mts';
-
-async function tempEnv(): Promise<NodeJS.ProcessEnv> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-cmd-'));
-  return {DISPATCH_DB: path.join(dir, 'graph.db')};
-}
 
 describe('project rm', () => {
   it('removes an existing project', async () => {
@@ -36,5 +33,31 @@ describe('project rm', () => {
     const out = await runCommand(new Command(), {id: 'NOPE'}, env);
 
     assert.equal(out, 'removed project NOPE existed=false\n');
+  });
+
+  // Pins that the command calls `RefreshService.reconcile()`, not just its own
+  // store write. The fixture seeds a placeholder this call does not touch, so
+  // only the reconcile pass can turn it into a `fetch_ticket` request.
+  it('reconciles after writing, chasing a placeholder left by other state', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new ProjectStore(db).upsertProject({
+        id: 'P',
+        name: 'P',
+        source: 'linear',
+      });
+      await new TicketStore(db).upsertTicket(ticket('T1', 'P'));
+      await new EdgeStore(db).addEdge('GONE', 'T1');
+    });
+
+    await runCommand(new Command(), {id: 'NOPE'}, env);
+
+    const openTickets = await withDatabase(undefined, env, (db) =>
+      new FetchRequestStore(db).openTickets()
+    );
+    assert.deepEqual(
+      openTickets.map((request) => request.ticket),
+      ['GONE']
+    );
   });
 });

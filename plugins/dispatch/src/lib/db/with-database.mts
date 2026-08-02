@@ -13,7 +13,7 @@ import {Database} from './database.mts';
 export const DB_OPTION = {
   type: 'string',
   description:
-    'Graph database path. Defaults to $DISPATCH_DB, else $XDG_STATE_HOME/dispatch/graph.db.',
+    'Graph database path. Defaults to $DISPATCH_DB, else $XDG_STATE_HOME/dispatch/graph-v2.db.',
   positional: false,
   required: false,
 } as const satisfies Option;
@@ -29,7 +29,11 @@ export function resolveDbPath(
     env.XDG_STATE_HOME !== undefined && env.XDG_STATE_HOME !== ''
       ? env.XDG_STATE_HOME
       : join(homedir(), '.local', 'state');
-  return join(state, 'dispatch', 'graph.db');
+  // `graph-v2.db`, not `graph.db`: the legacy `dispatch graph …` CLI owns
+  // `graph.db` under this same directory at a schema version of its own, and
+  // both trees refuse to open a file whose recorded version is not theirs.
+  // The suffix names the CLI generation, not the schema version.
+  return join(state, 'dispatch', 'graph-v2.db');
 }
 
 /**

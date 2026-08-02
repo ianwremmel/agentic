@@ -69,6 +69,36 @@ describe('FetchRequestStore', () => {
     await db.close();
   });
 
+  it('redeliver re-offers unresolved rows of one source and leaves resolved ones settled', async () => {
+    const {db, store} = await fresh();
+    const open = await store.enqueueTicket({
+      source: 'linear',
+      ticket: 'A',
+      at: AT,
+    });
+    const done = await store.enqueueTicket({
+      source: 'linear',
+      ticket: 'B',
+      at: AT,
+    });
+    await store.enqueueTicket({source: 'jira', ticket: 'C', at: AT});
+    for (const request of await store.undelivered()) {
+      await store.markDelivered(request.id, AT);
+    }
+    // eslint-disable-next-line @typescript-eslint/non-nullable-type-assertion-style
+    await store.resolve(done as number, 'materialized');
+
+    assert.equal(await store.redeliver('linear'), 1);
+
+    // Only linear's outstanding row comes back: a resolved request is answered
+    // work, and another source's queue belongs to another refresh.
+    assert.deepEqual(
+      (await store.undelivered()).map((request) => request.id),
+      [open]
+    );
+    await db.close();
+  });
+
   it('openTickets lists only unresolved ticket requests', async () => {
     const {db, store} = await fresh();
     await store.enqueueScan({

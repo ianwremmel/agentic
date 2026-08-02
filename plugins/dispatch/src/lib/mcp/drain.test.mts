@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import path from 'node:path';
 import {describe, it} from 'node:test';
 
+import {tempEnv} from '../command/test-support.mts';
 import {withDatabase} from '../db/index.mts';
 import {RefreshService} from '../refresh/index.mts';
 import {FetchRequestStore} from '../stores/index.mts';
@@ -13,11 +11,6 @@ import {drainInstructions} from './drain.mts';
 interface Notification {
   method: string;
   params: {content: string; meta: Record<string, string>};
-}
-
-async function tempEnv(): Promise<NodeJS.ProcessEnv> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-drain-'));
-  return {DISPATCH_DB: path.join(dir, 'graph.db')};
 }
 
 describe('drainInstructions', () => {

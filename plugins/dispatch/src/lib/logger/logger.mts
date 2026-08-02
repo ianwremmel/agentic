@@ -3,7 +3,14 @@ export type LogMethod = (
   meta?: Record<string, unknown>
 ) => void;
 
-const LEVELS = ['error', 'warn', 'info', 'debug', 'trace', 'log'] as const;
+export const LEVELS = [
+  'error',
+  'warn',
+  'info',
+  'debug',
+  'trace',
+  'log',
+] as const;
 
 export type CoreLogger = Record<(typeof LEVELS)[number], LogMethod>;
 

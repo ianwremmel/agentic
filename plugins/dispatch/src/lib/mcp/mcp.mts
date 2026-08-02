@@ -3,8 +3,8 @@ import readline from 'node:readline';
 import type {Readable, Writable} from 'node:stream';
 
 import type {CommandNode} from '../command/index.mts';
-import {createLogger} from '../logger/index.mts';
-import type {CoreLogger, Logger} from '../logger/index.mts';
+import {createLogger, streamSink} from '../logger/index.mts';
+import type {Logger} from '../logger/index.mts';
 import {buildTools} from './tools.mts';
 import type {BuiltTools} from './tools.mts';
 import {callTool} from './dispatch.mts';
@@ -36,7 +36,6 @@ async function serverInfo(): Promise<{name: string; version: string}> {
     return {name: 'dispatch', version: '0.0.0'};
   }
 }
-const LEVELS = ['error', 'warn', 'info', 'debug', 'trace', 'log'] as const;
 
 interface JsonRpcRequest {
   jsonrpc?: string;
@@ -68,7 +67,7 @@ export async function runMcpServer(opts: {
   const ctx: RequestContext = {
     tools: buildTools(opts.tree),
     env: opts.env,
-    log: createLogger(stderrSink(opts.stderr)),
+    log: createLogger(streamSink(opts.stderr)),
     serverInfo: await serverInfo(),
   };
 
@@ -200,18 +199,4 @@ function errorResponse(
     id,
     error: {code: error.code, message: error.message},
   };
-}
-
-/** A logger sink that writes each message as a line to a stream (stderr). */
-function stderrSink(stderr: Writable): CoreLogger {
-  const write = (message: string, meta?: Record<string, unknown>) => {
-    stderr.write(
-      meta === undefined
-        ? `${message}\n`
-        : `${message} ${JSON.stringify(meta)}\n`
-    );
-  };
-  const sink = {} as CoreLogger;
-  for (const level of LEVELS) sink[level] = write;
-  return sink;
 }

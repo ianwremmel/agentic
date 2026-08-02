@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
+import type {Database} from './database.mts';
 import {resolveDbPath, withDatabase} from './with-database.mts';
 
 describe('resolveDbPath', () => {
@@ -27,15 +28,18 @@ describe('withDatabase', () => {
   it('closes the handle even when the body throws', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-db-'));
     const file = path.join(dir, 'graph.db');
+
+    let captured: Database | undefined;
     await assert.rejects(
-      withDatabase(file, {}, () => {
+      withDatabase(file, {}, (db) => {
+        captured = db;
         throw new Error('boom');
       })
     );
-    // A leaked handle would leave the file locked for the next opener.
-    const rows = await withDatabase(file, {}, (db) =>
-      db.all('SELECT 1 AS one')
-    );
-    assert.equal(rows.length, 1);
+
+    assert(captured !== undefined);
+    const db = captured;
+    // A closed handle cannot prepare a statement; a leaked one would answer.
+    assert.throws(() => db.all('SELECT 1 AS one'));
   });
 });

@@ -34,8 +34,9 @@ Plugins currently published:
   hardcoding one; `tracker-adapter-linear` ships bundled. Its `land` skill is
   the standalone single-PR path — stateless, started from a PR URL, a ticket
   URL, or a prompt — beside `deliver`, which is the one `work-ticket`
-  dispatches. `land` began as a copy of `deliver`; they are meant to converge,
-  so a fix to either usually belongs in both.
+  dispatches. `land` began as a copy of `deliver` and is expected to
+  diverge from it: `deliver` serves the more complex orchestration skills,
+  `land` stands alone. Don't assume a fix to one belongs in the other.
 
 Skills, agents, and hooks are being migrated from another repo. For now the
 subdirectories exist as scaffolding only.

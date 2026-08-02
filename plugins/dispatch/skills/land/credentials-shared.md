@@ -1,7 +1,7 @@
 # land — shared credentials
 
-The agent posts with the operator's own account (`credential_mode: shared`), so
-`operator_login` is also the authenticated account. Three consequences: readers
+The agent posts with the operator's own account, so `operator_login` is also the
+authenticated account. Three consequences: readers
 can't tell agent posts from the operator's by author; a review request can never
 target the operator; and the operator can only leave `commented` reviews on this
 PR, never `approved` or `changes_requested`. GitHub refuses all three on your
@@ -9,24 +9,8 @@ own PR.
 
 ## Wire format
 
-Because author alone can't identify an agent post here, every one carries the
-machine marker ([wire format](./reference.md#wire-format)) **and** wraps its
-body in a sparkle block:
-
-```text
-<!-- agent-reply:<agent-id> -->
-✨
-
-{body}
-
-✨
-```
-
-The sparkle (U+2728) sits alone on its line, one blank line in from the body on
-each side.
-
-**A terminal token goes after the closing sparkle**, as the last non-empty line
-of the whole comment:
+Author alone can't identify an agent post here, so the body inside the marker
+([wire format](./reference.md#wire-format)) is wrapped in a sparkle block:
 
 ```text
 <!-- agent-reply:<agent-id> -->
@@ -39,10 +23,12 @@ Fixed in abc1234.
 Done.
 ```
 
-`pr-status` reads the last non-empty line of the body and nothing else, so a
-token placed inside the block is never seen — the closing sparkle is the last
-line, and the item stays actionable forever. Reactions are unaffected. A
-sentinel is matched wherever it sits, so it may stay inside the block.
+The sparkle (U+2728) sits alone on its line, one blank line in from the body on
+each side. **A terminal token goes after the closing sparkle**, as shown:
+`pr-status` reads the last non-empty line and nothing else, so a token inside
+the block is never seen — the closing sparkle is that line — and the item stays
+actionable forever. Reactions are unaffected, and a sentinel is matched wherever
+it sits, so it may stay inside the block.
 
 ## Operator notification
 

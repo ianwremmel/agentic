@@ -1,8 +1,8 @@
 # land — solo operator mode
 
-The operator is the only human in the loop (`operator_mode: solo`): after
-Copilot review (where available), the agent clears draft and engages the
-operator as the public reviewer.
+The operator is the only human in the loop: after Copilot review (where
+available), the agent clears draft and engages the operator as the public
+reviewer.
 
 ## Gates 6–7 in solo
 

@@ -1,15 +1,16 @@
 # land — team operator mode
 
-The operator directs the agent but is one of several humans
-(`operator_mode: team`). Review happens in two stages. First the operator
-reviews alone, while the PR is still a draft. Then the operator — never the
-agent — clears draft, and the rest of the team reviews, with the operator
-**excluded** from that second set. The team stage is a plain review request,
-not an engagement.
+The operator directs the agent but is one of several humans. Review happens in
+two stages. First the operator reviews alone, while the PR is still a draft.
+Then the operator — never the agent — clears draft, and the rest of the team
+reviews. The team stage is a plain review request, not an engagement.
 
 ## Gates 6–7 in team
 
-- **Gate 6 (operator-approved)** is satisfied during `private_review_*`.
+- **Gate 6 (operator-approved)** is satisfied during `private_review_*`. The
+  operator clearing draft counts: it is theirs alone to do here, so
+  `<terminal state>` moving off `draft` is an approval signal in its own right.
+  A `+1` on the engagement comment and an `approved` review count too.
 - **Gate 7 (team-approved)** is satisfied during `public_review_*`: at least
   one `<review mode="human" role="team" state="approved">` from a non-self,
   non-operator reviewer and no current `changes_requested`.
@@ -19,10 +20,8 @@ not an engagement.
 The agent **never** clears draft. After Gate 6, poll until the PR is no longer
 a draft (reviewer cadence), then proceed to `ready_for_public_review`.
 
-*Early clear.* If the operator clears draft **before** Gate 6 is satisfied,
-draft-clear alone is not approval — stay in `private_review_*` and keep
-awaiting the operator's Gate 6 signal (re-engage if needed). Advance only once
-Gate 6 holds; the draft is already clear.
+Draft clearing before any other Gate 6 signal arrives is itself that signal —
+take it and move to `ready_for_public_review`.
 
 ## Lifecycle
 

@@ -19,9 +19,7 @@ any of them:
 - The operator is `${user_config.operator_login}`.
 - The operator mode is `${user_config.operator_mode}`.
 - The credential mode is `${user_config.credential_mode}`.
-- Copilot review available: `${user_config.copilot_available}`. When `false`,
-  skip the Copilot review stage; your operator-mode file has the edge that
-  leaves `draft` without it.
+- Copilot review available: `${user_config.copilot_available}`.
 - The worktree base is `${user_config.worktree_base}`.
 
 Before any other work, read these two files — and only these variants, not the
@@ -40,13 +38,17 @@ operator to set `operator_mode` (`solo` or `team`) and `credential_mode`
 
 One run drives exactly one PR. Resolve the input before Setup:
 
-- **PR URL or number** — that PR, via the Resume path in Setup. The brief is its
-  body plus its plan comment; a ticket link in the body makes the run
-  ticket-backed. The snapshot carries neither, so read them from the API once,
-  here at intake.
-- **Ticket URL or bare id** — no PR yet. The ticket is the brief and the run is
+- **PR URL or number** — that PR. The brief is its body plus its plan comment;
+  a ticket link in the body makes the run ticket-backed. The snapshot carries
+  neither, so read them from the API once, here at intake.
+- **Ticket URL or bare id** — the ticket is the brief and the run is
   ticket-backed ([`ticket.md`](./ticket.md)).
-- **Freeform prompt** — no PR, no ticket. The prompt is the brief.
+- **Freeform prompt** — no ticket. The prompt is the brief.
+
+Then run `pr-status` once, before Setup, to establish where the PR already
+stands. **Never assume there is no PR.** A ticket or a prompt can name work a
+killed session already opened one for, so look for it — by the ticket's linked
+PRs and by the branch — and take Setup's Resume path if one exists.
 
 Gates, lifecycle, and ending are the same for all three. A ticket-backed run
 also keeps the ticket's role in sync and claims it before the first push; a run
@@ -75,9 +77,11 @@ brief is too thin to tell when the change is done. Never invent scope.
 
 ## Gates
 
-Seven binary signals. Gates 1-5 are read from each `pr-status` XML; gates 6
-and 7 are review outcomes, and may arrive somewhere the XML can't show (see
-your credentials file):
+Seven binary signals, all read from the `pr-status` XML. Gates 6 and 7 have XML
+signals like the rest — an `approved` review, a `+1` reaction on the engagement
+comment, `<terminal state>` leaving `draft` — and your credentials and
+operator-mode files name which ones count here. Only an approval given on the
+ticket or out of band is invisible to the snapshot:
 
 1. **CI** — `<checks state="passing">` (rollup treats neutral/success as
    passing; repo can suppress non-blocking checks via `informational="true"`).

@@ -28,10 +28,11 @@ All four forms exist here; any one satisfies the gate:
 
 ## Review rules
 
-GitHub may refuse a Copilot review request from a bot account. Check this repo's
-`CLAUDE.md`, `AGENTS.md`, and docs for the workaround — usually a second GitHub
-token in an environment variable to request with — and use what they name.
+GitHub may refuse a Copilot review request from a bot account. **Before**
+requesting, check this repo's `CLAUDE.md`, `AGENTS.md`, and docs for a
+workaround token — usually a second GitHub token in an environment variable —
+and request with what they name.
 
-With no such credential available, log `ERROR`, post a PR comment saying the
-request was refused, and take your operator-mode file's *Copilot unavailable*
-branch. A refused Copilot request is not a `BLOCK`.
+If none is named, or the request is refused anyway, log `ERROR`, post a PR
+comment saying it was refused, and take your operator-mode file's *Copilot
+unavailable* branch. A refused Copilot request is not a `BLOCK`.

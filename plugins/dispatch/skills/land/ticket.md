@@ -24,9 +24,9 @@ Speak these role names, never a tracker's own state names.
 | `canceled`    | Will not be done.                                |
 
 Forward path — `available → in-progress → in-review → delivered`. Never invent
-a native state or emit a transition to a role the tracker can't express: with
-no `delivered` state the ticket stops at `in-review` when the PR ships — say so
-and let the operator close it.
+a native state. When the tracker can't express the target role, stop at the
+last role it can — no `delivered` state means the ticket stays `in-review` when
+the PR ships — then say so and let the operator close it.
 
 ## Transitions
 
@@ -53,9 +53,9 @@ Steps 1–3 run before the first push:
 1. Resolve the current role and act on it:
    - `available` — claimable; continue.
    - `in-progress` or `in-review` assigned to **you** — a resumed run. Skip
-     steps 2–3; don't re-emit the transition.
-   - `in-progress` or `in-review` **unassigned** — claimable; continue with
-     steps 2–3 but don't emit the transition, it is already there.
+     steps 2–3.
+   - `in-progress` or `in-review` **unassigned** — claimable; do step 2, skip
+     step 3.
    - `in-progress` or `in-review` assigned to **anyone else** — they are on it.
      Report and stop.
    - anything else, including a native state that maps to no role — not

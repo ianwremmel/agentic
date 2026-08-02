@@ -65,10 +65,10 @@ brief is too thin to tell when the change is done. Never invent scope.
    - Push; open a **draft** PR. Body: Motivation, and the ticket link when
      there is one (full URL, never a bare id). **No execution plan in the
      body.**
-   - Post the plan as a top-level comment with `<!-- agent-plan:<agent-id> -->`
-     inside the wire-format body, on its own line and never first — the marker
-     is first (see [`reference.md`](./reference.md#wire-format)). Pin if
-     supported.
+   - Post the plan as a top-level comment in the wire-format body. Put
+     `<!-- agent-plan:<agent-id> -->` on its own line, after the machine marker
+     (which stays first — see
+     [`reference.md`](./reference.md#wire-format)). Pin if supported.
 3. **Resume.** PR exists → reuse worktree, skip the open sequence, find the plan
    comment by its `agent-plan` marker (post one if missing). Never open a second
    PR or rewrite the body.

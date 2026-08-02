@@ -1,6 +1,7 @@
 import {createLogger} from '../logger/index.mts';
 import type {CoreLogger} from '../logger/index.mts';
 import type {AbstractCommand} from './abstract-command.mts';
+import {assertEnv} from './env.mts';
 import {parseOptions} from './parse.mts';
 
 /* eslint-disable @typescript-eslint/no-empty-function --
@@ -19,6 +20,9 @@ const SILENT: CoreLogger = {
  * Run a command the way a transport would, and return what it wrote to `io`.
  * `raw` goes through `parseOptions`, so defaults and `choices` apply exactly as
  * they would from argv or JSON — pass every value as a string except booleans.
+ * Also runs `assertEnv` before `run`, matching both real transports (the cli
+ * and the MCP server), so a command that declares required `env` fails here
+ * the same way it would in production.
  */
 export async function runCommand(
   command: AbstractCommand,
@@ -26,6 +30,7 @@ export async function runCommand(
   env: NodeJS.ProcessEnv
 ): Promise<string> {
   const parsed = parseOptions(command.options, raw);
+  assertEnv(command.env, env);
   let captured = '';
   await command.run(parsed, {
     log: createLogger(SILENT),

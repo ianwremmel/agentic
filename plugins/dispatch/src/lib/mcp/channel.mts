@@ -25,7 +25,12 @@ export class ChannelWriter {
       if (value === null) continue;
       if (key === 'source' || key === 'kind' || key === 'seq') continue;
       if (!META_KEY.test(key)) continue;
-      params[key] = value;
+      // `meta` is typed `string | null`, but a caller's payload passed through
+      // JSON.parse behind an unchecked cast (`ScanPayload`/`TicketPayload`), so
+      // a numeric or boolean field can reach here as its native type despite
+      // what the type checker believes at this point.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion
+      params[key] = String(value);
     }
     this.#emit({
       jsonrpc: '2.0',

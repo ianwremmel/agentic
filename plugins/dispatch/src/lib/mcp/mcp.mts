@@ -82,7 +82,27 @@ export async function runMcpServer(opts: {
     const {response, ranTool} = await handleLine(line, ctx);
     if (response !== undefined)
       opts.stdout.write(`${JSON.stringify(response)}\n`);
-    if (ranTool) await drainInstructions(channel, opts.env);
+    if (ranTool) await drainQuietly(channel, ctx);
+  }
+}
+
+/**
+ * A drain failure (an unwritable state dir, a locked file, a schema-version
+ * mismatch after an upgrade) must not take the read loop down with it — the
+ * graph is a rebuildable cache, and stdout is the JSON-RPC channel, so the
+ * failure goes to stderr and the undelivered rows stay undelivered for the
+ * next tool call to retry.
+ */
+async function drainQuietly(
+  channel: ChannelWriter,
+  ctx: RequestContext
+): Promise<void> {
+  try {
+    await drainInstructions(channel, ctx.env);
+  } catch (error) {
+    ctx.log.error('channel drain failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

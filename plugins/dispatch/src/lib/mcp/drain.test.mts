@@ -46,7 +46,11 @@ describe('drainInstructions', () => {
     assert.equal(first.method, 'notifications/claude/channel');
     assert.equal(first.params.meta.kind, 'scan_project');
     assert.equal(first.params.meta.seq, '1');
-    assert.equal(first.params.meta.source, undefined);
+    assert.match(first.params.content, /\bP\b/);
+    assert.match(
+      first.params.content,
+      /dispatch refresh done --tracker linear/
+    );
   });
 
   it('pushes the completion event exactly once', async () => {
@@ -118,5 +122,7 @@ describe('drainInstructions', () => {
     assert.ok(first);
     assert.equal(first.params.meta.kind, 'fetch_ticket');
     assert.equal(first.params.meta.ticket, 'ENG-42');
+    assert.match(first.params.content, /ENG-42/);
+    assert.match(first.params.content, /dispatch ticket missing --id ENG-42/);
   });
 });

@@ -28,6 +28,26 @@ describe('ChannelWriter', () => {
     assert.equal(meta.source, undefined);
   });
 
+  it('stringifies a meta value that arrives as a non-string despite the declared type', () => {
+    const sent: Notification[] = [];
+    const channel = new ChannelWriter((payload) =>
+      sent.push(payload as Notification)
+    );
+
+    // `push`'s declared type is `string | null`, but a caller's payload comes
+    // from JSON.parse behind an unchecked cast, so a number can reach here at
+    // runtime — simulated with a cast past the type checker, the same way that
+    // caller would bypass it.
+    const meta = {ticket: 42} as unknown as Readonly<
+      Record<string, string | null>
+    >;
+    channel.push('fetch_ticket', meta, 'body');
+
+    const [first] = sent;
+    assert.ok(first);
+    assert.equal(first.params.meta.ticket, '42');
+  });
+
   it('increases seq across successive pushes and never repeats it', () => {
     const sent: Notification[] = [];
     const channel = new ChannelWriter((payload) =>

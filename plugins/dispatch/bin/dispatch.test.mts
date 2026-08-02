@@ -12,6 +12,45 @@ describe('bin/dispatch node preflight', () => {
     assert.equal(stdout, 'hello World\n');
   });
 
+  it('honors DISPATCH_ENTRY, running an alternate entry point through the same wrapper', async () => {
+    // .mcp.json points the MCP server here so its spawn goes through the same
+    // node floor check as the legacy `cli/` tree, rather than a second,
+    // unchecked entry path. `mcp` exists only as a command in `src/commands`,
+    // not in the legacy `cli/commands` tree, so it distinguishes which tree
+    // actually ran rather than asserting on output the two trees share.
+    const entry = path.join(import.meta.dirname, '..', 'src', 'main.mts');
+
+    const legacy = await runDispatch(['mcp'], {input: ''});
+    assert.notEqual(legacy.code, 0, 'the legacy tree has no `mcp` command');
+
+    const {code, stderr} = await runDispatch(['mcp'], {
+      env: {DISPATCH_ENTRY: entry},
+      input: '',
+    });
+
+    assert.equal(code, 0, stderr);
+  });
+
+  it('still enforces the node floor when DISPATCH_ENTRY points elsewhere', async () => {
+    const dir = await fakeNodeDir('v20.11.0');
+    const entry = path.join(import.meta.dirname, '..', 'src', 'main.mts');
+
+    const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
+      env: {
+        PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`,
+        DISPATCH_ENTRY: entry,
+      },
+    });
+
+    assert.equal(
+      stdout,
+      '',
+      'a rejected node must not run the alternate entry'
+    );
+    assert.notEqual(code, 0);
+    assert.match(stderr, /too old/u);
+  });
+
   it('refuses a node older than the minimum, naming the version it found', async () => {
     const dir = await fakeNodeDir('v20.11.0');
 

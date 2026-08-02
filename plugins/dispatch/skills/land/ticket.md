@@ -62,8 +62,9 @@ Steps 1–3 run before the first push:
      claimable. Report and stop; moving it is the operator's call.
 2. Assign the ticket to yourself.
 3. Emit `available → in-progress`.
-4. Once the PR exists, comment its URL on the ticket, and put the ticket's full
-   URL (never a bare id) in the PR body.
+4. Once the PR exists, comment its URL on the ticket unless it is already
+   there, and put the ticket's full URL (never a bare id) in the PR body. This
+   step runs on a resumed run too, which is why it checks first.
 
 ## Linear bindings
 

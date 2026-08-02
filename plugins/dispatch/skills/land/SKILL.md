@@ -5,8 +5,8 @@ description: Take a single pull request to completion — draft it, drive CI and
 
 # land
 
-Land a code change via a PR. Each tick: run `pr-status <pr>`, address every
-actionable concern, then evaluate the gates to decide whether to transition.
+Each tick: run `pr-status <pr>`, address every actionable concern, then
+evaluate the gates to decide whether to transition.
 
 **Operator** = the one human directing this agent; the only human with stop
 authority. Role glossary in [`reference.md`](./reference.md#roles).
@@ -202,7 +202,7 @@ is invoked directly or dispatched as a subagent.
 
 For waits past the Bash timeout (~10 min), split into shorter intervals (a
 30-min wait ≈ 5×6-min `sleep`s, each followed by a cheap `pr-status` check).
-The table is an upper bound; re-checking sooner is fine.
+The table is an upper bound; re-checking sooner is fine, never under a minute.
 
 **Forbidden** (each has stranded a PR):
 

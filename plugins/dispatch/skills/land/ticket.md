@@ -25,8 +25,8 @@ Speak these role names, never a tracker's own state names.
 
 Forward path — `available → in-progress → in-review → delivered`. Never invent
 a native state. When the tracker can't express the target role, stop at the
-last role it can — no `delivered` state means the ticket stays `in-review` when
-the PR ships — then say so and let the operator close it.
+last role it can, say so, and let the operator close it: with no `delivered`
+state, the ticket stays `in-review` when the PR ships.
 
 ## Transitions
 
@@ -61,7 +61,7 @@ Steps 1–3 run before the first push:
    - anything else, including a native state that maps to no role — not
      claimable. Report and stop; moving it is the operator's call.
 2. Assign the ticket to yourself.
-3. Emit `available → in-progress`.
+3. Transition the ticket `available → in-progress`.
 4. Once the PR exists, comment its URL on the ticket unless it is already
    there, and put the ticket's full URL (never a bare id) in the PR body.
 

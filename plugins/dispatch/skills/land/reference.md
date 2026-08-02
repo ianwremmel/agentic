@@ -76,12 +76,11 @@ item — don't rely on it, and don't add to this set:
 engagement is two parts:
 
 1. **Notification** — the venue your credentials file prescribes.
-2. **Engagement comment** — a top-level PR comment carrying the
-   `<!-- agent-reply:<agent-id> -->` marker AND, inside the body (after the
-   alone on its own line at the end of the body, an engagement sentinel
-   `<!-- agent-engagement:<agent-id> -->`. Posted in both
-   credential modes (the notification venues aren't PR comments the operator
-   can react to). It anchors reaction-/reply-based Gate 6 signals.
+2. **Engagement comment** — a top-level PR comment with the
+   `<!-- agent-reply:<agent-id> -->` marker on its first line and the
+   engagement sentinel `<!-- agent-engagement:<agent-id> -->` alone on the last
+   line of the body. Post it in both credential modes; it anchors the reaction-
+   and reply-based Gate 6 signals.
 
 The sentinel makes the comment classify **non-actionable** (like the plan
 comment) — without it, the agent's own soliciting comment stays actionable

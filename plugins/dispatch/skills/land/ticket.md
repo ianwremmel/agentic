@@ -30,8 +30,6 @@ and let the operator close it.
 
 ## Transitions
 
-Each is bound to a PR lifecycle edge:
-
 | Ticket edge               | Fires when                                                             |
 | ------------------------- | ---------------------------------------------------------------------- |
 | `available → in-progress` | Claiming, before the first push (below).                               |
@@ -63,8 +61,7 @@ Steps 1–3 run before the first push:
 2. Assign the ticket to yourself.
 3. Emit `available → in-progress`.
 4. Once the PR exists, comment its URL on the ticket unless it is already
-   there, and put the ticket's full URL (never a bare id) in the PR body. This
-   step runs on a resumed run too, which is why it checks first.
+   there, and put the ticket's full URL (never a bare id) in the PR body.
 
 ## Linear bindings
 
@@ -89,9 +86,8 @@ Match `list_issue_statuses(team)` names case-insensitively:
 | Done            | `verified`    |
 | Canceled        | `canceled`    |
 
-`Delivered` is a custom substate; a team without it leaves the ticket at
-`In Review` on ship. A substate this table doesn't name is an escalation, not a
-guess — a team's custom `Blocked` sits in Linear's `Unstarted` group and is not
-`available`.
+`Delivered` is a custom substate. A substate this table doesn't name maps to no role: ask the
+operator. A team's custom `Blocked` sits in Linear's `Unstarted` group and is
+not `available`.
 
 Read the ticket's team before writing a state; substates are per-team.

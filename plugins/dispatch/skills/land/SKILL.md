@@ -24,8 +24,7 @@ any of them:
   leaves `draft` without it.
 - The worktree base is `${user_config.worktree_base}`.
 
-Before any other work, read the two files for this environment — and only
-these two; the other mode files describe environments you are not in:
+Before any other work, read only these two files:
 
 - `mode-${user_config.operator_mode}.md` — the lifecycle, states, and review
   gates for this operator mode.
@@ -38,8 +37,7 @@ operator to set `operator_mode` (`solo` or `team`) and `credential_mode`
 
 ## Intake
 
-One run drives exactly one PR to completion. The input arrives in one of
-three forms; resolve it before Setup:
+One run drives exactly one PR. Resolve the input before Setup:
 
 - **PR URL or number** — that PR, via the Resume path in Setup. The brief is its
   body plus its plan comment; a ticket link in the body makes the run
@@ -126,7 +124,7 @@ call a change delivered on any signal other than this attribute.
 files it writes** — never from `gh pr view`, `gh pr checks`, `gh api
 …/comments|/reviews`, or an MCP PR read. Read full text from the cache. Direct
 reads are allowed only for a field the snapshot omits: a thread's file and line,
-the PR body at intake. `gh` and MCP are otherwise for **writes** — reply, react,
+and the PR body and plan comment at intake. `gh` and MCP are otherwise for **writes** — reply, react,
 request review, mark ready.
 
 A review still being drafted is invisible here by design. Don't chase it; wait

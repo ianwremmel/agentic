@@ -9,3 +9,5 @@ Low-level SQLite: the connection and the schema. No domain knowledge lives here.
   a rebuildable cache, so a version mismatch is refused rather than migrated.
 - `time.mts` — `nowIso` and `assertInstant` (RFC 3339 validation). Timestamps are
   TEXT ISO-8601 UTC.
+- `with-database.mts` — `withDatabase` (open/close around a command body),
+  `resolveDbPath` (flag → `DISPATCH_DB` → XDG), and the shared `DB_OPTION`.

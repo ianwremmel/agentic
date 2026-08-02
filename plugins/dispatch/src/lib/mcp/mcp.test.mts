@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import {mkdtemp} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 import {Readable, Writable} from 'node:stream';
 import {describe, it} from 'node:test';
 
@@ -24,6 +27,7 @@ const nullStream = () =>
 
 interface RpcResult {
   protocolVersion?: string;
+  capabilities?: {experimental?: Record<string, unknown>};
   tools?: {name: string}[];
   content?: {type: string; text: string}[];
   isError?: boolean;
@@ -31,15 +35,17 @@ interface RpcResult {
 
 interface RpcLine {
   jsonrpc: string;
-  id: number | string | null;
+  id?: number | string | null;
   result?: RpcResult;
   error?: {code: number; message: string};
 }
 
 async function serve(
   stdin: Readable,
-  env: NodeJS.ProcessEnv = {}
+  env?: NodeJS.ProcessEnv
 ): Promise<RpcLine[]> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-mcp-'));
+  const resolved = {DISPATCH_DB: path.join(dir, 'graph.db'), ...env};
   const chunks: string[] = [];
   const stdout = new Writable({
     write(chunk, _encoding, callback) {
@@ -52,7 +58,7 @@ async function serve(
     stdin,
     stdout,
     stderr: nullStream(),
-    env,
+    env: resolved,
   });
   return chunks
     .join('')
@@ -88,7 +94,7 @@ describe('runMcpServer', () => {
         },
       ])
     );
-    const [reply] = res;
+    const [reply] = res.filter((line) => line.id !== undefined);
     assert.ok(reply);
     const content = reply.result?.content;
     assert.ok(content);
@@ -107,7 +113,7 @@ describe('runMcpServer', () => {
         },
       ])
     );
-    const [reply] = res;
+    const [reply] = res.filter((line) => line.id !== undefined);
     assert.ok(reply);
     assert.equal(reply.result?.isError, true);
     assert.equal(reply.error, undefined);
@@ -124,7 +130,7 @@ describe('runMcpServer', () => {
         },
       ])
     );
-    const [reply] = res;
+    const [reply] = res.filter((line) => line.id !== undefined);
     assert.ok(reply);
     assert.equal(reply.result?.isError, true);
     const content = reply.result.content;
@@ -145,7 +151,7 @@ describe('runMcpServer', () => {
         {jsonrpc: '2.0', id: 9, method: 'tools/call', params: {name: 'nope'}},
       ])
     );
-    const [reply] = res;
+    const [reply] = res.filter((line) => line.id !== undefined);
     assert.ok(reply);
     assert.equal(reply.error?.code, -32602);
   });
@@ -183,5 +189,16 @@ describe('runMcpServer', () => {
       feed([{jsonrpc: '2.0', method: 'notifications/initialized'}])
     );
     assert.equal(res.length, 0);
+  });
+
+  it('advertises the channel capability in initialize', async () => {
+    const res = await serve(
+      feed([{jsonrpc: '2.0', id: 1, method: 'initialize', params: {}}])
+    );
+    const [init] = res;
+    assert.ok(init);
+    assert.ok(
+      init.result?.capabilities?.experimental?.['claude/channel'] !== undefined
+    );
   });
 });

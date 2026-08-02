@@ -9,6 +9,8 @@ import {buildTools} from './tools.mts';
 import type {BuiltTools} from './tools.mts';
 import {callTool} from './dispatch.mts';
 import {JsonRpcError} from '../errors/index.mts';
+import {ChannelWriter} from './channel.mts';
+import {drainInstructions} from './drain.mts';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -50,6 +52,11 @@ interface RequestContext {
   readonly serverInfo: {name: string; version: string};
 }
 
+interface Handled {
+  readonly response: unknown;
+  readonly ranTool: boolean;
+}
+
 /** Serve MCP over newline-delimited JSON-RPC 2.0 on stdin/stdout until stdin closes. */
 export async function runMcpServer(opts: {
   tree: CommandNode;
@@ -65,22 +72,32 @@ export async function runMcpServer(opts: {
     serverInfo: await serverInfo(),
   };
 
+  const channel = new ChannelWriter((payload) => {
+    opts.stdout.write(`${JSON.stringify(payload)}\n`);
+  });
+
   const rl = readline.createInterface({input: opts.stdin, crlfDelay: Infinity});
   for await (const line of rl) {
     if (line.trim() === '') continue;
-    const response = await handleLine(line, ctx);
+    const {response, ranTool} = await handleLine(line, ctx);
     if (response !== undefined)
       opts.stdout.write(`${JSON.stringify(response)}\n`);
+    if (ranTool) await drainInstructions(channel, opts.env);
   }
 }
 
-async function handleLine(line: string, ctx: RequestContext): Promise<unknown> {
+async function handleLine(line: string, ctx: RequestContext): Promise<Handled> {
   let request: JsonRpcRequest;
   try {
     request = JSON.parse(line) as JsonRpcRequest;
   } catch {
-    return errorResponse(null, new JsonRpcError(-32700, 'parse error'));
+    return {
+      response: errorResponse(null, new JsonRpcError(-32700, 'parse error')),
+      ranTool: false,
+    };
   }
+
+  const ranTool = request.method === 'tools/call';
 
   // A notification is defined by the absence of `id`, not by the method it
   // names — an explicit `null` id is still a request per the current
@@ -96,7 +113,7 @@ async function handleLine(line: string, ctx: RequestContext): Promise<unknown> {
     } catch {
       // swallow: notifications get no response, even on failure
     }
-    return undefined;
+    return {response: undefined, ranTool};
   }
 
   const id = request.id ?? null;
@@ -105,13 +122,18 @@ async function handleLine(line: string, ctx: RequestContext): Promise<unknown> {
       throw new JsonRpcError(-32600, 'invalid request');
     }
     const result = await dispatch(request.method, request.params ?? {}, ctx);
-    return {jsonrpc: '2.0', id, result};
+    return {response: {jsonrpc: '2.0', id, result}, ranTool};
   } catch (error) {
-    if (error instanceof JsonRpcError) return errorResponse(id, error);
+    if (error instanceof JsonRpcError) {
+      return {response: errorResponse(id, error), ranTool};
+    }
     // A non-JsonRpcError from a handler must not kill the read loop for
     // later lines, so it becomes an internal-error response instead of a
     // rethrow.
-    return errorResponse(id, new JsonRpcError(-32603, 'internal error'));
+    return {
+      response: errorResponse(id, new JsonRpcError(-32603, 'internal error')),
+      ranTool,
+    };
   }
 }
 
@@ -124,7 +146,7 @@ async function dispatch(
     case 'initialize':
       return {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: {tools: {}},
+        capabilities: {tools: {}, experimental: {'claude/channel': {}}},
         serverInfo: ctx.serverInfo,
       };
     case 'notifications/initialized':

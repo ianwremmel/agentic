@@ -12,6 +12,8 @@ order to a worker agent.
 
 ## Scope
 
+Paths are relative to `plugins/dispatch/` unless they start with `docs/`.
+
 In: the derived read-model over the v2 schema, session registration and the
 probe/ack handshake, work-order emission (tickets, prompt PRs, milestone
 reviews, parking, failure alerts, completion), the worker-facing command
@@ -46,9 +48,10 @@ The v2 differences that reshape the SQL:
 - **Claim liveness is session liveness.** A claim is live while its session's
   heartbeat is fresh. Workers do not heartbeat; the server heartbeats its
   session row on its tick, and a dead server's claims go stale together.
-- **PRs are nodes.** A `pr` row with no `ticket_id` (origin `prompt` or
-  `adopted`) is dispatchable prompt work. A ticket-attached PR is that ticket's
-  implementation detail and is never dispatched on its own.
+- **PRs are nodes, and every PR item is dispatchable.** A bare `pr` row
+  (origin `prompt` or `adopted`) is prompt work; a ticket-attached one is a
+  unit of implementation its ticket-worker registered, blocking its ticket
+  until delivered. Both are handed to pr-workers by the scheduler.
 
 Classification keeps the legacy vocabulary — `verified`, `canceled`,
 `in-flight`, `dormant`, `blocked`, `human-blocked`, `available`, in that
@@ -120,15 +123,15 @@ The event catalog gains the work-order kinds:
 | kind                       | meta                   | body asks the session to                          |
 | -------------------------- | ---------------------- | ------------------------------------------------- |
 | `dispatch_ticket`          | `project`, `ticket`    | run a ticket-worker for the ticket (claim held)   |
-| `dispatch_pr`              | `pr`                   | run a prompt-worker for the bare PR / prompt item |
+| `dispatch_pr`              | `pr`, `ticket?`        | run a pr-worker for the PR item                   |
 | `perform_milestone_review` | `project`, `milestone` | run a milestone-reviewer (claim held)             |
 | `park_human_blocked`       | `project`, `ticket`    | park the ticket and post the human handoff        |
 | `alert_failure`            | `project`, `ticket`    | alert the operator on the ticket                  |
 | `project_complete`         | `project`              | announce completion and stop                      |
 
 `dispatch_pr` is new: the spec's catalog folded injected PRs into
-`dispatch_ticket`, but a bare PR has no ticket id and its worker needs no
-tracker; a distinct kind keeps both prompts honest.
+`dispatch_ticket`, but a PR item is implementation work, not coordination —
+a distinct kind keeps both prompts honest.
 
 ## Worker commands
 
@@ -153,16 +156,21 @@ Worker behavior moves from skills to **agent files** under
 `plugins/dispatch/agents/`, dispatched as background subagents by the
 orchestrate session:
 
-- `ticket-worker` — one ticket end-to-end: claim context arrives in the
-  dispatch; it loads `tracker-adapter-<id>` for the brief and role transitions,
-  decomposes when the brief demands it (writing subtasks through the flat
-  commands), drives each PR with the `land` skill, verifies aims, and records
-  the outcome. Replaces `work-ticket` + `deliver`.
-- `prompt-worker` — one bare PR or prompt item: drives it with `land`, records
-  the outcome. No tracker.
+- `ticket-worker` — one ticket's **coordination**, never its implementation:
+  it loads `tracker-adapter-<id>` for the brief and status transitions, then
+  either decomposes into subtasks or registers the ticket's PR work as PR
+  items (`pr set --ticket` plus a blocking edge per item) and reports
+  `decomposed` — the scheduler dispatches each item to a pr-worker as compute
+  frees up. When the children resolve it returns on the `finalize` pass to
+  verify the aims against the landed code and close the ticket. Replaces
+  `work-ticket`.
+- `pr-worker` — one PR item's **implementation**, bare or ticket-backed:
+  drives it with `land`, records the outcome. It never transitions a ticket —
+  that stays with the ticket-worker. Replaces `deliver`.
 - `milestone-reviewer` — one milestone review: verifies members against their
-  aims, files follow-ups through the tracker, records the review (or releases
-  the claim with the gate closed). Replaces the `milestone-review` skill.
+  aims and the landed code, files follow-ups through the tracker, records the
+  review (or releases the claim with the gate closed). Replaces the
+  `milestone-review` skill.
 
 `land` stays a skill: it is the shared delivery engine the workers invoke, and
 the standalone entry point it already is. `tracker-adapter-linear` stays and

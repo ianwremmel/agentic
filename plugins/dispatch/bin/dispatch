@@ -16,11 +16,6 @@
 # the same version gate — the MCP server (`src/main.mts`) is one: `bin/dispatch-mcp`
 # sets it and execs this wrapper, so the server's spawn clears the same floor
 # without living behind `dispatch <command>`.
-#
-# Two command trees sit behind this wrapper: the legacy `cli/` tree owns
-# `graph` and `wait`; every other command lives in `src/`. The router below
-# picks the tree by the top-level command and retires with the legacy tree.
-# DISPATCH_ENTRY overrides it.
 
 set -euo pipefail
 
@@ -29,18 +24,7 @@ readonly LOG_LEVEL="${DISPATCH_LOG_LEVEL:-info}"
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly here
-
-# The legacy tree parses a leading `--log-level <level>` before the command;
-# skip it so routing sees the command itself.
-route=("$@")
-if [[ "${route[0]:-}" == '--log-level' ]]; then
-  route=("${route[@]:2}")
-fi
-case "${route[0]:-}" in
-  graph | wait) default_entry="${here}/../cli/main.mts" ;;
-  *) default_entry="${here}/../src/main.mts" ;;
-esac
-readonly cli="${DISPATCH_ENTRY:-${default_entry}}"
+readonly cli="${DISPATCH_ENTRY:-${here}/../src/main.mts}"
 
 # Wrapper diagnostics are logfmt on stderr, matching the CLI's own records.
 # Values containing spaces must arrive already quoted by the caller.

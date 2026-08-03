@@ -1,6 +1,6 @@
 ---
 name: tracker-adapter-linear
-description: Linear tracker adapter for dispatch — binds work-ticket's roles and ticket operations to Linear and supplies build-graph's fetch calls, field mapping, and cursor. Use whenever the ticket or project lives on Linear.
+description: Linear tracker adapter for dispatch — binds the workers' statuses and ticket operations to Linear and supplies build-graph's fetch calls, field mapping, and cursor. Use whenever the ticket or project lives on Linear.
 ---
 
 # tracker-adapter-linear
@@ -42,7 +42,7 @@ moving a ticket to plain `Backlog` is not a park.
 
 A substate this table doesn't name is handled per consumer:
 
-- **work-ticket** (transitioning the acting ticket): an `ERROR`, not a guess —
+- **a worker** (transitioning the acting ticket): an `ERROR`, not a guess —
   its Linear group narrows the role but doesn't pick it (a team's custom
   `Blocked` substate sits in `Unstarted` and is not `available`).
   Map it in your own copy.

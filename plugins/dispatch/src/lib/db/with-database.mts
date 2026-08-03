@@ -29,10 +29,11 @@ export function resolveDbPath(
     env.XDG_STATE_HOME !== undefined && env.XDG_STATE_HOME !== ''
       ? env.XDG_STATE_HOME
       : join(homedir(), '.local', 'state');
-  // `graph-v2.db`, not `graph.db`: the legacy `dispatch graph …` CLI owns
-  // `graph.db` under this same directory at a schema version of its own, and
-  // both trees refuse to open a file whose recorded version is not theirs.
-  // The suffix names the CLI generation, not the schema version.
+  // `graph-v2.db`, not `graph.db`: installations that ran the retired
+  // `dispatch graph …` CLI still have a `graph.db` in this directory at an
+  // incompatible schema, and `Database.open` refuses a file recorded at a
+  // foreign version. The suffix names the CLI generation, not the schema
+  // version.
   return join(state, 'dispatch', 'graph-v2.db');
 }
 

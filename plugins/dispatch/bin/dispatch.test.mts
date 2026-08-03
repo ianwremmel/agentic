@@ -12,43 +12,18 @@ describe('bin/dispatch node preflight', () => {
     assert.equal(stdout, 'hello World\n');
   });
 
-  it('routes `graph` and `wait` to the legacy tree', async () => {
-    // `wait stats` without --repo fails with the legacy tree's own usage text.
-    // The src tree would instead reject `wait` as an unknown subcommand, so
-    // the message pins which tree ran.
-    const {stderr} = await runDispatch(['wait', 'stats']);
-    assert.match(stderr, /wait stats needs --repo/u);
-  });
-
-  it('routes past a leading --log-level when picking the tree', async () => {
-    const {stderr} = await runDispatch([
-      '--log-level',
-      'info',
-      'wait',
-      'stats',
-    ]);
-    assert.match(stderr, /wait stats needs --repo/u);
-  });
-
-  it('routes every other command to the src tree', async () => {
-    // `mcp` exists only in `src/commands`; with stdin closed the server exits
-    // cleanly, so a zero exit proves the src tree ran.
-    const {code, stderr} = await runDispatch(['mcp'], {input: ''});
-    assert.equal(code, 0, stderr);
-  });
-
-  it('lets DISPATCH_ENTRY override the routing', async () => {
-    // `bin/dispatch-mcp` points the MCP server here so its spawn goes through
-    // the same node floor check rather than a second, unchecked entry path.
-    // Sending `graph` — a legacy-tree command — through a src entry proves the
-    // override beats the router.
+  it('honors DISPATCH_ENTRY as the entry point', async () => {
+    // `bin/dispatch-mcp` points the MCP server at an explicit entry so its
+    // spawn goes through the same node floor check rather than a second,
+    // unchecked entry path.
     const entry = path.join(import.meta.dirname, '..', 'src', 'main.mts');
 
-    const {stderr} = await runDispatch(['graph'], {
+    const {code, stdout} = await runDispatch(['greet', 'World'], {
       env: {DISPATCH_ENTRY: entry},
     });
 
-    assert.match(stderr, /unknown subcommand "graph"/u);
+    assert.equal(code, 0);
+    assert.equal(stdout, 'hello World\n');
   });
 
   it('still enforces the node floor when DISPATCH_ENTRY points elsewhere', async () => {

@@ -23,7 +23,7 @@ describe('resolveDbPath', () => {
     );
   });
 
-  // The legacy `dispatch graph …` CLI defaults to `dispatch/graph.db` at a
+  // The retired `dispatch graph …` CLI defaulted to `dispatch/graph.db` at a
   // schema version of its own, and either tree refuses a file recorded at the
   // other's version. Sharing the default filename bricks whichever ran second.
   it('does not default to the file the legacy CLI owns', () => {

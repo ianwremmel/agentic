@@ -93,18 +93,22 @@ The loop:
    supplied), then writes each project, milestone, ticket, and edge. An edge
    naming an id nobody has written materializes a `node` row with `kind='unknown'`
    — the existing `materialize.mts` behavior. Placeholders accumulate silently.
-4. `dispatch refresh done --cursor <token>` flushes: every `unknown` node becomes
-   a `fetch_ticket` instruction, the token is held on the refresh row as a pending
-   cursor, and the state moves to `resolving`. With no placeholders the refresh
-   closes instead.
+4. `dispatch refresh done --tracker <id> --cursor <token>` flushes: every
+   `unknown` node attributable to the tracker — connected by an edge to a ticket
+   in a project carrying that source — becomes a `fetch_ticket` instruction, the
+   token is held on the refresh row as a pending cursor, and the state moves to
+   `resolving`. A placeholder no sourced project reaches has nobody to ask; it
+   surfaces through the anomalies read-model instead. With no chaseable
+   placeholders the refresh closes.
 5. In `resolving`, a write that materializes a placeholder satisfies its request;
    a write that creates a new placeholder emits another instruction immediately.
    `dispatch ticket missing` satisfies a request without materializing it.
-6. The refresh closes when no request is open: the pending cursor is written, the
-   refresh's `fetch_request` rows are cleared, a `refresh_complete` event is
-   emitted, and the state moves to `idle`. Clearing the rows is what scopes "for
-   the rest of the refresh" below — a `missing` resolution constrains this refresh
-   and no later one.
+6. The refresh closes when no request is open: the pending cursor is written, a
+   `refresh_complete` event is emitted, and the state moves to `idle`. The
+   refresh's `fetch_request` rows are cleared except `missing` tombstones, which
+   keep a permanently absent id from re-opening the loop while the source sits
+   idle; the next `dispatch refresh` clears them, so a `missing` resolution
+   constrains at most the stretch until the next scan.
 
 A placeholder-creating write while the source is `idle` opens a refresh in
 `resolving` and emits, skipping the scan entirely. The source is resolved through

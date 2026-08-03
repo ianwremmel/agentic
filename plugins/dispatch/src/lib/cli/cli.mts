@@ -37,12 +37,16 @@ export async function runCli(options: RunCliOptions): Promise<number> {
 
     if (command === undefined) {
       const label = path.length > 0 ? path.join(' ') : 'dispatch';
-      const children = [...node.children.keys()].join(', ');
+      const children = [...node.children.keys()].sort().join(', ');
       throw new UsageError(
         rest.length > 0
           ? `unknown subcommand "${rest[0] ?? ''}" for ${label}`
           : `${label} needs a subcommand`,
-        {hint: `run one of: ${children}`}
+        children === ''
+          ? {
+              hint: 'this command tree has no commands; the installation is broken.',
+            }
+          : {hint: `run one of: ${children}`}
       );
     }
 

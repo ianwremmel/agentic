@@ -39,7 +39,7 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `fetch_ticket`             | Run [`build-graph`](../build-graph/SKILL.md) for the single ticket named.                        |
 | `refresh_complete`         | Report the graph is built. Stay resident — dispatch begins.                                      |
 | `dispatch_ticket`          | Launch a background `ticket-worker` agent, passing the event's ticket, project, and pass.        |
-| `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, ticket, and pass.         |
+| `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, pass, and (when the item is ticket-backed) its ticket. |
 | `perform_milestone_review` | Launch a background `milestone-reviewer` agent, passing the milestone and project.               |
 | `park_human_blocked`       | Park the ticket yourself via the adapter (awaiting-external, else paused) and post the handoff.  |
 | `alert_failure`            | Alert the operator on the ticket via the adapter; recovery is tracker-side.                      |

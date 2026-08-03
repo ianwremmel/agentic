@@ -145,10 +145,10 @@ a distinct kind keeps both prompts honest.
 - `dispatch review record --milestone <id>` — records the review with a member
   snapshot, opening the gate. Follow-up tickets filed by the review re-enter
   through ingest and re-block the gate by invalidating the snapshot.
-- `dispatch pr set --id <id> [--ticket] [--repo --pr-number --url --branch]
-  [--title --origin --injected --priority]` / `dispatch pr rm --id` — records
-  PR nodes: runtime injection of bare PRs, and workers recording the PRs a
-  ticket produced.
+- `dispatch pr set` (`--id`, and optionally `--ticket`, `--repo`,
+  `--pr-number`, `--url`, `--branch`, `--title`, `--origin`, `--injected`,
+  `--priority`) / `dispatch pr rm --id` — records PR nodes: runtime injection
+  of bare PRs, and workers recording the PRs a ticket produced.
 
 ## Agents and skills
 

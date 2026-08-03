@@ -87,6 +87,15 @@ export class CoordinationStore {
     });
   }
 
+  /** Drop a recorded outcome, so the queue re-serves the node as fresh work. */
+  async removeOutcome(node: string): Promise<boolean> {
+    const found = findNode(this.#db, node);
+    if (found === null) return false;
+    return (
+      this.#db.run('DELETE FROM outcome WHERE node_id = ?', [found.id]) > 0
+    );
+  }
+
   /* eslint-disable @typescript-eslint/no-base-to-string --
    * SQLite hands back `unknown`; `String()` converts a primitive rather than
    * asserting a type the row has not been checked for. */

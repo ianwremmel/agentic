@@ -256,6 +256,16 @@ describe('claims and passes', () => {
     await db.close();
   });
 
+  it('re-serves a started ticket with no claim at all as resume', async () => {
+    // The stale sweep cascades a dead session's claims away, so a crashed
+    // run often leaves only the started status behind.
+    const db = await fresh();
+    await addTicket(db, 'A', 'in-progress');
+
+    assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'resume'}]);
+    await db.close();
+  });
+
   it('re-admits a delivered ticket as verify', async () => {
     const db = await fresh();
     await addTicket(db, 'A', 'delivered');
@@ -334,7 +344,7 @@ describe('claims and passes', () => {
 describe('bare PRs and ranking', () => {
   it('queues a bare PR and never a ticket-attached one', async () => {
     const db = await fresh();
-    await addTicket(db, 'T1', 'in-progress');
+    await addTicket(db, 'T1', 'backlog');
     const prs = new PrStore(db);
     await prs.upsertPr({
       id: 'o/r#7',

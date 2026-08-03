@@ -31,6 +31,7 @@ export async function derive(
   const items = await classifiedItems(db, options);
   const tickets = items.filter((entry) => entry.item.kind === 'ticket');
   const prompt = items.filter((entry) => entry.item.kind === 'pr');
+  const milestones = await milestoneStates(db, options);
 
   const allProjects = db
     .all(
@@ -42,10 +43,17 @@ export async function derive(
     )
     .map((row) => ({id: text(row.id) ?? '', name: text(row.name) ?? ''}));
 
+  // A project with an owed milestone review is not done: the review is work.
   const isTerminal = (project: string): boolean =>
     !tickets.some(
       (entry) =>
         entry.item.project === project && OPEN.includes(entry.classification)
+    ) &&
+    !milestones.some(
+      (milestone) =>
+        milestone.project === project &&
+        milestone.readyForReview &&
+        !milestone.reviewRecorded
     );
 
   const projects = allProjects.map((project) => ({
@@ -56,7 +64,7 @@ export async function derive(
   return {
     projects,
     items: tickets,
-    milestones: await milestoneStates(db, options),
+    milestones,
     counts: allProjects.map((project): ProjectCounts => ({
       project: project.id,
       total: tickets.filter((entry) => entry.item.project === project.id)

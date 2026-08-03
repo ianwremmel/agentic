@@ -56,6 +56,10 @@ export interface Session {
   id: string;
   host: string | null;
   pid: number | null;
+  /** The Claude session this server serves; the caller correlator. */
+  claudeSessionId: string | null;
+  /** When the session acknowledged the probe; work orders wait on it. */
+  ackedAt: string | null;
   startedAt: string;
   heartbeatAt: string;
 }

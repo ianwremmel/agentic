@@ -22,25 +22,70 @@ export class SessionStore {
     id: string;
     host?: string | null;
     pid?: number | null;
+    claudeSessionId?: string | null;
     startedAt: string;
     heartbeatAt: string;
   }): Promise<void> {
     assertInstant(session.startedAt, 'startedAt');
     assertInstant(session.heartbeatAt, 'heartbeatAt');
     this.#db.run(
-      `INSERT INTO session (id, host, pid, started_at, heartbeat_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO session (id, host, pid, claude_session_id, started_at, heartbeat_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          host = excluded.host, pid = excluded.pid,
+         claude_session_id = excluded.claude_session_id,
          heartbeat_at = excluded.heartbeat_at`,
       [
         session.id,
         session.host ?? null,
         session.pid ?? null,
+        session.claudeSessionId ?? null,
         session.startedAt,
         session.heartbeatAt,
       ]
     );
+  }
+
+  /**
+   * Record the session's positive acknowledgement of a probe, stamping the
+   * acking process's Claude session id onto the row — the one write where the
+   * server and the session it serves can be made to agree.
+   */
+  async ack(
+    id: string,
+    claudeSessionId: string | null,
+    at: string
+  ): Promise<boolean> {
+    assertInstant(at, 'at');
+    return (
+      this.#db.run(
+        'UPDATE session SET acked_at = ?, claude_session_id = ? WHERE id = ?',
+        [at, claudeSessionId, id]
+      ) > 0
+    );
+  }
+
+  /**
+   * Live sessions carrying a Claude session id, for correlating a caller to
+   * its own server. Liveness is heartbeat freshness — the server heartbeats
+   * every tick, so a quiet row is a dead one.
+   */
+  async liveForCaller(
+    claudeSessionId: string,
+    now: string,
+    windowSeconds: number
+  ): Promise<Session[]> {
+    assertInstant(now, 'now');
+    return this.#db
+      .all(
+        `SELECT id, host, pid, claude_session_id, acked_at, started_at, heartbeat_at
+         FROM session
+         WHERE claude_session_id = ?
+           AND unixepoch(?) - unixepoch(heartbeat_at) <= ?
+         ORDER BY id`,
+        [claudeSessionId, now, windowSeconds]
+      )
+      .map(toSession);
   }
 
   async heartbeat(id: string, at: string): Promise<boolean> {
@@ -78,25 +123,32 @@ export class SessionStore {
     );
   }
 
-  /* eslint-disable @typescript-eslint/no-base-to-string --
-   * SQLite hands back `unknown`; `String()` converts a primitive rather than
-   * asserting a type the row has not been checked for. */
   async getSession(id: string): Promise<Session | null> {
     const row = this.#db.get(
-      `SELECT id, host, pid, started_at, heartbeat_at
+      `SELECT id, host, pid, claude_session_id, acked_at, started_at, heartbeat_at
        FROM session WHERE id = ?`,
       [id]
     );
     if (row === undefined) return null;
-    return {
-      id: String(row.id),
-      host: row.host === null ? null : String(row.host),
-      pid: row.pid === null ? null : Number(row.pid),
-      startedAt: String(row.started_at),
-      heartbeatAt: String(row.heartbeat_at),
-    };
+    return toSession(row);
   }
-  /* eslint-enable @typescript-eslint/no-base-to-string */
 }
+
+/* eslint-disable @typescript-eslint/no-base-to-string --
+ * SQLite hands back `unknown`; `String()` converts a primitive rather than
+ * asserting a type the row has not been checked for. */
+function toSession(row: Record<string, unknown>): Session {
+  return {
+    id: String(row.id),
+    host: row.host === null ? null : String(row.host),
+    pid: row.pid === null ? null : Number(row.pid),
+    claudeSessionId:
+      row.claude_session_id === null ? null : String(row.claude_session_id),
+    ackedAt: row.acked_at === null ? null : String(row.acked_at),
+    startedAt: String(row.started_at),
+    heartbeatAt: String(row.heartbeat_at),
+  };
+}
+/* eslint-enable @typescript-eslint/no-base-to-string */
 
 /* eslint-enable @typescript-eslint/require-await */

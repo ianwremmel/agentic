@@ -14,7 +14,8 @@ concept, not a single table: an operation may write several tables atomically.
   completion-emitted marker.
 - `fetch-request` — the durable instruction queue: enqueue, deliver, redeliver,
   resolve, and the open count that decides when a refresh closes.
+- `notice` — once-per-episode markers for the scheduler's condition orders.
+- `review` — milestone reviews with the member snapshot that expires them.
 
 The derived read-model (frontier, classification, milestone state, anomalies)
-lives in `../graph`. `recordReview` is not here yet — it lands with the
-work-order slice.
+lives in `../graph`; the scheduler that acts on it lives in `../schedule`.

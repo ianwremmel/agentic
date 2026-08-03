@@ -56,13 +56,21 @@ interface Handled {
   readonly ranTool: boolean;
 }
 
-/** Serve MCP over newline-delimited JSON-RPC 2.0 on stdin/stdout until stdin closes. */
+/**
+ * Serve MCP over newline-delimited JSON-RPC 2.0 on stdin/stdout until stdin
+ * closes. When `tick` is given, its `run` fires on the interval and after
+ * every tool call — the scheduling heartbeat riding the same channel.
+ */
 export async function runMcpServer(opts: {
   tree: CommandNode;
   stdin: Readable;
   stdout: Writable;
   stderr: Writable;
   env: NodeJS.ProcessEnv;
+  tick?: {
+    intervalMs: number;
+    run: (channel: ChannelWriter) => Promise<void>;
+  };
 }): Promise<void> {
   const ctx: RequestContext = {
     tools: buildTools(opts.tree),
@@ -75,13 +83,46 @@ export async function runMcpServer(opts: {
     opts.stdout.write(`${JSON.stringify(payload)}\n`);
   });
 
-  const rl = readline.createInterface({input: opts.stdin, crlfDelay: Infinity});
-  for await (const line of rl) {
-    if (line.trim() === '') continue;
-    const {response, ranTool} = await handleLine(line, ctx);
-    if (response !== undefined)
-      opts.stdout.write(`${JSON.stringify(response)}\n`);
-    if (ranTool) await drainQuietly(channel, ctx);
+  const tickQuietly = async (): Promise<void> => {
+    if (opts.tick === undefined) return;
+    try {
+      await opts.tick.run(channel);
+    } catch (error) {
+      ctx.log.error('scheduler tick failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  let ticking = false;
+  const timer =
+    opts.tick === undefined
+      ? undefined
+      : setInterval(() => {
+          if (ticking) return;
+          ticking = true;
+          void tickQuietly().finally(() => {
+            ticking = false;
+          });
+        }, opts.tick.intervalMs);
+
+  try {
+    const rl = readline.createInterface({
+      input: opts.stdin,
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      if (line.trim() === '') continue;
+      const {response, ranTool} = await handleLine(line, ctx);
+      if (response !== undefined)
+        opts.stdout.write(`${JSON.stringify(response)}\n`);
+      if (ranTool) {
+        await drainQuietly(channel, ctx);
+        await tickQuietly();
+      }
+    }
+  } finally {
+    if (timer !== undefined) clearInterval(timer);
   }
 }
 

@@ -47,8 +47,9 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   (backlog) → blocked → human-blocked → available.
  * - `queued` — what the scheduler may hand out, and as which pass. An
  *   `available` item with no outcome row is dispatchable as-is; a started item
- *   whose claim went stale with no outcome is a crashed run, re-served as
- *   `resume`; a recorded outcome re-admits the item for exactly one follow-up
+ *   with no live claim and no outcome is a crashed run — its claim is stale or
+ *   was already swept away with its session — re-served as `resume`; a
+ *   recorded outcome re-admits the item for exactly one follow-up
  *   pass — `verify` for a delivered ticket (a bare PR is done at delivered),
  *   `finalize` for a decomposed parent whose subtasks all resolved, `retry`
  *   for a retryable failure. Nothing human-owned, parked, resolved, or held
@@ -279,7 +280,7 @@ queued AS (
         OR classification IN ('verified', 'canceled', 'human-blocked', 'dormant')
         THEN NULL
       WHEN outcome IS NULL AND classification = 'available' THEN 'available'
-      WHEN outcome IS NULL AND claim_session IS NOT NULL AND claim_live = 0
+      WHEN outcome IS NULL AND (claim_live IS NULL OR claim_live = 0)
         AND classification = 'in-flight' THEN 'resume'
       WHEN outcome IS NULL OR claim_live = 1 THEN NULL
       WHEN outcome = 'delivered' AND kind = 'ticket' THEN 'verify'

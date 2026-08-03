@@ -5,7 +5,7 @@
  * runtime state), so a bump's recovery is "delete the file and re-sync" — there
  * is no migration machinery.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -70,11 +70,13 @@ CREATE TABLE IF NOT EXISTS edge (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS session (
-  id           TEXT PRIMARY KEY,
-  host         TEXT,
-  pid          INTEGER,
-  started_at   TEXT NOT NULL,
-  heartbeat_at TEXT NOT NULL
+  id                TEXT PRIMARY KEY,
+  host              TEXT,
+  pid               INTEGER,
+  claude_session_id TEXT,
+  acked_at          TEXT,
+  started_at        TEXT NOT NULL,
+  heartbeat_at      TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS claim (
@@ -129,6 +131,15 @@ CREATE TABLE IF NOT EXISTS refresh (
   started_at            TEXT NOT NULL,
   completed_at          TEXT,
   completion_emitted_at TEXT
+) STRICT;
+
+/* One row per condition order in flight: fires once while its condition holds,
+   cleared when the condition lapses so a new episode can fire again. */
+CREATE TABLE IF NOT EXISTS notice (
+  kind       TEXT NOT NULL CHECK (kind IN ('park_human_blocked','alert_failure','project_complete')),
+  node       TEXT NOT NULL,
+  emitted_at TEXT NOT NULL,
+  PRIMARY KEY (kind, node)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS fetch_request (

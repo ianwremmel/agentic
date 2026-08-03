@@ -35,7 +35,10 @@ export async function derive(
   const allProjects = db
     .all(
       `SELECT n.external_id AS id, p.name FROM project p
-       JOIN node n ON n.id = p.node_id ORDER BY id`
+       JOIN node n ON n.id = p.node_id
+       WHERE (? IS NULL OR n.external_id = ?)
+       ORDER BY id`,
+      [options.project ?? null, options.project ?? null]
     )
     .map((row) => ({id: text(row.id) ?? '', name: text(row.name) ?? ''}));
 

@@ -99,6 +99,8 @@ export async function milestoneStates(
      JOIN node np ON np.id = mi.project_id
      LEFT JOIN claim c ON c.node_id = ms.id
      LEFT JOIN live_claim lc ON lc.node_id = ms.id
+     WHERE ((SELECT project_filter FROM p) IS NULL
+        OR np.external_id = (SELECT project_filter FROM p))
      ORDER BY project, id`,
     pipelineParams(options)
   );

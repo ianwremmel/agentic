@@ -106,3 +106,26 @@ describe('derive', () => {
     await db.close();
   });
 });
+
+describe('derive with a project filter', () => {
+  it('scopes projects, milestones, and the verdict to the selection', async () => {
+    const db = await fresh();
+    await new ProjectStore(db).upsertProject({
+      id: 'Q',
+      name: 'Q',
+      source: 'linear',
+    });
+    const tickets = new TicketStore(db);
+    await tickets.upsertTicket({...baseTicket('A', 'P'), status: 'verified'});
+    await tickets.upsertTicket(baseTicket('B', 'Q'));
+
+    const graph = await derive(db, {now: NOW, project: 'P'});
+    assert.deepEqual(
+      graph.projects.map((project) => project.id),
+      ['P']
+    );
+    assert.equal(graph.counts.length, 1);
+    assert.equal(graph.terminal, true, 'open work in Q must not leak into P');
+    await db.close();
+  });
+});

@@ -1,0 +1,238 @@
+# Project graph ingest
+
+How a project's tickets, milestones, and dependencies get into the graph DB when
+the tracker is reachable only through the agent's MCP client.
+
+The CLI owns the reasoning: it decides what still needs fetching and instructs the
+agent over the channel. The agent scans and writes; it never decides what to fetch
+next.
+
+## Scope
+
+In: the graph write commands, the refresh state machine and its durable
+bookkeeping, the channel push that carries fetch instructions, and the two skills
+on the receiving end (`/orchestrate` and `build-graph`).
+
+Out: the derived read-model (`available`/`blocked`/`counts`/`anomalies`, the
+project-graph document), the probe/ack handshake and polling fallback,
+claims/slots/work orders, and any tracker API adapter. A tracker with a code path
+of its own would fetch in-process instead of delegating; none exists yet, so
+delegation is the only implemented path.
+
+`dispatch pr` commands are also out: a tracker scan never produces a PR node. PRs
+enter the graph from delivery, so they ship with that slice.
+
+## Command surface
+
+Commands sit at the top level, one file each under `src/commands/`. The folder
+path is the invocation path, and a `refresh.mts` beside a `refresh/` directory
+makes that node both runnable and a namespace.
+
+| Command                                                    | Purpose                                           |
+| ---------------------------------------------------------- | ------------------------------------------------- |
+| `dispatch refresh --tracker T --project P[,P] [--rebuild]` | Open or resume a refresh. Returns an ack.         |
+| `dispatch refresh done [--cursor TOKEN]`                   | Agent asserts the scan is complete.               |
+| `dispatch refresh status`                                  | Print refresh state and open instructions.        |
+| `dispatch project set` / `rm`                              | Upsert or delete a project.                       |
+| `dispatch milestone set` / `rm`                            | Upsert or delete a milestone.                     |
+| `dispatch ticket set` / `rm`                               | Upsert or delete a ticket.                        |
+| `dispatch ticket missing --id X`                           | The tracker has no such ticket.                   |
+| `dispatch edge add` / `rm` / `set`                         | One edge, or redeclare every blocker of one node. |
+
+`ticket` and `--status` replace the legacy CLI's `task` and `--role`, matching
+`src/lib/model` (`Ticket`, `Status`). There is no separate task concept.
+
+`--rebuild` drops the graph content and scans with no cursor, replacing a
+standalone `reset` command — which as a top-level name would have been alarmingly
+broad about what it resets.
+
+There is no cursor command. The cursor is read when a scan instruction is built
+and written when a refresh closes, so it advances exactly once per completed
+refresh and can never run ahead of what was recorded.
+
+`dispatch project set` takes `--tracker`, storing the source on the project row.
+That is how any node resolves which tracker it came from, which the `idle`
+transition below needs and which cross-tracker dependency detection will need
+later.
+
+## Refresh state machine
+
+One row per tracker source.
+
+```mermaid
+stateDiagram-v2
+    [*] --> scanning: dispatch refresh
+    scanning --> resolving: refresh done, placeholders remain
+    scanning --> idle: refresh done, graph clean
+    resolving --> resolving: new placeholder → emit fetch_ticket
+    resolving --> idle: no open request
+    idle --> scanning: dispatch refresh
+    idle --> resolving: placeholder written outside a scan
+```
+
+| State       | Meaning                           | A write that creates a placeholder |
+| ----------- | --------------------------------- | ---------------------------------- |
+| `idle`      | nothing in flight                 | emit a `fetch_ticket` instruction  |
+| `scanning`  | a project scan is in flight       | record it; emit nothing            |
+| `resolving` | placeholder fetches are in flight | emit a `fetch_ticket` instruction  |
+
+Suppression during `scanning` is the point of the distinction: a scan writes
+edges before it writes their endpoints, so emitting on every dangling reference
+would produce a fetch instruction for most of the project and then immediately
+satisfy it. Outside a scan there is no such burst — an unknown id is genuinely
+news, and the server chases it at once.
+
+The loop:
+
+1. `dispatch refresh` opens the row in `scanning`, queues one `scan_project`
+   instruction carrying the project ids and the persisted cursor, and returns an
+   ack. Nothing else rides the tool result.
+2. The server drains the queue after the tool call returns and pushes the
+   instruction over the channel.
+3. The agent scans tickets filtered by project (and by the cursor, when one was
+   supplied), then writes each project, milestone, ticket, and edge. An edge
+   naming an id nobody has written materializes a `node` row with `kind='unknown'`
+   — the existing `materialize.mts` behavior. Placeholders accumulate silently.
+4. `dispatch refresh done --tracker <id> --cursor <token>` flushes: every
+   `unknown` node attributable to the tracker — connected by an edge to a ticket
+   in a project carrying that source — becomes a `fetch_ticket` instruction, the
+   token is held on the refresh row as a pending cursor, and the state moves to
+   `resolving`. A placeholder no sourced project reaches has nobody to ask; it
+   surfaces through the anomalies read-model instead. With no chaseable
+   placeholders the refresh closes.
+5. In `resolving`, a write that materializes a placeholder satisfies its request;
+   a write that creates a new placeholder emits another instruction immediately.
+   `dispatch ticket missing` satisfies a request without materializing it.
+6. The refresh closes when no request is open: the pending cursor is written, a
+   `refresh_complete` event is emitted, and the state moves to `idle`. The
+   refresh's `fetch_request` rows are cleared except `missing` tombstones, which
+   keep a permanently absent id from re-opening the loop while the source sits
+   idle; the next `dispatch refresh` clears them, so a `missing` resolution
+   constrains at most the stretch until the next scan.
+
+A placeholder-creating write while the source is `idle` opens a refresh in
+`resolving` and emits, skipping the scan entirely. The source is resolved through
+the referencing ticket's project.
+
+`dispatch refresh` against a row already in `scanning` or `resolving` under a live
+session is idempotent: it returns the same ack and re-drains undelivered
+instructions rather than opening a second refresh. Under a session that is stale
+by the existing session-staleness rule, it takes the refresh over.
+
+### Ids that resolve to nothing
+
+A deleted ticket, or one on another tracker (which §2.3 forbids as a dependency),
+never materializes. `dispatch ticket missing --id X` is how the agent says so. The
+request is resolved `missing`, which:
+
+- keeps the placeholder node — deleting it would cascade away the edges that
+  referenced it, and those edges are real information;
+- suppresses re-emission for that id for the rest of the refresh, so a later edge
+  touching the same id does not restart the loop.
+
+Nodes left `unknown` with a `missing` resolution are what the anomalies section
+will report once the derived read-model exists.
+
+## Instructions and the channel
+
+`fetch_request` is a durable queue. Each row carries a `kind`, a JSON `payload`,
+`delivered_at`, and a `resolution` of `null`, `materialized`, or `missing`.
+
+| kind           | payload                           | asks the agent to                                    |
+| -------------- | --------------------------------- | ---------------------------------------------------- |
+| `scan_project` | project ids, cursor (may be null) | scan every ticket in those projects since the cursor |
+| `fetch_ticket` | one ticket id                     | fetch that ticket                                    |
+
+`refresh_complete` is the third event kind and is not a queue row — it carries no
+work. The refresh row records when it was emitted so the drain sends it exactly
+once and re-sends it if the refresh closed without a successful push.
+
+Commands never touch the channel; they write rows. After `tools/call` returns,
+the server drains undelivered rows and writes one `notifications/claude/channel`
+per row. Per §3.1.2: `seq` increases monotonically per server, meta keys match
+`^[a-zA-Z_][a-zA-Z0-9_]*$`, every value is stringified, and the server sets no
+`source` key — the runner sets that one. `initialize` gains
+`capabilities.experimental['claude/channel']`.
+
+Draining after the tool call is enough for this slice because every instruction
+originates from a tool call the agent just made. The background poll tick arrives
+with the slice that watches PRs.
+
+Two divergences from §3.1.2's event catalog, both recorded here deliberately:
+
+- The catalog has one `refresh_graph` kind, which carries neither the
+  scan-vs-resolve distinction, nor a cursor, nor a completion signal. New kinds
+  are permitted; these three replace it for this workflow.
+- The catalog's rule that a work order waits for the probe acknowledgement does
+  not apply, because no work order is emitted here and the handshake is out of
+  scope. This slice assumes the channel works. `dispatch refresh status` is the
+  escape hatch when it does not.
+
+## Skills
+
+`/orchestrate <project>` is the resident session — the one the channel pushes to.
+It resolves the project name against the tracker, calls `dispatch refresh`, then
+handles each instruction as it arrives and stops on `refresh_complete`. It does no
+field mapping and writes nothing itself. The dispatch loop the name implies is a
+later slice; here it builds the graph and reports.
+
+`build-graph` is rewritten from a self-driven loop into a handler for one
+instruction. Given a `scan_project` or `fetch_ticket`, it loads
+`tracker-adapter-<id>` for the tools and field mapping, fetches, writes through
+the flat commands, and calls `dispatch refresh done` when a scan finishes. It no
+longer reads the cursor, decides what to fetch, or reasons about completeness —
+all three now arrive in the instruction or belong to the CLI.
+
+## Plumbing
+
+`withDatabase(flags, env, fn)` in `lib/db` resolves the path (`--db`, then
+`DISPATCH_DB`, then `$XDG_STATE_HOME/dispatch/graph-v2.db`), opens, and closes in
+a `finally` so no command leaves a lock for the next tick to wait out. A shared
+`DB_OPTION` const gives every command the same flag. The server's drain opens its
+own short-lived handle; WAL is already on.
+
+The default filename is not `graph.db`: the legacy `dispatch graph …` CLI owns
+that file at a schema version of its own, and either tree refuses a file recorded
+at the other's version. They coexist under one directory until the legacy tree is
+retired.
+
+Two new stores beside the existing ones:
+
+- `RefreshStore` — the state machine, the pending cursor, the completion-emitted
+  marker, and takeover of a refresh whose session is stale.
+- `FetchRequestStore` — the queue: enqueue, mark delivered, resolve, and the
+  open-request count that closes a refresh.
+
+`SCHEMA_VERSION` bumps to 2 for the two new tables and the project `source`
+column. The DB is a rebuildable cache, so the recovery is delete-and-re-sync;
+there is no migration.
+
+## Errors
+
+Each is a `UsageError` or `DataError` whose hint names the field and the fix, per
+`lib/errors`:
+
+- a `--status` outside the vocabulary, which lists the vocabulary;
+- `dispatch refresh done` with no open refresh;
+- `dispatch ticket missing` for an id with no open request;
+- an edge that would close a cycle, already rejected by `EdgeStore`.
+
+## Testing
+
+One rule per test:
+
+- a placeholder created during `scanning` emits no instruction;
+- `refresh done` with dangling ids emits exactly those and leaves the cursor
+  unadvanced;
+- `refresh done` with a clean graph closes the refresh and writes the cursor;
+- a write during `resolving` that creates a placeholder emits immediately;
+- a placeholder written while the source is `idle` opens a refresh in `resolving`;
+- `ticket missing` satisfies its request without materializing the node, and a
+  later edge to that id emits nothing;
+- the refresh closes only once no request is open;
+- `refresh_complete` is emitted exactly once per closed refresh;
+- `--rebuild` drops graph content and scans with no cursor;
+- the drain emits one notification per undelivered row, with increasing `seq` and
+  no `source` key;
+- a refresh whose session is stale is taken over rather than duplicated;
+- an edge closing a cycle is refused with its hint intact.

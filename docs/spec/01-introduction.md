@@ -20,10 +20,10 @@ covers six conformance protocols and one operational layer:
 - **§2.5 Ticket Coordination Protocol** — how one agent drives a single ticket
   to a terminal role by producing and landing one or more PRs (§2.4), applying
   the §2.3 transitions, decomposing, and handing off to a human when needed.
-- **§2.6 Orchestration Protocol** — how a thin, graph-driven dispatcher works a
-  whole project (or several) by fanning out §2.5 coordinators over a merged
-  dependency graph: the project-graph document, the producer/cursor contract,
-  the stateless tick, slot accounting, the milestone-review gate, and injection.
+- **§2.6 Orchestration Protocol** — how a whole project (or several) is worked
+  under CLI-issued work orders over a merged dependency graph: the derived
+  read-model, the scheduler tick, slot accounting, the milestone-review gate,
+  and injection.
 - **§3.1 Channel Server** — the per-session channel server that pushes events
   into a live session: process model, the channel message protocol, event
   sourcing, and multi-session coordination.

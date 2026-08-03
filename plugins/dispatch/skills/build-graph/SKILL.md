@@ -1,62 +1,77 @@
 ---
 name: build-graph
-description: Build the project dependency graph a tracker holds — write tasks, milestones, and dependencies through the dispatch graph CLI. Use when asked to build, refresh, or update a project graph.
+description: Answer one project-graph fetch instruction — scan a project's tickets, or fetch one ticket, and record what you find through the dispatch CLI. Use when a scan_project or fetch_ticket instruction arrives.
 ---
 
 # build-graph
 
-Produce the **project-graph**.
+You handle **one instruction**. Fetch what it names, write what you find, and
+stop. Do not decide what to fetch next, chase a dependency you noticed, or judge
+whether the graph is complete — the CLI does all three and will send another
+instruction if it needs one.
 
-**You fetch. The CLI reasons.** Effective blocking, ranking, cycle detection, and
-milestone gating are `dispatch graph`'s job. Never derive them yourself; never
-hand-edit the graph.
+The `dispatch` commands below are also tools on the plugin's MCP server
+(`ticket set` → the `ticket_set` tool). When the server is attached, call the
+tools — the server delivers follow-up instructions after tool calls.
 
-## The loop
+## The adapter
 
-1. **Load the adapter.** Read the `tracker-adapter-${user_config.tracker}`
-   skill — its Graph fetch section supplies the tools, the field mapping, and
-   the cursor. A project on a different tracker loads `tracker-adapter-<id>`
-   for that tracker instead. Without one, drive the tracker's MCP server
-   directly and map its fields onto the flags below yourself.
-2. **Read the cursor** — `dispatch graph cursor --source <tracker>`. Empty output
-   means first run: `dispatch graph reset`, then a full sync. Otherwise fetch only
-   what changed since it.
-3. **Fetch** the selected projects: tasks, milestones, dependencies.
-4. **Write** each item with one command (a bad one fails only itself):
+Read `tracker-adapter-${user_config.tracker}` first: it supplies the tools, the
+field mapping, and the tracker's state → status table. A project on a different
+tracker loads `tracker-adapter-<id>` for that tracker. Without an adapter, drive
+the tracker's MCP server directly and map its fields onto the flags below
+yourself.
 
-   ```shell
-   dispatch graph project set   --id P --name "…"
-   dispatch graph milestone set --id M1 --project P --name "M1"
-   dispatch graph task set      --id CLC-945 --project P --role in-progress \
-       [--milestone M1] [--priority 2] [--url U] [--title T] [--labels a,b]
-   dispatch graph edge add      --blocker CLC-944 --blocked CLC-945
-   ```
+## `scan_project`
 
-5. **Store the cursor** — `dispatch graph cursor --source <tracker> --set <token>`.
+Fetch every ticket in the named projects. When the instruction carries a cursor,
+fetch only what changed since it. Do not filter further — a ticket you skip
+becomes a placeholder the CLI has to ask for one at a time.
+
+Write as you go, one command per item so a bad one fails only itself:
+
+```shell
+dispatch project set   --id P --name "Platform" --tracker linear
+dispatch milestone set --id M1 --project P --name "M1"
+dispatch ticket set    --id CLC-945 --project P --status in-progress \
+    --title "…" --url "…" [--priority 2] [--labels infra,qa]
+dispatch edge add      --blocker CLC-944 --blocked CLC-945
+```
+
+Then report the scan complete, passing the tracker's own change token:
+
+```shell
+dispatch refresh done --tracker linear --cursor <token>
+```
+
+## `fetch_ticket`
+
+Fetch the one ticket named and write it with `ticket set`. If the tracker has no
+such ticket — deleted, or on a different tracker — say so instead:
+
+```shell
+dispatch ticket missing --id CLC-944
+```
+
+Never guess a ticket into existence to clear an instruction.
 
 ## Writing rules
 
-- **You map the state; the CLI knows only the protocol.** `--role` takes a
-  normalized role (`backlog`, `paused`, `awaiting-external`, `available`,
-  `in-progress`, `in-review`, `finished`, `delivered`, `verified`, `canceled`).
-  The adapter skill carries the tracker's state→role table and the rule
-  for a state it does not cover: map it only when its lifecycle meaning is
-  unambiguous, otherwise escalate to the operator. Never guess a role. Labels
-  pass through natively — the CLI derives target-kind and human-interactive
-  from `--labels` plus config.
-- **Milestones are sequenced with edges, not an order.** `edge add --blocker M1
-  --blocked M2` means M2's work waits on M1; a milestone can have several
-  predecessors. A task joins a milestone with `task set --milestone M1`.
-- **Redeclare a direction with `edge set`.** After re-fetching a task's blockers,
-  `edge set --blocked CLC-945 --blockers a,b` makes them exactly `{a,b}` in one
-  call (empty clears them). Use it instead of diffing; `edge add`/`edge rm` are
-  for single changes.
-- **An edge that would close a cycle is refused** (exit 4). Fix the direction, or
-  remove the opposing edge first.
-- **A delta writes only what changed.** A task you don't touch keeps its state.
-  Drop a task with `task rm` only when the fetch shows it gone. A deletion the
-  delta cannot see is cleaned by a full rebuild, and `reset` is never your call
-  to make: run it exactly when the cursor is empty (first run) or the caller
-  explicitly asks for a rebuild.
+- **You map the state; the CLI knows only the vocabulary.** `--status` takes
+  `backlog`, `paused`, `awaiting-external`, `available`, `in-progress`,
+  `in-review`, `finished`, `delivered`, `verified`, or `canceled`. The adapter
+  carries the tracker's table and the rule for a state it does not cover: map it
+  only when the lifecycle meaning is unambiguous, otherwise ask the operator.
+  Never guess.
+- **A milestone is joined by an edge.** `edge add --blocker CLC-945 --blocked M1`
+  puts CLC-945 in milestone M1. Milestones are sequenced the same way:
+  `edge add --blocker M1 --blocked M2` means M2's work waits on M1.
+- **Redeclare a direction with `edge set`.** After re-fetching a ticket's
+  blockers, `edge set --node CLC-945 --direction blockers --others a,b` makes
+  them exactly `{a,b}` (empty clears them). Use it instead of diffing.
+- **An edge that would close a cycle is refused.** Fix the direction, or remove
+  the opposing edge first.
+- **A delta writes only what changed.** When a scan shows a ticket gone, use
+  `ticket rm`; when a `fetch_ticket` finds nothing, use `ticket missing`.
 
-Full flags and exit codes: [`reference.md`](./reference.md).
+Full flags: [`reference.md`](./reference.md).

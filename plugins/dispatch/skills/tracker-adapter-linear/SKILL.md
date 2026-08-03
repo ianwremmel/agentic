@@ -1,6 +1,6 @@
 ---
 name: tracker-adapter-linear
-description: Linear tracker adapter for dispatch — binds work-ticket's roles and ticket operations to Linear and supplies build-graph's fetch calls, field mapping, and cursor. Use whenever the ticket or project lives on Linear.
+description: Linear tracker adapter for dispatch — binds the workers' statuses and ticket operations to Linear and supplies build-graph's fetch calls, field mapping, and cursor. Use whenever the ticket or project lives on Linear.
 ---
 
 # tracker-adapter-linear
@@ -42,7 +42,7 @@ moving a ticket to plain `Backlog` is not a park.
 
 A substate this table doesn't name is handled per consumer:
 
-- **work-ticket** (transitioning the acting ticket): an `ERROR`, not a guess —
+- **a worker** (transitioning the acting ticket): an `ERROR`, not a guess —
   its Linear group narrows the role but doesn't pick it (a team's custom
   `Blocked` substate sits in `Unstarted` and is not `available`).
   Map it in your own copy.
@@ -111,30 +111,32 @@ Per selected project:
   in parallel batches.
 - Page on `hasNextPage` / `cursor` (that `cursor` is pagination, not the sync
   cursor).
-- A `blockedBy` id outside the selected projects is still a blocker:
-  `get_issue` it, write it, and repeat until every blocker is written.
+- A `blockedBy` id outside the delta still gets its edge. Do not chase it —
+  the CLI records a placeholder and sends a `fetch_ticket` instruction if it
+  wants the ticket.
 
 ### Map to CLI flags
 
-| CLI                             | Linear                                               |
-| ------------------------------- | ---------------------------------------------------- |
-| `task set --id`                 | `id` (the identifier `CLC-945`, not the UUID)        |
-| `task set --project`            | `projectId`                                          |
-| `task set --role`               | `status`, mapped by the Role map above               |
-| `task set --milestone`          | `projectMilestone.id`                                |
-| `task set --priority`           | `priority.value`; omit when `0` (`0` = no priority)  |
-| `task set --url / --title`      | `url` / `title`                                      |
-| `task set --branch-hint`        | `gitBranchName`                                      |
-| `task set --labels`             | `labels`, comma-joined                               |
-| `task set --updated-at`         | `updatedAt`                                          |
-| `edge set --blocked/--blockers` | the issue / `relations.blockedBy[].id`, comma-joined |
+| CLI                                       | Linear                                              |
+| ----------------------------------------- | --------------------------------------------------- |
+| `ticket set --id`                         | `id` (the identifier `CLC-945`, not the UUID)       |
+| `ticket set --project`                    | `projectId`                                         |
+| `ticket set --status`                     | `status`, mapped by the Role map above              |
+| `ticket set --priority`                   | `priority.value`; omit when `0` (`0` = no priority) |
+| `ticket set --url / --title`              | `url` / `title`                                     |
+| `ticket set --branch-hint`                | `gitBranchName`                                     |
+| `ticket set --labels`                     | `labels`, comma-joined                              |
+| `ticket set --updated-at`                 | `updatedAt`                                         |
+| `edge add --blocker <t> --blocked <m>`    | membership: `projectMilestone.id` per ticket        |
+| `edge set --node --direction blockers`    | `relations.blockedBy[].id`, comma-joined            |
 
 **Milestone order.** Sort milestones by `sortOrder` and chain adjacent pairs:
 `edge add --blocker <prev> --blocked <next>`.
 
 ### Cursor
 
-The sync cursor is the latest `updatedAt` you fetched. Pass it back as
-`list_issues`' `updatedAt` (which filters to "updated after"), and store it with
-`dispatch graph cursor --source linear --set <ts>`. Both a status change and a
-relation change bump `updatedAt`, so one delta sees both.
+The sync cursor is the latest `updatedAt` you fetched. A `scan_project`
+instruction hands it to you as `list_issues`' `updatedAt` filter ("updated
+after"); report it back with `dispatch refresh done --tracker linear
+--cursor <ts>`. Both a status change and a relation change bump `updatedAt`,
+so one delta sees both.

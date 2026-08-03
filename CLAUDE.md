@@ -20,7 +20,7 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
 │       ├── bin/dispatch              # CLI entry point (bash wrapper)
-│       └── cli/                      # CLI sources + colocated tests (.mts)
+│       └── src/                      # CLI sources + colocated tests (.mts)
 ├── scripts/                          # repo tooling (git hook bodies)
 └── docs/                             # spec + design docs
 ```
@@ -28,18 +28,16 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 Plugins currently published:
 
 - `plugins/dispatch/` — dispatch engineering work across pull requests and
-  tracked work items (PR lifecycle plus ticket triage, planning, status, and
-  cross-team sync). Trackers are pluggable: `work-ticket` and `build-graph`
-  load a per-tracker adapter skill (`tracker-adapter-<id>`) rather than
-  hardcoding one; `tracker-adapter-linear` ships bundled. Its `land` skill is
-  the standalone single-PR path — stateless, started from a PR URL, a ticket
-  URL, or a prompt — beside `deliver`, which is the one `work-ticket`
-  dispatches. `land` began as a copy of `deliver` and is expected to
-  diverge from it: `deliver` serves the more complex orchestration skills,
-  `land` stands alone. Don't assume a fix to one belongs in the other.
-
-Skills, agents, and hooks are being migrated from another repo. For now the
-subdirectories exist as scaffolding only.
+  tracked work items. The CLI (`src/`) owns everything deterministic: the
+  graph store, the derived read-model, scheduling, claims, and slots; its MCP
+  server (`dispatch mcp`) pushes fetch instructions and work orders into the
+  session over a Claude Code channel. The `/orchestrate` skill is the resident
+  relay that answers them by launching the plugin's agents (`ticket-worker`,
+  `pr-worker`, `milestone-reviewer`). Trackers are pluggable: the workers
+  and `build-graph` load a per-tracker adapter skill (`tracker-adapter-<id>`);
+  `tracker-adapter-linear` ships bundled. The `land` skill is the standalone
+  single-PR path — stateless, started from a PR URL, a ticket URL, or a
+  prompt — and also the delivery engine the workers invoke per PR.
 
 ## Repo conventions
 
@@ -130,13 +128,13 @@ Consequences worth remembering:
 - Persistence: [`node:sqlite`](https://nodejs.org/api/sqlite.html).
 - Assertions: `node:assert` for invariants. When the failure is a taxonomy
   error, use the function form — `ensure(cond, () => new DataError(msg,
-  {hint}))` from `cli/lib/errors.mts` — so the failure carries its own remedy
+  {hint}))` from `src/lib/errors/` — so the failure carries its own remedy
   and the error is only constructed when the assertion fails.
 
 ### Errors are read by an agent
 
 The caller is usually an agent, so a failure it can act on is a `DispatchError`
-(`cli/lib/errors.mts`) carrying a `hint` and an exit code to branch on. That file
+(`src/lib/errors/`) carrying a `hint` and an exit code to branch on. That folder
 is the source of truth for the taxonomy and the codes — the classes enforce it,
 so read it there. When you add one, write the hint for the agent that has to fix
 the failure: name the field, name the fix.

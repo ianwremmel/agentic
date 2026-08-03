@@ -12,6 +12,13 @@ const execFileAsync = promisify(execFile);
 /** The bash wrapper under test — the same path skills invoke. */
 export const DISPATCH_BIN = path.join(import.meta.dirname, 'bin', 'dispatch');
 
+/** The MCP wrapper under test — the same path `.mcp.json` names. */
+export const DISPATCH_MCP_BIN = path.join(
+  import.meta.dirname,
+  'bin',
+  'dispatch-mcp'
+);
+
 export interface DispatchResult {
   readonly code: number;
   readonly stdout: string;
@@ -23,20 +30,22 @@ export interface DispatchOptions {
   readonly env?: NodeJS.ProcessEnv;
   /** Written to the CLI's stdin, the way a skill pipes a payload to it. */
   readonly input?: string;
+  /** Which wrapper to run; defaults to `bin/dispatch`. */
+  readonly bin?: string;
 }
 
 /**
  * Run the wrapper the way a skill would, and report what a caller sees: exit
  * code, stdout, stderr. A non-zero exit is a result, not a test failure.
  *
- * Spawned rather than exec'd so a test can pipe a payload in: `graph ingest`
- * reads stdin, and the pipe is the path skills actually use.
+ * Spawned rather than exec'd so a test can pipe a payload in: the MCP server
+ * reads stdin, and the pipe is the path the runner actually uses.
  */
 export async function runDispatch(
   args: readonly string[],
-  {env = {}, input}: DispatchOptions = {}
+  {env = {}, input, bin = DISPATCH_BIN}: DispatchOptions = {}
 ): Promise<DispatchResult> {
-  const child = spawn(DISPATCH_BIN, [...args], {
+  const child = spawn(bin, [...args], {
     env: {
       PATH: process.env.PATH ?? '',
       HOME: process.env.HOME ?? '',
@@ -105,35 +114,4 @@ export async function fakeNodeDir(version: string): Promise<string> {
   );
   await chmod(bin, 0o755);
   return dir;
-}
-
-const ESCAPES: Record<string, string> = {n: '\n', r: '\r'};
-
-/** Parse a logfmt line into its fields, unescaping quoted values. */
-export function parseLogfmt(line: string): Record<string, string> {
-  const fields: Record<string, string> = {};
-  const pattern =
-    /(?<key>[^\s=]+)=(?:"(?<quoted>(?:\\.|[^"\\])*)"|(?<bare>[^\s]*))/gu;
-
-  for (const match of line.matchAll(pattern)) {
-    const {key, quoted, bare} = match.groups as {
-      key: string;
-      quoted?: string;
-      bare?: string;
-    };
-    fields[key] =
-      quoted === undefined
-        ? (bare ?? '')
-        : quoted.replace(/\\(.)/gu, (_, char: string) => ESCAPES[char] ?? char);
-  }
-
-  return fields;
-}
-
-/** The logfmt records the CLI wrote to stderr, in order. */
-export function logRecords(stderr: string): Record<string, string>[] {
-  return stderr
-    .split('\n')
-    .filter((line) => line.startsWith('ts='))
-    .map(parseLogfmt);
 }

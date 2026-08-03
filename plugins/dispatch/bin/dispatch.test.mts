@@ -12,6 +12,40 @@ describe('bin/dispatch node preflight', () => {
     assert.equal(stdout, 'hello World\n');
   });
 
+  it('honors DISPATCH_ENTRY as the entry point', async () => {
+    // `bin/dispatch-mcp` points the MCP server at an explicit entry so its
+    // spawn goes through the same node floor check rather than a second,
+    // unchecked entry path.
+    const entry = path.join(import.meta.dirname, '..', 'src', 'main.mts');
+
+    const {code, stdout} = await runDispatch(['greet', 'World'], {
+      env: {DISPATCH_ENTRY: entry},
+    });
+
+    assert.equal(code, 0);
+    assert.equal(stdout, 'hello World\n');
+  });
+
+  it('still enforces the node floor when DISPATCH_ENTRY points elsewhere', async () => {
+    const dir = await fakeNodeDir('v20.11.0');
+    const entry = path.join(import.meta.dirname, '..', 'src', 'main.mts');
+
+    const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
+      env: {
+        PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`,
+        DISPATCH_ENTRY: entry,
+      },
+    });
+
+    assert.equal(
+      stdout,
+      '',
+      'a rejected node must not run the alternate entry'
+    );
+    assert.notEqual(code, 0);
+    assert.match(stderr, /too old/u);
+  });
+
   it('refuses a node older than the minimum, naming the version it found', async () => {
     const dir = await fakeNodeDir('v20.11.0');
 

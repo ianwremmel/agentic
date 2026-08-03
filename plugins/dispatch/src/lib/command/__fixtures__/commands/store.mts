@@ -1,0 +1,26 @@
+import {AbstractCommand} from '../../index.mts';
+import type {ParsedOptions, CommandContext} from '../../index.mts';
+
+const options = {
+  key: {
+    type: 'string',
+    description: 'Key to read.',
+    positional: true,
+    required: false,
+  },
+} as const;
+
+export class Command extends AbstractCommand {
+  readonly name = 'store';
+  readonly summary = 'Inspect the store.';
+  readonly env = [];
+  readonly options = options;
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async run(
+    parsed: ParsedOptions<typeof options>,
+    ctx: CommandContext
+  ): Promise<void> {
+    ctx.io.write(`store ${parsed.key ?? '(root)'}\n`);
+  }
+}

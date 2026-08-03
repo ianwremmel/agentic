@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
-  "version": "0.16.0",
+  "version": "0.20.0",
   "author": {
     "name": "Ian Remmel"
   },
@@ -22,19 +22,19 @@
     "copilot_available": {
       "type": "boolean",
       "title": "Copilot review available",
-      "description": "Whether GitHub Copilot review is expected to work on this installation. Set to false on GitHub Enterprise installations without Copilot review — the `deliver` skill will skip the Copilot phase and go straight to human review.",
+      "description": "Whether GitHub Copilot review is expected to work on this installation. Set to false on GitHub Enterprise installations without Copilot review — the `land` skill will skip the Copilot phase and go straight to human review.",
       "default": true
     },
     "worktree_base": {
       "type": "directory",
       "title": "Worktree base directory",
-      "description": "Root directory under which the `deliver` skill creates per-PR worktrees. Layout: <base>/<owner>/<repo>/<branch>.",
+      "description": "Root directory under which the `land` skill creates per-PR worktrees. Layout: <base>/<owner>/<repo>/<branch>.",
       "default": "~/.worktrees"
     },
     "operator_mode": {
       "type": "string",
       "title": "Operator mode",
-      "description": "One of `solo` or `team`. `team`: /deliver adds a private review stage in draft (operator only) before clearing draft for public review (team). `solo` (default): /deliver clears draft after Copilot and the operator is the public reviewer \u2014 no separate private stage.",
+      "description": "One of `solo` or `team`. `team`: land adds a private review stage in draft (operator only) before clearing draft for public review (team). `solo` (default): land clears draft after Copilot and the operator is the public reviewer \u2014 no separate private stage.",
       "default": "solo"
     },
     "credential_mode": {
@@ -46,13 +46,13 @@
     "operator_login": {
       "type": "string",
       "title": "Operator GitHub login",
-      "description": "GitHub login of the operator directing this agent. Required \u2014 the deliver skill and pr-status script always assume it is set. Targets the operator with PR review requests (credential_mode=dedicated) and classifies <review> elements in pr-status XML; the agent never falls back to the ticket assigner. With credential_mode=shared set this to the shared/authenticated account.",
+      "description": "GitHub login of the operator directing this agent. Required \u2014 the land skill and pr-status script always assume it is set. Targets the operator with PR review requests (credential_mode=dedicated) and classifies <review> elements in pr-status XML; the agent never falls back to the ticket assigner. With credential_mode=shared set this to the shared/authenticated account.",
       "required": true
     },
     "tracker": {
       "type": "string",
       "title": "Work-item tracker",
-      "description": "Default work-item tracker for `work-ticket`, named by the id of its adapter skill: `tracker-adapter-<id>` (`tracker-adapter-linear` ships with the plugin). For ticket-backed work the tracker is resolved from the ticket's URL; this value is the fallback when the URL is ambiguous or the input is a bare id. (A bare PR has no ticket and is driven on the forge via the deliver skill regardless.) A tracker with no adapter skill is worked best-effort through its native MCP server; an installed adapter is authoritative.",
+      "description": "Default work-item tracker for the orchestration workers and `land`, named by the id of its adapter skill: `tracker-adapter-<id>` (`tracker-adapter-linear` ships with the plugin). For ticket-backed work the tracker is resolved from the ticket's URL; this value is the fallback when the URL is ambiguous or the input is a bare id. (A bare PR has no ticket and is driven on the forge via the land skill regardless.) A tracker with no adapter skill is worked best-effort through its native MCP server; an installed adapter is authoritative.",
       "default": "linear"
     }
   }

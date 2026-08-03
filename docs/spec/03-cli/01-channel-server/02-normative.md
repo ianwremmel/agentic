@@ -202,24 +202,34 @@ opener; the server MUST NOT rely on that rewriting in place of the rule above.
 | `pr_comment`      | `repo`, `pr`, `thread`                                                 | a new top-level comment or inline reply lands       |
 | `pr_state_change` | `repo`, `pr`, `state` = `ready` \| `draft` \| `merged` \| `closed`    | the PR changes lifecycle state                      |
 
-**Work orders** — body is a short instruction naming the skill to run. The server
-MUST do the graph reasoning (rank, gate, slot, and — for `dispatch_ticket` —
-claim) before emitting one; the session executes it and MUST NOT need to read the
-graph.
+**Ingest instructions** — the server delegates tracker reads it cannot make
+itself (§Work the server cannot do itself). Body is a short instruction naming
+the flat write commands to use.
 
-| kind                       | `meta` (beyond source/kind/seq) | asks the session to                                             |
-| -------------------------- | ------------------------------- | -------------------------------------------------------------- |
-| `dispatch_ticket`          | `project`, `ticket`             | coordinate the ticket (already claimed for this session, with a slot held) |
-| `perform_milestone_review` | `project`, `milestone`          | review the milestone whose gate is open                        |
-| `refresh_graph`            | `tracker`, `reason`             | run the graph producer over the tracker and write the delta, advancing the cursor (the server cannot read an MCP-only tracker) |
+| kind               | `meta` (beyond source/kind/seq)     | asks the session to                                    |
+| ------------------ | ----------------------------------- | ------------------------------------------------------ |
+| `scan_project`     | `tracker`, `projects`, `cursor`     | scan every ticket in those projects since the cursor   |
+| `fetch_ticket`     | `tracker`, `ticket`                 | fetch that one ticket (or report it `missing`)         |
+| `refresh_complete` | `tracker`                           | stop fetching; the graph is complete                   |
+
+**Work orders** — body is a short instruction naming the agent to launch. The
+server MUST do the graph reasoning (rank, gate, admit, and — for the dispatch
+kinds — claim) before emitting one; the session executes it and MUST NOT need
+to read the graph.
+
+| kind                       | `meta` (beyond source/kind/seq) | asks the session to                                                  |
+| -------------------------- | ------------------------------- | -------------------------------------------------------------------- |
+| `dispatch_ticket`          | `project`, `ticket`, `pass`     | launch a ticket-worker to coordinate the ticket (already claimed)    |
+| `dispatch_pr`              | `pr`, `pass`, `ticket`          | launch a pr-worker to implement the PR item (already claimed); `ticket` only on a ticket-backed item |
+| `perform_milestone_review` | `project`, `milestone`          | launch a milestone-reviewer; the milestone is claimed                |
 | `park_human_blocked`       | `project`, `ticket`             | move a human-blocked ticket to its parked state and post the handoff (a tracker write) |
-| `alert_failure`            | `project`, `ticket`             | alert the operator that a ticket failed unrecoverably          |
-| `project_complete`         | `project`                       | record and announce that the project's work is done            |
+| `alert_failure`            | `project`, `ticket`             | alert the operator that a ticket failed unrecoverably                |
+| `project_complete`         | `project`                       | record and announce that the project's work is done                  |
 
-The last three carry the orchestrator tick's non-scheduling duties in §2.6
-(surface anomalies, park human-blocked work, alert failures, decide completion):
-the server detects the condition deterministically from the graph and the session
-performs the part that needs a tracker write or an operator message.
+The last three carry the scheduler tick's non-scheduling duties in §2.6: the
+server detects the condition deterministically from the graph, fires each once
+per episode, and the session performs the part that needs a tracker write or an
+operator message.
 
 **Handshake** — one kind, outside both families, carrying no graph work.
 
@@ -244,13 +254,13 @@ corresponding `dispatch` command rather than acting on the body alone.
 ### Work the server cannot do itself
 
 For any source the server cannot reach without an MCP client (a tracker exposed
-only over MCP), the server MUST NOT attempt the fetch itself. It MUST push the
-corresponding work order (`refresh_graph`) and treat the resulting `dispatch
-graph` writes (observed on a later tick) as the completion signal. Because channel
-notifications are not acknowledged, a `refresh_graph` that owns no claim MUST be
-recorded durably — as a `refresh_due_at` on the tracker's cursor row — and the
-server MUST re-derive owed refreshes from that on restart rather than assuming a
-pushed order was delivered.
+only over MCP), the server MUST NOT attempt the fetch itself. It MUST delegate
+through the ingest instructions above, driven by the per-tracker refresh state
+machine: `dispatch refresh` opens a scan and queues `scan_project`; a
+placeholder id queues `fetch_ticket`; the resulting flat-command writes are the
+completion signal. Every instruction is a durable queue row with a delivery
+mark, so a restarted server re-delivers what was never answered rather than
+assuming a pushed instruction arrived.
 
 ## Event-source orchestration
 

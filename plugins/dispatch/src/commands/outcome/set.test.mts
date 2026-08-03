@@ -71,4 +71,37 @@ describe('outcome set', () => {
     );
     assert.equal(out, 'outcome A verified\n');
   });
+
+  it('releases the slot even when the claim is already gone', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new ProjectStore(db).upsertProject({
+        id: 'P',
+        name: 'P',
+        source: 'linear',
+      });
+      await new TicketStore(db).upsertTicket(ticket('A', 'P'));
+      await new SessionStore(db).register({
+        id: 'S1',
+        startedAt: NOW,
+        heartbeatAt: NOW,
+      });
+      await new CoordinationStore(db).acquireSlot({
+        session: 'S1',
+        actor: 'worker-A',
+        max: 3,
+        acquiredAt: NOW,
+      });
+    });
+
+    await runCommand(
+      new Command(),
+      {id: 'A', outcome: 'delivered', actor: 'worker-A'},
+      env
+    );
+
+    await withDatabase(undefined, env, async (db) => {
+      assert.equal(await new CoordinationStore(db).slotCount(), 0);
+    });
+  });
 });

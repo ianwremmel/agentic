@@ -55,6 +55,13 @@ export class Command extends AbstractCommand {
       const holder = (await coordination.claims()).find(
         (claim) => claim.node === parsed.id
       );
+      // A claim can be gone (swept with its session) while the actor's slot
+      // survives; the slot's own session keeps the release from being a no-op.
+      const session =
+        holder?.session ??
+        (parsed.actor === undefined
+          ? null
+          : await coordination.slotHolder(parsed.actor));
       await coordination.recordOutcome(
         {
           node: parsed.id,
@@ -66,8 +73,10 @@ export class Command extends AbstractCommand {
           recordedAt: nowIso(),
         },
         {
-          session: holder?.session ?? '',
-          ...(parsed.actor === undefined ? {} : {actor: parsed.actor}),
+          session: session ?? '',
+          ...(parsed.actor === undefined || session === null
+            ? {}
+            : {actor: parsed.actor}),
         }
       );
       ctx.io.write(`outcome ${parsed.id} ${parsed.outcome}\n`);

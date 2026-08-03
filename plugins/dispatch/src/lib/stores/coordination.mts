@@ -159,6 +159,14 @@ export class CoordinationStore {
     );
   }
 
+  /** The session whose slot an actor holds, or null when none does. */
+  async slotHolder(actor: string): Promise<string | null> {
+    const row = this.#db.get('SELECT session_id FROM slot WHERE actor = ?', [
+      actor,
+    ]);
+    return row === undefined ? null : String(row.session_id);
+  }
+
   async slotCount(): Promise<number> {
     return Number(this.#db.get('SELECT COUNT(*) AS n FROM slot')?.n ?? 0);
   }

@@ -83,27 +83,39 @@ export async function runMcpServer(opts: {
     opts.stdout.write(`${JSON.stringify(payload)}\n`);
   });
 
+  // Every tick entrypoint — the timer and the post-tool-call run — shares one
+  // non-reentrancy guard: a tick requested while one runs coalesces into a
+  // single follow-up rather than overlapping DB work.
+  const tickState = {running: false, requested: false};
   const tickQuietly = async (): Promise<void> => {
     if (opts.tick === undefined) return;
+    if (tickState.running) {
+      tickState.requested = true;
+      return;
+    }
+    tickState.running = true;
     try {
-      await opts.tick.run(channel);
-    } catch (error) {
-      ctx.log.error('scheduler tick failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      do {
+        tickState.requested = false;
+        try {
+          await opts.tick.run(channel);
+        } catch (error) {
+          ctx.log.error('scheduler tick failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the await above can re-enter tickQuietly, which sets `requested`; the analyzer cannot see that mutation
+      } while (tickState.requested);
+    } finally {
+      tickState.running = false;
     }
   };
 
-  let ticking = false;
   const timer =
     opts.tick === undefined
       ? undefined
       : setInterval(() => {
-          if (ticking) return;
-          ticking = true;
-          void tickQuietly().finally(() => {
-            ticking = false;
-          });
+          void tickQuietly();
         }, opts.tick.intervalMs);
 
   try {

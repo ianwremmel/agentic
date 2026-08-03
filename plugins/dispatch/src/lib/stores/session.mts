@@ -57,9 +57,13 @@ export class SessionStore {
     at: string
   ): Promise<boolean> {
     assertInstant(at, 'at');
+    // An acking process with no session id of its own (an operator shell) must
+    // not wipe the id the server registered — that id is the caller correlator.
     return (
       this.#db.run(
-        'UPDATE session SET acked_at = ?, claude_session_id = ? WHERE id = ?',
+        `UPDATE session
+         SET acked_at = ?, claude_session_id = COALESCE(?, claude_session_id)
+         WHERE id = ?`,
         [at, claudeSessionId, id]
       ) > 0
     );

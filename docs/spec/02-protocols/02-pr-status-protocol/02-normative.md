@@ -50,6 +50,10 @@ The per-PR cache root is:
     <annotation-id>.md
     <annotation-id>.summary.md
     <annotation-id>.ack
+  reviews/
+    <review-id>.md
+    <review-id>.summary.md
+    <review-id>.ack
 ```
 
 - `<base>` is an implementation-defined writable directory (e.g. `/tmp` or a
@@ -60,7 +64,7 @@ The per-PR cache root is:
 - `<repo-slug>` is `<owner>__<repo>`, with `/` replaced by `__` and any other
   path-unsafe characters escaped or substituted.
 - `<pr-number>` is the decimal PR number.
-- `<comment-id>`, `<thread-id>`, and `<annotation-id>` are platform-stable
+- `<comment-id>`, `<thread-id>`, `<review-id>`, and `<annotation-id>` are platform-stable
   identifiers (e.g. GitHub's `node_id`). They MUST be filename-safe; substitute
   or escape any path-unsafe characters.
 
@@ -75,6 +79,9 @@ The per-PR cache root is:
 | `annotations/<id>.md`         | Verbatim annotation body                                                             |
 | `annotations/<id>.summary.md` | 1–3-sentence model summary; written once the annotation first settles, then persists |
 | `annotations/<id>.ack`        | Empty marker file; presence means annotation is non-actionable                       |
+| `reviews/<id>.md`             | Verbatim review body                                                                 |
+| `reviews/<id>.summary.md`     | 1–3-sentence model summary; written once the review first settles, then persists     |
+| `reviews/<id>.ack`            | Marker file; presence means the review body is non-actionable                        |
 
 ### Cache lifecycle
 
@@ -104,9 +111,15 @@ The script MUST emit a single well-formed UTF-8 XML document on stdout:
   <merge-conflicts present="true|false"/>
   <reviews>
     <review author="<login>" mode="bot"
-            state="pending|commented|approved|changes_requested|dismissed"/>
+            state="pending|commented|approved|changes_requested|dismissed"
+            actionable="false" reason="no-body"/>
     <review author="<login>" mode="human" role="operator|team"
-            state="pending|commented|approved|changes_requested|dismissed"/>
+            state="pending|commented|approved|changes_requested|dismissed"
+            actionable="true" cache="<abs-path>"/>
+    <review author="<login>" mode="human" role="operator|team" state="dismissed"
+            actionable="false" reason="<token>" cache="<abs-path>">
+      <summary>1–3-sentence summary.</summary>
+    </review>
   </reviews>
   <comments>
     <comment id="<comment-id>" actionable="true"  cache="<abs-path>"/>
@@ -225,12 +238,15 @@ exactly once. The script MUST deduplicate by reviewer (case-insensitive on
 `author`), collapsing a reviewer's history to a single element whose `state`
 reflects their current standing.
 
-| Attribute | Type                                                         | Requirement                                    | Meaning                                             |
-| --------- | ------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------- |
-| `author`  | string                                                       | REQUIRED                                       | Platform login of the reviewer                      |
-| `mode`    | `bot\|human`                                                 | REQUIRED                                       | See §Mode classification below                      |
-| `role`    | `operator\|team`                                             | REQUIRED when `mode="human"`; absent otherwise | Operator vs team classification of a human reviewer |
-| `state`   | `pending\|commented\|approved\|changes_requested\|dismissed` | REQUIRED                                       | Reviewer's current standing — see rules below       |
+| Attribute    | Type                                                         | Requirement                                                      | Meaning                                                        |
+| ------------ | ------------------------------------------------------------ | ---------------------------------------------------------------- | -------------------------------------------------------------- |
+| `author`     | string                                                       | REQUIRED                                                         | Platform login of the reviewer                                 |
+| `mode`       | `bot\|human`                                                 | REQUIRED                                                         | See §Mode classification below                                 |
+| `role`       | `operator\|team`                                             | REQUIRED when `mode="human"`; absent otherwise                   | Operator vs team classification of a human reviewer            |
+| `state`      | `pending\|commented\|approved\|changes_requested\|dismissed` | REQUIRED                                                         | Reviewer's current standing — see rules below                  |
+| `actionable` | `true\|false`                                                | REQUIRED                                                         | Whether the agent must act on the review body — see §Review bodies |
+| `reason`     | token                                                        | REQUIRED when `actionable="false"`; MUST be absent when `"true"` | Why the body is suppressed — see §Suppression reasons          |
+| `cache`      | abs-path                                                     | REQUIRED when the review has a non-empty body; absent otherwise  | Absolute path to the `reviews/<review-id>.md` file             |
 
 **State derivation rule.** For each reviewer, `state` is computed as follows:
 
@@ -252,6 +268,29 @@ a review is `pending` is NOT convergence.
 (case-insensitive); else `role="team"`. The operator identity input is
 described in §Operator identity below. The classifier MUST NOT emit `role` on
 `mode="bot"` reviews.
+
+#### Review bodies
+
+A review is submitted with a body — prose attached to the verdict itself, not to
+any line of the diff. That body has no other carrier in this document: the
+review's inline remarks arrive as `<thread>` elements, but the body does not.
+The script MUST surface it as a first-class item, with the same cache-file and
+actionability treatment as a top-level comment: cached at
+`reviews/<review-id>.md` and classified per §Actionability rules → Review
+bodies.
+
+Deduplication collapses a reviewer to one element, so `state` is that reviewer's
+most recent submitted review. The body, however, MUST come from their most recent
+review that carries one: a bare verdict submitted on top of a substantive review
+MUST NOT erase the earlier body, which the agent may not have polled yet. A
+reviewer who submits two bodied reviews between polls still surfaces only the
+newer.
+
+The outstanding-request override changes `state`, never the body: a
+`changes_requested` body stays present, and stays actionable, after the agent
+re-requests review.
+
+The `<summary>` child follows the same rule as for `<comment>`.
 
 ### `<comments>`
 
@@ -353,6 +392,26 @@ exists in the cache directory.
 Writing the `.ack` marker is the calling agent's responsibility, not the
 script's. The script MUST NOT create `.ack` files.
 
+### Review bodies
+
+A review body is **actionable** by default.
+
+A review body is **non-actionable** iff any of the following holds:
+
+- The body is empty or whitespace-only (`reason="no-body"`). This covers a bare
+  verdict and a requested reviewer who has not reviewed yet. Such a review MUST
+  NOT be given a `cache` attribute — there is nothing to read.
+- The review the body came from was dismissed (`reason="dismissed"`). The
+  platform has withdrawn that verdict; this is the review-level counterpart of a
+  resolved thread. Because state and body can come from different reviews, the
+  test is on the body's own review, not on the element's `state`.
+- `reviews/<review-id>.ack` exists in the cache directory (`reason="acked"`).
+
+The terminal signals that settle comments and threads cannot settle a review:
+the platform gives a review body no reply thread and accepts no reaction on it,
+so `.ack` is the only mechanism available. As with annotations, writing it is
+the calling agent's responsibility and the script MUST NOT create it.
+
 ## Suppression reasons
 
 When an item is `actionable="false"`, the element MUST carry a `reason` attribute
@@ -361,12 +420,14 @@ rather than re-deriving it from the human-facing `<summary>` prose (which
 describes the item's *content* and can read as if an addressed point still
 stands). The vocabulary is a closed set of stable tokens:
 
-| Token                  | Applies to        | Meaning                                                                                                    |
-| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------- |
-| `resolved`             | threads           | The platform has explicitly resolved the thread.                                                           |
-| `agent-artifact`       | comments, threads | The calling agent's own plan/engagement comment (line-anchored sentinel + author match).                   |
-| `agent-terminal-reply` | comments, threads | The calling agent's terminal signal: a terminal-tagged reply, or a terminal reaction (top-level comments). |
-| `acked`                | annotations       | An `<id>.ack` marker exists in the cache directory.                                                        |
+| Token                  | Applies to           | Meaning                                                                                                    |
+| ---------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `resolved`             | threads              | The platform has explicitly resolved the thread.                                                           |
+| `agent-artifact`       | comments, threads    | The calling agent's own plan/engagement comment (line-anchored sentinel + author match).                   |
+| `agent-terminal-reply` | comments, threads    | The calling agent's terminal signal: a terminal-tagged reply, or a terminal reaction (top-level comments). |
+| `acked`                | annotations, reviews | An `<id>.ack` marker exists in the cache directory.                                                        |
+| `no-body`              | reviews              | The review was submitted with an empty body, or the reviewer has not reviewed yet.                         |
+| `dismissed`            | reviews              | The platform has dismissed the review.                                                                     |
 
 An `actionable="true"` element MUST NOT carry a `reason`.
 
@@ -374,7 +435,7 @@ An `actionable="true"` element MUST NOT carry a `reason`.
 
 A summary is a persisted recap of an item, stored at `<id>.summary.md` alongside
 the `<id>.md` cache file. It MUST be 1–3 sentences describing the outcome of the
-comment, thread, or annotation.
+comment, thread, review, or annotation.
 
 ### Generation and persistence rules
 

@@ -377,8 +377,8 @@ on the same signals listed in Stage 2.
 Once review is requested (Copilot, operator, or team), the agent MUST continue
 iterating. New comments and CI failures MUST trigger responses per §Reviewer
 responses and §Pre-push review. The iteration loop is driven by actionability
-per §2.2: the agent iterates as long as any thread or annotation on the PR is
-actionable and stops when none is.
+per §2.2: the agent iterates as long as any thread, annotation, or review body
+on the PR is actionable and stops when none is.
 
 The agent MAY dismiss automated reviewer comments that are not material to
 the change, per the reviewer-responses rule. The agent SHOULD give human

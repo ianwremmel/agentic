@@ -41,7 +41,7 @@ generated, so an item that has flipped back to actionable may still carry one �
 see below.)
 
 **Disk cache (per-PR directory)** — heavy, read on demand. Each comment, thread,
-and annotation is stored verbatim at a stable path keyed by platform ID.
+annotation, and review body is stored verbatim at a stable path keyed by platform ID.
 Non-actionable items also have a `.summary.md` alongside. The cache persists
 across sessions; the script updates it incrementally rather than fetching
 everything on every run.
@@ -50,9 +50,9 @@ This split keeps the agent's working context small on quiet PRs (few actionable
 items, lots of summaries to skim) while still giving it full thread content when
 it needs to act.
 
-## Comments, annotations, and threads
+## Comments, annotations, threads, and review bodies
 
-Three distinct item types appear on a PR.
+Four distinct item types appear on a PR.
 
 **Top-level comments** form a flat chronological stream on the PR itself. Any
 participant can post; they do not nest. These are covered by the same
@@ -69,6 +69,13 @@ marker file: when an agent has inspected an annotation and decided no action is
 needed, it writes `<annotation-id>.ack` to the cache. Future runs see the file
 and classify the annotation as non-actionable. The annotation simply stops
 appearing in XML output when a new commit obsoletes it on the platform side.
+
+**Review bodies** are the prose a reviewer attaches to the verdict rather than to
+a line of the diff — frequently where the substance of a `changes_requested`
+lives, with the inline threads holding only the details. The body reaches the
+caller nowhere else, so it is surfaced on the `<review>` element itself. Like an
+annotation it has no reply thread and takes no reaction, so it settles the same
+way: a `.ack` marker beside its cache file.
 
 ## Summaries and cheap models
 
@@ -95,7 +102,8 @@ agent wrote. The output follows this pattern:
 3. Iterate `<annotation actionable="true">` elements similarly.
 4. Check `<checks state="...">` for CI rollup and `<merge-conflicts>` for
    conflicts.
-5. Check `<reviews>` for Copilot and human review state.
+5. Check `<reviews>` for Copilot and human review state, and load the cache file
+   of every `<review actionable="true">` to read the body it was submitted with.
 6. Read `<terminal state="...">` for the resolved lifecycle terminal —
    `open`/`draft` while live, or the binary `shipped`/`abandoned` once closed
    (the command resolves merge-queue and squash/rebase landings, so a closed PR

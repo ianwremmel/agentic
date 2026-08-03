@@ -92,7 +92,7 @@ REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 SLUG="${REPO/\//__}"
 BASE="${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}"
 DIR="$BASE/deliver/$SLUG/$PR"
-mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations"
+mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations" "$DIR/reviews"
 
 INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|codeql)$"
 STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
@@ -237,6 +237,11 @@ COMMENTS_JSON="$(gh api graphql --paginate \
 # reviewer count (only currently-outstanding requests stand), so its single
 # 100-node page is sufficient and is fetched separately — `--paginate` follows
 # exactly one connection's cursor, so the two can't share a query.
+#
+# `id` and `body` come along because the review's own prose appears nowhere else
+# in the snapshot — inline remarks arrive as review threads, but the body a
+# `changes_requested` was submitted with has no other carrier. `id` keys its
+# cache file and its `.ack`.
 REVIEW_NODES="$(gh api graphql --paginate \
   -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
   -f query='
@@ -244,7 +249,7 @@ REVIEW_NODES="$(gh api graphql --paginate \
       repository(owner:$owner, name:$repo) {
         pullRequest(number:$pr) {
           reviews(first:100, after:$endCursor) {
-            nodes { author { login __typename } state }
+            nodes { id body author { login __typename } state }
             pageInfo { hasNextPage endCursor }
           }
         }
@@ -340,9 +345,19 @@ conflicts_xml() {
 # iff the login is the configured operator, else team (humans only). Input is the
 # GraphQL pullRequest node ($REVIEWS_JSON): `.reviews.nodes` and
 # `.reviewRequests.nodes` (the latter wrapping a RequestedReviewer union).
+#
+# The review body is a first-class work item: it carries `actionable` and, when
+# there is a body to read, `cache`. Actionable unless the review it came from was
+# dismissed or the agent has written the `.ack` sibling; a review with no body (a
+# bare verdict, or a requested reviewer who has not reviewed) is never
+# actionable. Reviews have no reply thread and take no reactions, so `.ack` — the
+# annotation mechanism — is the only settling signal available.
+#
+# Emitted as one compact JSON object per review rather than TSV: a body carries
+# newlines and tabs, which @tsv cannot round-trip through `read`.
 reviews_xml() {
   echo "  <reviews>"
-  jq -r '
+  jq -c '
     # Requested reviewers (currently-outstanding requests): login + bot-ness.
     # The GraphQL union nests under .requestedReviewer; User/Bot/Mannequin carry
     # .login, Team carries .slug/.name.
@@ -358,37 +373,88 @@ reviews_xml() {
     | ( reduce (.reviews.nodes // [])[] as $r ({};
           ( ($r.author.login // "") ) as $lg
           | if $lg == "" or ($r.state == "PENDING") then .
-            else .[($lg | ascii_downcase)] =
-                   { login: $lg, is_bot: (($r.author.__typename // "") == "Bot"), state: ($r.state // "COMMENTED") }
+            else ($lg | ascii_downcase) as $k
+            | (.[$k] // {}) as $prev
+            | .[$k] = { login: $lg,
+                        is_bot: (($r.author.__typename // "") == "Bot"),
+                        state: ($r.state // "COMMENTED") }
+                    # The newest review supplies the state; the newest one that
+                    # actually carries prose supplies the body. Otherwise a bare
+                    # verdict submitted on top of a substantive review erases the
+                    # body before the agent ever polls — the exact disappearance
+                    # this element exists to prevent.
+                    + ( if (($r.body // "") | test("\\S"))
+                        then { id: ($r.id // ""), body: ($r.body // ""),
+                               body_state: ($r.state // "COMMENTED") }
+                        else { id: ($prev.id // ""), body: ($prev.body // ""),
+                               body_state: ($prev.body_state // "") }
+                        end )
             end
         ) ) as $rev
     # Add a pending stub for any requested reviewer that has not reviewed.
     | ( $rev + ( reduce $reqs[] as $q ({};
           ( $q.login | ascii_downcase ) as $k
-          | if ($rev[$k]) then . else .[$k] = { login: $q.login, is_bot: $q.is_bot, state: "PENDING" } end
+          | if ($rev[$k]) then . else .[$k] = { login: $q.login, is_bot: $q.is_bot, state: "PENDING", id: "", body: "", body_state: "" } end
         ) ) )
     # Pending override: an outstanding request forces the status back to pending.
     | to_entries
     | map( .key as $k | .value + { state: ( if ($reqset | index($k)) then "PENDING" else .value.state end ) } )
     | .[]
-    | [ .login, (.is_bot | tostring), .state ] | @tsv
   ' <<<"$REVIEWS_JSON" |
-  while IFS=$'\t' read -r author is_bot state; do
+  while read -r r; do
+    local author is_bot state rid body body_state
+    author="$(jq -r '.login // ""' <<<"$r")"
     [[ -n "$author" ]] || continue
+    is_bot="$(jq -r '.is_bot // false' <<<"$r")"
+    state="$(jq -r '.state // ""' <<<"$r")"
+    rid="$(jq -r '.id // ""' <<<"$r")"
+    body="$(jq -r '.body // ""' <<<"$r")"
+    # The state of the review the body came from, which is not always the
+    # element's state: a later bare verdict moves state without moving body.
+    body_state="$(jq -r '.body_state // ""' <<<"$r" | tr '[:upper:]' '[:lower:]')"
+
     local mode="human"
     if [[ "$is_bot" == "true" ]] || [[ "${author,,}" =~ (copilot|codex|claude|ai-agent) ]]; then
       mode="bot"
     fi
     local s; s="$(tr '[:upper:]' '[:lower:]' <<<"$state")"
     case "$s" in pending|commented|approved|changes_requested|dismissed) ;; *) s=commented ;; esac
+
+    local role_attr=""
     if [[ "$mode" == "human" ]]; then
       local role="team"
       [[ "${author,,}" == "$OPERATOR_LC" ]] && role="operator"
-      printf '    <review author="%s" mode="%s" role="%s" state="%s"/>\n' \
-        "$(xml_attr "$author")" "$mode" "$role" "$s"
+      role_attr=" role=\"$role\""
+    fi
+
+    # A body of only whitespace is the same as none: a bare verdict with nothing
+    # to read, so it gets no cache file and can never be work.
+    local actionable="false" reason_attr=' reason="no-body"' cache_attr="" inner=""
+    if [[ -n "$rid" && -n "${body//[[:space:]]/}" ]]; then
+      local id="${rid//[^A-Za-z0-9_=-]/_}"
+      cache_item "$id" "reviews" "$body"
+      local cache_path="$DIR/reviews/$id.md"
+      local sum_path="$DIR/reviews/$id.summary.md"
+      cache_attr=" cache=\"$(xml_attr "$cache_path")\""
+      if [[ -f "$DIR/reviews/$id.ack" ]]; then
+        reason_attr=' reason="acked"'
+      elif [[ "$body_state" == "dismissed" ]]; then
+        reason_attr=' reason="dismissed"'
+      else
+        actionable="true"; reason_attr=""
+      fi
+      # Same lazy recap as comments and threads: written once the item settles,
+      # then persisted and emitted in either state.
+      [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+      [[ -f "$sum_path" ]] && inner="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
+    fi
+
+    if [[ -z "$inner" ]]; then
+      printf '    <review author="%s" mode="%s"%s state="%s" actionable="%s"%s%s/>\n' \
+        "$(xml_attr "$author")" "$mode" "$role_attr" "$s" "$actionable" "$reason_attr" "$cache_attr"
     else
-      printf '    <review author="%s" mode="%s" state="%s"/>\n' \
-        "$(xml_attr "$author")" "$mode" "$s"
+      printf '    <review author="%s" mode="%s"%s state="%s" actionable="%s"%s%s>%s</review>\n' \
+        "$(xml_attr "$author")" "$mode" "$role_attr" "$s" "$actionable" "$reason_attr" "$cache_attr" "$inner"
     fi
   done
   echo "  </reviews>"

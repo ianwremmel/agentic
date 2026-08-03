@@ -6,7 +6,8 @@ import {derive} from '../lib/graph/index.mts';
 const options = {
   project: {
     type: 'string',
-    description: 'Restrict the report to one project id.',
+    description:
+      'Restrict the report to one project id. Anomalies are graph-wide and stay unfiltered.',
     positional: false,
     required: false,
   },

@@ -14,11 +14,16 @@ import type {Database} from '../db/database.mts';
  * from the result — `edge add A B` with neither endpoint written yet reaches no
  * project, so there is nobody to ask. Those surface through the anomalies
  * read-model, not from here.
+ *
+ * A placeholder referenced from tickets on two trackers picks the smallest
+ * source, deterministically. Cross-tracker dependencies are illegal anyway;
+ * asking the wrong tracker resolves the request `missing`, which the anomalies
+ * read-model then reports rather than the loop spinning.
  */
 export function placeholdersBySource(db: Database): Map<string, string[]> {
   const bySource = new Map<string, string[]>();
   const rows = db.all(
-    `SELECT n.id AS id, n.external_id AS external_id, p.source AS source
+    `SELECT n.id AS id, n.external_id AS external_id, MIN(p.source) AS source
      FROM node n
      JOIN edge e ON (e.blocker = n.id OR e.blocked = n.id)
      JOIN ticket t

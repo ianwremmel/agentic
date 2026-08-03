@@ -183,8 +183,9 @@ export class FetchRequestStore {
 
   /**
    * Outstanding ticket requests. Deliberately not counting the `scan_project`
-   * row: nothing ever resolves it, and a refresh in `scanning` is already held
-   * open by its state. Counting it would mean no refresh ever closes.
+   * row: it resolves only when the scan completes (`resolveScan`), and a
+   * refresh in `scanning` is already held open by its state, so counting it
+   * here would just delay the close.
    */
   async openCount(source: string): Promise<number> {
     const row = this.#db.get(

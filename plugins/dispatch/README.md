@@ -16,7 +16,7 @@ See the [root README](/README.md#install) for marketplace setup.
 
 ## Usage
 
-Once installed, the plugin's skills appear under the `dispatch:` namespace. Run `/help` from inside Claude Code to list them.
+Once installed, the plugin's skills appear under the `dispatch:` namespace — invoke them as `/dispatch:orchestrate`, or by the bare name (`/orchestrate`) when no other plugin claims it. Run `/help` from inside Claude Code to list them.
 
 ## `land` vs `/orchestrate`
 
@@ -29,9 +29,8 @@ dependency graph, or dispatches anything.
 server builds the dependency graph through channel-pushed fetch instructions,
 then schedules deterministically — ranking, milestone gates, claims, compute
 slots — and pushes work orders the session answers by launching the plugin's
-agents: `ticket-worker` per ticket (which uses `land` for each PR),
-`prompt-worker` per injected bare PR, and `milestone-reviewer` per review
-gate.
+agents: `ticket-worker` to coordinate each ticket, `pr-worker` to implement
+each PR item (via `land`), and `milestone-reviewer` per review gate.
 
 Reach for `land` when the unit of work is one PR; `/orchestrate` when it is a
 project.

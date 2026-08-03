@@ -33,7 +33,7 @@ Plugins currently published:
   server (`dispatch mcp`) pushes fetch instructions and work orders into the
   session over a Claude Code channel. The `/orchestrate` skill is the resident
   relay that answers them by launching the plugin's agents (`ticket-worker`,
-  `prompt-worker`, `milestone-reviewer`). Trackers are pluggable: the workers
+  `pr-worker`, `milestone-reviewer`). Trackers are pluggable: the workers
   and `build-graph` load a per-tracker adapter skill (`tracker-adapter-<id>`);
   `tracker-adapter-linear` ships bundled. The `land` skill is the standalone
   single-PR path — stateless, started from a PR URL, a ticket URL, or a

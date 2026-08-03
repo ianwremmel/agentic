@@ -56,11 +56,15 @@ session are fine.
 ## Injection
 
 When the operator hands you new work mid-run — and only then. A new ticket:
-run `dispatch refresh` again and let the scan fetch it, or write it directly
-with `dispatch ticket set --id CLC-945 --project <id> --status available
---injected`. A ticketless PR or prompt item:
-`dispatch pr set --id o/r#7 --repo o/r --pr-number 7 --injected`. Both rank to
-the head of the queue; the next tick dispatches them.
+run `dispatch refresh` again and let the scan fetch it, or write it directly:
+
+```shell
+dispatch ticket set --id <ticket> --project <project> --status available --injected
+dispatch pr set --id <owner/repo>#<n> --repo <owner/repo> --pr-number <n> --injected
+```
+
+The second form is a ticketless PR or prompt item. Both rank to the head of
+the queue; the next tick dispatches them.
 
 ## If nothing arrives
 

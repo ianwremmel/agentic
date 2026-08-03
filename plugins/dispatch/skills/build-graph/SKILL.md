@@ -71,7 +71,7 @@ Never guess a ticket into existence to clear an instruction.
   them exactly `{a,b}` (empty clears them). Use it instead of diffing.
 - **An edge that would close a cycle is refused.** Fix the direction, or remove
   the opposing edge first.
-- **A delta writes only what changed.** A ticket you don't touch keeps its state.
-  Use `ticket rm` only when the fetch shows it gone.
+- **A delta writes only what changed.** When a scan shows a ticket gone, use
+  `ticket rm`; when a `fetch_ticket` finds nothing, use `ticket missing`.
 
 Full flags: [`reference.md`](./reference.md).

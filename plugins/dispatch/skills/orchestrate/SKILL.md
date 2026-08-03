@@ -46,8 +46,8 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `project_complete`         | Announce it. Stop once every project the operator named is complete.                             |
 
 Return to waiting after each launch. Give each worker only what the event
-carries plus the credential context; never ticket content. Launch every order
-you receive; the CLI claims and rate-limits before it emits.
+carries; never ticket content. Launch every order you receive; the CLI claims
+and rate-limits before it emits.
 
 Human input routes through the tracker (alerts on tickets, questions on
 review artifacts), never by blocking on session input. Status reports to the
@@ -55,9 +55,10 @@ session are fine.
 
 ## Injection
 
-Mid-run work arrives through the store. A new ticket: run `dispatch refresh`
-again and let the scan fetch it, or write it directly with
-`dispatch ticket set --injected`. A ticketless PR or prompt item:
+When the operator hands you new work mid-run — and only then. A new ticket:
+run `dispatch refresh` again and let the scan fetch it, or write it directly
+with `dispatch ticket set --id CLC-945 --project <id> --status available
+--injected`. A ticketless PR or prompt item:
 `dispatch pr set --id o/r#7 --repo o/r --pr-number 7 --injected`. Both rank to
 the head of the queue; the next tick dispatches them.
 

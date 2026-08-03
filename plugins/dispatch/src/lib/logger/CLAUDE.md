@@ -5,5 +5,5 @@ with a `child(meta)` binder. The docblock there is the contract: merge precedenc
 empty-meta handling, and the stderr-bound sink the MCP server must pass so it
 never writes to its JSON-RPC channel.
 
-Tests pass a recording sink and assert the `[level, message, meta]` produced,
-never the object shape.
+Tests pass a recording sink and assert what each call produced — level,
+message, metadata, and argument count.

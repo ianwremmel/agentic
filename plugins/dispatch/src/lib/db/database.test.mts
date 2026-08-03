@@ -106,3 +106,16 @@ describe('Database (file-backed)', () => {
     );
   });
 });
+
+describe('Database.transaction misuse', () => {
+  it('refuses an async body rather than committing early', async () => {
+    const db = await Database.open(':memory:');
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/require-await -- the async body is the misuse under test
+      db.transaction(async () => 1),
+      (err: unknown) =>
+        err instanceof Error && err.message.includes('must be synchronous')
+    );
+    await db.close();
+  });
+});

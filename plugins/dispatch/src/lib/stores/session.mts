@@ -1,5 +1,6 @@
 import type {Database} from '../db/database.mts';
 import {assertInstant} from '../db/time.mts';
+import {DataError, ensure} from '../errors/index.mts';
 import type {Session} from '../model/types.mts';
 
 /* eslint-disable @typescript-eslint/require-await --
@@ -64,6 +65,13 @@ export class SessionStore {
    */
   async sweepStale(now: string, windowSeconds: number): Promise<number> {
     assertInstant(now, 'now');
+    ensure(
+      Number.isFinite(windowSeconds) && windowSeconds >= 0,
+      () =>
+        new DataError(`"${String(windowSeconds)}" is not a staleness window`, {
+          hint: 'pass a non-negative number of seconds; a negative window would sweep every live session.',
+        })
+    );
     return this.#db.run(
       'DELETE FROM session WHERE unixepoch(?) - unixepoch(heartbeat_at) > ?',
       [now, windowSeconds]

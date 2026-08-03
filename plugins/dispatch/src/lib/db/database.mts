@@ -2,7 +2,11 @@ import {mkdir} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 
-import {DispatchError, EnvironmentError} from '../errors/index.mts';
+import {
+  DefinitionError,
+  DispatchError,
+  EnvironmentError,
+} from '../errors/index.mts';
 import {SCHEMA, SCHEMA_VERSION} from './schema.mts';
 
 export type SqlValue = string | number | null;
@@ -93,11 +97,21 @@ export class Database {
     this.#db.close();
   }
 
+  /**
+   * The body must be synchronous: COMMIT runs as soon as it returns, so an
+   * async body would run its post-await statements outside the transaction.
+   * A returned promise is therefore refused outright.
+   */
   async transaction<T>(body: () => T): Promise<T> {
     return this.guard(() => {
       this.#db.exec('BEGIN IMMEDIATE');
       try {
         const result = body();
+        if (result instanceof Promise) {
+          throw new DefinitionError('transaction bodies must be synchronous', {
+            hint: 'an async body would commit before its awaits ran; move the awaits outside the transaction.',
+          });
+        }
         this.#db.exec('COMMIT');
         return result;
       } catch (error) {

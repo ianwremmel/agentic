@@ -151,3 +151,20 @@ describe('SessionStore', () => {
     await db.close();
   });
 });
+
+describe('SessionStore.sweepStale misuse', () => {
+  const NOW = '2026-08-03T12:00:00.000Z';
+
+  it('refuses a negative window rather than sweeping every session', async () => {
+    const db = await Database.open(':memory:');
+    const store = new SessionStore(db);
+    await store.register({id: 'S1', startedAt: NOW, heartbeatAt: NOW});
+
+    await assert.rejects(
+      store.sweepStale(NOW, -1),
+      (err: unknown) => err instanceof DataError
+    );
+    assert.notEqual(await store.getSession('S1'), null);
+    await db.close();
+  });
+});

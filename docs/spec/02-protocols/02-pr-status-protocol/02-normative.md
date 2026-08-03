@@ -337,7 +337,11 @@ viewer's reaction regardless of how many reactions the comment has.
 ### `<threads>` and `<annotations>`
 
 Every inline review thread and annotation present on the PR MUST appear,
-regardless of actionability.
+regardless of actionability. Unsubmitted review comments are the exception:
+they are visible only to their author, so under shared credentials they would
+otherwise put the agent to work on feedback nobody has sent. A draft comment
+MUST NOT appear, and a thread whose comments are all drafts MUST NOT appear at
+all; a thread carrying both keeps its submitted comments.
 
 The `<summary>` child follows the same rule as for `<comment>`: present for
 `actionable="false"`, and present for `actionable="true"` only when a recap was

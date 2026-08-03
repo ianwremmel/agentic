@@ -155,6 +155,14 @@ HEAD="$(jq -r .headRefName <<<"$PR_JSON")"
 # Gate 6 needs), so fetch them via GraphQL.
 # Use the numeric PR number from PR_JSON since `$PR` may have been passed as
 # a URL or branch name (both accepted by `gh pr view`).
+#
+# `state` on the thread comments is load-bearing. A review still being drafted
+# has PENDING comments, visible only to their author — so when the agent shares
+# the operator's credentials they come back on this query and would otherwise
+# read as ordinary actionable threads, putting the agent to work on feedback
+# nobody has submitted. They are dropped per comment rather than per thread: a
+# draft reply on an existing thread must hide the reply without also hiding the
+# submitted feedback beneath it. A thread left with no comments disappears.
 PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
 OWNER="${REPO%/*}"
 REPO_NAME="${REPO#*/}"
@@ -166,8 +174,10 @@ REPO_NAME="${REPO#*/}"
 # `jq -s` collects back into a single array.
 #
 # The nested comments(last:50) cap stays. Actionability keys on the newest
-# comment, which `last:50` keeps, so no gate can be decided on missing data; what
-# it costs is a truncated cached thread body on a >50-comment thread, tracked
+# submitted comment, which `last:50` keeps unless all 50 newest are unsubmitted
+# drafts — in that one corner the PENDING filter empties the thread and it drops
+# out of the snapshot, so Gate 5 can pass over real feedback. Otherwise the cap
+# costs only a truncated cached thread body on a >50-comment thread, tracked
 # separately as issue #203. Lifting it needs a per-thread follow-up query rather
 # than a flag, since `--paginate` follows exactly one connection's cursor and
 # this query spends it on reviewThreads.
@@ -182,14 +192,18 @@ THREADS_JSON="$(gh api graphql --paginate \
               id
               isResolved
               comments(last:50) {
-                nodes { body author { login } }
+                nodes { body state author { login } }
               }
             }
             pageInfo { hasNextPage endCursor }
           }
         }
       }
-    }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]' | jq -s '.')"
+    }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]' \
+  | jq -s '
+      map(.comments.nodes = ((.comments.nodes // []) | map(select(.state != "PENDING"))))
+      | map(select((.comments.nodes | length) > 0))
+    ')"
 
 # §2.2.2 requires EVERY top-level comment to appear, and Gate 6 reads reactions
 # off the (recent) engagement comment, so the comments connection must be fully

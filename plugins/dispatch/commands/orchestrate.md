@@ -1,6 +1,6 @@
 ---
-description: Build a tracker project's dependency graph and report it.
+description: Drive a tracker project to completion under CLI-issued work orders.
 argument-hint: <project name or id>
 ---
 
-Use the `orchestrate` skill to build the project graph for: $ARGUMENTS
+Use the `orchestrate` skill to drive: $ARGUMENTS

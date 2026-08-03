@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/require-await --
+ * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
 import type {Database} from '../db/database.mts';
 import {assertInstant} from '../db/time.mts';
 import {DataError, ensure} from '../errors/index.mts';
@@ -77,4 +79,21 @@ export class ReviewStore {
       this.#db.run('DELETE FROM claim WHERE node_id = ?', [node.id]);
     });
   }
+
+  /** End a review without recording it — the gate stays closed. */
+  async release(milestone: string): Promise<boolean> {
+    return this.#db.guard(() => {
+      const node = findNode(this.#db, milestone);
+      ensure(
+        node !== null && node.kind === 'milestone',
+        () =>
+          new DataError(`"${milestone}" is not a milestone in the graph`, {
+            hint: 'name the milestone the review order carried.',
+          })
+      );
+      return this.#db.run('DELETE FROM claim WHERE node_id = ?', [node.id]) > 0;
+    });
+  }
 }
+
+/* eslint-enable @typescript-eslint/require-await */

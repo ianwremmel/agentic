@@ -3,6 +3,7 @@ import {describe, it} from 'node:test';
 
 import {Database} from '../db/database.mts';
 import {RefreshStore} from './refresh.mts';
+import {SessionStore} from './session.mts';
 
 const AT = '2026-08-01T12:00:00.000Z';
 const LATER = '2026-08-01T12:05:00.000Z';
@@ -75,6 +76,26 @@ describe('RefreshStore', () => {
       at: AT,
     });
     assert.equal(await store.hasLiveSession('linear'), false);
+    await db.close();
+  });
+
+  it('sees a live session through its claude_session_id', async () => {
+    // A refresh records the Claude session id; the server registers under a
+    // minted registry id and carries the Claude id in its own column.
+    const {db, store} = await fresh();
+    await new SessionStore(db).register({
+      id: 'REG-1',
+      claudeSessionId: 'claude-1',
+      startedAt: AT,
+      heartbeatAt: AT,
+    });
+    await store.open({
+      source: 'linear',
+      projects: [],
+      sessionId: 'claude-1',
+      at: AT,
+    });
+    assert.equal(await store.hasLiveSession('linear'), true);
     await db.close();
   });
 

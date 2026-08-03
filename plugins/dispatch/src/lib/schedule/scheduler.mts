@@ -189,11 +189,14 @@ export class Scheduler {
         )
         .map((entry) => ({
           node: entry.item.id,
-          meta: {
-            project: entry.item.project ?? '',
-            ticket: entry.item.id,
-          },
-          body: `Ticket ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the ticket; requeue by removing the outcome once addressed.`,
+          meta:
+            entry.item.kind === 'pr'
+              ? {pr: entry.item.id}
+              : {project: entry.item.project ?? '', ticket: entry.item.id},
+          body:
+            entry.item.kind === 'pr'
+              ? `PR item ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator; requeue by removing the outcome once addressed.`
+              : `Ticket ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the ticket; requeue by removing the outcome once addressed.`,
         }))
     );
 

@@ -101,10 +101,14 @@ export class RefreshStore {
   }
 
   async hasLiveSession(source: string): Promise<boolean> {
+    // A refresh records the Claude session id its command ran under, while a
+    // server registers under a minted registry id and carries the Claude id
+    // in its own column — so the owning session matches on either.
     return (
       this.#db.get(
         `SELECT 1 FROM refresh r
-         JOIN session s ON s.id = r.session_id
+         JOIN session s
+           ON s.id = r.session_id OR s.claude_session_id = r.session_id
          WHERE r.source = ?`,
         [source]
       ) !== undefined

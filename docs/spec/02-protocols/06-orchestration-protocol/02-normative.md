@@ -74,7 +74,7 @@ The orchestrate session MUST execute orders and derive nothing:
 | Order                      | The session MUST                                                    |
 | -------------------------- | ------------------------------------------------------------------- |
 | `dispatch_ticket`          | launch a background ticket-worker agent with the order's meta       |
-| `dispatch_pr`              | launch a background prompt-worker agent with the order's meta       |
+| `dispatch_pr`              | launch a background pr-worker agent with the order's meta           |
 | `perform_milestone_review` | launch a background milestone-reviewer agent with the order's meta  |
 | `park_human_blocked`       | park the ticket via the adapter and post the human handoff          |
 | `alert_failure`            | alert the operator on the ticket via the adapter                    |
@@ -100,9 +100,12 @@ Every dispatched worker MUST:
   `failed` (`--retryable` only when a fresh run could succeed). Recording
   releases the claim and the actor's slot atomically.
 
-A ticket-worker owns its ticket's §2.3 transitions, decomposition (subtasks
-written through the flat commands, then `decomposed`), PR delivery via the
-`land` skill, and verification per its pass. A milestone-reviewer either
+A ticket-worker owns its ticket's coordination and never its implementation:
+the §2.3 transitions, decomposition into subtasks or PR items (written
+through the flat commands with a blocking edge each, then `decomposed`), and
+verification per its pass. A pr-worker owns one PR item's implementation —
+delivery via the `land` skill — and never a ticket transition. A
+milestone-reviewer either
 records the review (`dispatch review record`, snapshotting members and
 opening the gate) or files follow-ups and releases the claim
 (`dispatch review release`) with the gate closed; it MUST NOT record a review

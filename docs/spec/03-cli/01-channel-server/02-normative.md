@@ -219,8 +219,8 @@ to read the graph.
 
 | kind                       | `meta` (beyond source/kind/seq) | asks the session to                                                  |
 | -------------------------- | ------------------------------- | -------------------------------------------------------------------- |
-| `dispatch_ticket`          | `project`, `ticket`, `pass`     | launch a ticket-worker for the ticket (already claimed)              |
-| `dispatch_pr`              | `pr`, `pass`                    | launch a prompt-worker for the bare PR / prompt item (already claimed) |
+| `dispatch_ticket`          | `project`, `ticket`, `pass`     | launch a ticket-worker to coordinate the ticket (already claimed)    |
+| `dispatch_pr`              | `pr`, `pass`, `ticket?`         | launch a pr-worker to implement the PR item (already claimed)        |
 | `perform_milestone_review` | `project`, `milestone`          | launch a milestone-reviewer; the milestone is claimed                |
 | `park_human_blocked`       | `project`, `ticket`             | move a human-blocked ticket to its parked state and post the handoff (a tracker write) |
 | `alert_failure`            | `project`, `ticket`             | alert the operator that a ticket failed unrecoverably                |

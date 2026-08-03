@@ -22,8 +22,8 @@ state, implementing tickets, reviewing milestones, talking to humans.
 | ------------------------ | ------------------------------------------------------------------------ | ---------- |
 | channel server           | the graph, scheduling, claims, slots, work-order emission                | §3.1       |
 | orchestrate session      | relaying: answer instructions, launch workers, make delegated tracker writes | §2.6   |
-| ticket-worker agent      | one ticket end-to-end — its PR(s), verification, decomposition, outcome  | §2.5       |
-| prompt-worker agent      | one bare PR / prompt item                                                | §2.4       |
+| ticket-worker agent      | one ticket's coordination — brief, transitions, decomposition, verification | §2.5    |
+| pr-worker agent          | one PR item's implementation, bare or ticket-backed                      | §2.4       |
 | milestone-reviewer agent | one milestone's review when its gate is ready                            | §2.6       |
 
 The orchestrate session is the resident context the server pushes to. It holds

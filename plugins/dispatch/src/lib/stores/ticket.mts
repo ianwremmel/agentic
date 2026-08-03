@@ -35,8 +35,7 @@ export class TicketStore {
           hint: `use one of: ${TARGET_KIND_LIST}.`,
         })
     );
-    if (ticket.updatedAt !== null)
-      assertInstant(ticket.updatedAt, '--updated-at');
+    if (ticket.updatedAt !== null) assertInstant(ticket.updatedAt, 'updatedAt');
 
     await this.#db.transaction(() => {
       const projectId = nodeRef(this.#db, ticket.project);
@@ -94,6 +93,9 @@ export class TicketStore {
       [id]
     );
     if (row === undefined) return null;
+    /* eslint-disable @typescript-eslint/no-base-to-string --
+     * SQLite hands back `unknown`; `String()` converts a primitive rather than
+     * asserting a type the row has not been checked for. */
     return {
       id: String(row.id),
       project: String(row.project),
@@ -104,14 +106,11 @@ export class TicketStore {
       requiresHuman: row.requires_human === 1,
       injected: row.injected === 1,
       priority: row.priority === null ? null : Number(row.priority),
-      branchHint:
-        row.branch_hint === null
-          ? null
-          : (row.branch_hint as unknown as string),
+      branchHint: row.branch_hint === null ? null : String(row.branch_hint),
       labels: JSON.parse(String(row.labels)) as string[],
-      updatedAt:
-        row.updated_at === null ? null : (row.updated_at as unknown as string),
+      updatedAt: row.updated_at === null ? null : String(row.updated_at),
     };
+    /* eslint-enable @typescript-eslint/no-base-to-string */
   }
 }
 

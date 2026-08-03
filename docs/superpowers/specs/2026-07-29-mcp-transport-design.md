@@ -163,7 +163,7 @@ diagnostics use a `createLogger` bound to `stderr`, keeping stdout pure
 protocol.
 
 Protocol-level failures are not handled inline at each branch. A handler
-**throws** a `JsonRpcError` (defined in `lib/mcp`, carrying the JSON-RPC `code`
+**throws** a `JsonRpcError` (defined in `lib/errors`, carrying the JSON-RPC `code`
 and `message`), and a single `try/catch` around request dispatch renders any
 `JsonRpcError` into a proper JSON-RPC `error` response
 (`{jsonrpc, id, error: {code, message}}`). This keeps the wire-format

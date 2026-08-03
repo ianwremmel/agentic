@@ -1,3 +1,4 @@
+import {readFile} from 'node:fs/promises';
 import readline from 'node:readline';
 import type {Readable, Writable} from 'node:stream';
 
@@ -10,7 +11,29 @@ import {callTool} from './dispatch.mts';
 import {JsonRpcError} from '../errors/index.mts';
 
 const PROTOCOL_VERSION = '2025-06-18';
-const SERVER_INFO = {name: 'dispatch', version: '1.0.0'};
+
+/**
+ * The handshake reports the shipped plugin version, read from the manifest so
+ * the two can never disagree. A missing or unreadable manifest (a stripped-down
+ * install) degrades to 0.0.0 rather than failing the handshake.
+ */
+async function serverInfo(): Promise<{name: string; version: string}> {
+  try {
+    const manifest = new URL(
+      '../../../.claude-plugin/plugin.json',
+      import.meta.url
+    );
+    const parsed = JSON.parse(await readFile(manifest, 'utf8')) as {
+      version?: unknown;
+    };
+    return {
+      name: 'dispatch',
+      version: typeof parsed.version === 'string' ? parsed.version : '0.0.0',
+    };
+  } catch {
+    return {name: 'dispatch', version: '0.0.0'};
+  }
+}
 const LEVELS = ['error', 'warn', 'info', 'debug', 'trace', 'log'] as const;
 
 interface JsonRpcRequest {
@@ -24,6 +47,7 @@ interface RequestContext {
   readonly tools: BuiltTools;
   readonly env: NodeJS.ProcessEnv;
   readonly log: Logger;
+  readonly serverInfo: {name: string; version: string};
 }
 
 /** Serve MCP over newline-delimited JSON-RPC 2.0 on stdin/stdout until stdin closes. */
@@ -38,6 +62,7 @@ export async function runMcpServer(opts: {
     tools: buildTools(opts.tree),
     env: opts.env,
     log: createLogger(stderrSink(opts.stderr)),
+    serverInfo: await serverInfo(),
   };
 
   const rl = readline.createInterface({input: opts.stdin, crlfDelay: Infinity});
@@ -100,7 +125,7 @@ async function dispatch(
       return {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {tools: {}},
-        serverInfo: SERVER_INFO,
+        serverInfo: ctx.serverInfo,
       };
     case 'notifications/initialized':
       return undefined;

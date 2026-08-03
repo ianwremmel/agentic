@@ -109,15 +109,13 @@ A comment or thread is **non-actionable** iff any of:
 A reviewer reply after the agent's last turn re-actionables the item. An
 annotation is actionable unless `<cache>/<id>.ack` exists.
 
-A `<review>` carries the prose the review itself was submitted with, separate
-from its inline threads. It is actionable unless the body is empty
-(`reason="no-body"` — a bare verdict, or a reviewer who hasn't reviewed yet),
-the review it came from was dismissed, or `<cache>/<id>.ack` exists. A reviewer
-who submits a bare verdict over an earlier substantive review keeps the earlier
-body, so `state` and the body can come from different reviews. The `.ack` is the only
-way to settle one: GitHub gives a review body no reply thread and no reactions,
-so neither terminal signal reaches it. Acking is not a substitute for answering
-— reply in a top-level comment, then write the `.ack`.
+A `<review>` carries the review's own prose, separate from its inline threads.
+It is actionable unless the body is empty (`reason="no-body"` — a bare verdict,
+or a reviewer who hasn't reviewed yet), the review it came from was dismissed,
+or `<cache>/<id>.ack` exists. A bare verdict over an earlier substantive review
+keeps the earlier body, so `state` and the body can come from different reviews.
+A review body has no reply thread and no reactions, so `.ack` is the only way to
+settle one. Answer first: reply in a top-level comment, then write the `.ack`.
 
 ## Operational logging
 

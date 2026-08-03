@@ -45,10 +45,11 @@ One run drives exactly one PR. Resolve the input before Setup:
   ticket-backed ([`ticket.md`](./ticket.md)).
 - **Freeform prompt** — no ticket. The prompt is the brief.
 
-Then run `pr-status` once, before Setup, to establish where the PR already
-stands. **Never assume there is no PR.** A ticket or a prompt can name work a
-killed session already opened one for, so look for it — by the ticket's linked
-PRs and by the branch — and take Setup's Resume path if one exists.
+Then, before Setup, find the PR: a PR input names it; for a ticket or a prompt,
+search the ticket's linked PRs and the branch. **Never assume there is no PR** —
+a killed session may already have opened one. If one exists, run `pr-status` on
+it to establish where it stands, then take Setup's Resume path. If none exists,
+go to Setup and open one.
 
 Gates, lifecycle, and ending are the same for all three. A ticket-backed run
 also keeps the ticket's role in sync and claims it before the first push; a run

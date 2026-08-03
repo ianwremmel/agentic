@@ -12,23 +12,43 @@ describe('bin/dispatch node preflight', () => {
     assert.equal(stdout, 'hello World\n');
   });
 
-  it('honors DISPATCH_ENTRY, running an alternate entry point through the same wrapper', async () => {
+  it('routes `graph` and `wait` to the legacy tree', async () => {
+    // `wait stats` without --repo fails with the legacy tree's own usage text.
+    // The src tree would instead reject `wait` as an unknown subcommand, so
+    // the message pins which tree ran.
+    const {stderr} = await runDispatch(['wait', 'stats']);
+    assert.match(stderr, /wait stats needs --repo/u);
+  });
+
+  it('routes past a leading --log-level when picking the tree', async () => {
+    const {stderr} = await runDispatch([
+      '--log-level',
+      'info',
+      'wait',
+      'stats',
+    ]);
+    assert.match(stderr, /wait stats needs --repo/u);
+  });
+
+  it('routes every other command to the src tree', async () => {
+    // `mcp` exists only in `src/commands`; with stdin closed the server exits
+    // cleanly, so a zero exit proves the src tree ran.
+    const {code, stderr} = await runDispatch(['mcp'], {input: ''});
+    assert.equal(code, 0, stderr);
+  });
+
+  it('lets DISPATCH_ENTRY override the routing', async () => {
     // `bin/dispatch-mcp` points the MCP server here so its spawn goes through
-    // the same node floor check as the legacy `cli/` tree, rather than a
-    // second, unchecked entry path. `mcp` exists only as a command in `src/commands`,
-    // not in the legacy `cli/commands` tree, so it distinguishes which tree
-    // actually ran rather than asserting on output the two trees share.
+    // the same node floor check rather than a second, unchecked entry path.
+    // Sending `graph` — a legacy-tree command — through a src entry proves the
+    // override beats the router.
     const entry = path.join(import.meta.dirname, '..', 'src', 'main.mts');
 
-    const legacy = await runDispatch(['mcp'], {input: ''});
-    assert.notEqual(legacy.code, 0, 'the legacy tree has no `mcp` command');
-
-    const {code, stderr} = await runDispatch(['mcp'], {
+    const {stderr} = await runDispatch(['graph'], {
       env: {DISPATCH_ENTRY: entry},
-      input: '',
     });
 
-    assert.equal(code, 0, stderr);
+    assert.match(stderr, /unknown subcommand "graph"/u);
   });
 
   it('still enforces the node floor when DISPATCH_ENTRY points elsewhere', async () => {

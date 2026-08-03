@@ -1,25 +1,41 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {describe, it} from 'node:test';
 
 import {logRecords, runDispatch} from '../../test-harness.mts';
+import type {DispatchOptions} from '../../test-harness.mts';
+
+// The wrapper routes every command except `graph` and `wait` to the src/
+// tree. These tests pin the legacy greet command, so hold its entry fixed.
+const LEGACY_ENTRY = path.join(import.meta.dirname, '..', 'main.mts');
+
+function runLegacy(
+  args: readonly string[],
+  {env = {}, ...rest}: DispatchOptions = {}
+): ReturnType<typeof runDispatch> {
+  return runDispatch(args, {
+    ...rest,
+    env: {DISPATCH_ENTRY: LEGACY_ENTRY, ...env},
+  });
+}
 
 describe('dispatch greet', () => {
   it('greets the positional name on stdout', async () => {
-    const {code, stdout} = await runDispatch(['greet', 'World']);
+    const {code, stdout} = await runLegacy(['greet', 'World']);
 
     assert.equal(stdout, 'hello World\n');
     assert.equal(code, 0);
   });
 
   it('greets the --name flag value', async () => {
-    const {code, stdout} = await runDispatch(['greet', '--name', 'Ada']);
+    const {code, stdout} = await runLegacy(['greet', '--name', 'Ada']);
 
     assert.equal(stdout, 'hello Ada\n');
     assert.equal(code, 0);
   });
 
   it('keeps the greeting on stdout and the logs on stderr', async () => {
-    const {stdout, stderr} = await runDispatch(['greet', 'World']);
+    const {stdout, stderr} = await runLegacy(['greet', 'World']);
 
     assert.equal(stdout, 'hello World\n');
     assert.doesNotMatch(stdout, /level=/u, 'stdout must stay pipe-clean');
@@ -34,7 +50,7 @@ describe('dispatch greet', () => {
   });
 
   it('greets a name containing spaces without splitting it', async () => {
-    const {code, stdout, stderr} = await runDispatch([
+    const {code, stdout, stderr} = await runLegacy([
       'greet',
       '--name',
       'Ada Lovelace',
@@ -54,14 +70,14 @@ describe('dispatch greet', () => {
   });
 
   it('greets a name that looks like a flag when passed after --', async () => {
-    const {code, stdout} = await runDispatch(['greet', '--', '--name']);
+    const {code, stdout} = await runLegacy(['greet', '--', '--name']);
 
     assert.equal(stdout, 'hello --name\n');
     assert.equal(code, 0);
   });
 
   it('rejects a missing name with a usage error', async () => {
-    const {code, stdout, stderr} = await runDispatch(['greet']);
+    const {code, stdout, stderr} = await runLegacy(['greet']);
 
     assert.equal(code, 2);
     assert.equal(stdout, '');
@@ -70,14 +86,14 @@ describe('dispatch greet', () => {
   });
 
   it('rejects an empty name', async () => {
-    const {code, stdout} = await runDispatch(['greet', '--name', '']);
+    const {code, stdout} = await runLegacy(['greet', '--name', '']);
 
     assert.equal(code, 2);
     assert.equal(stdout, '');
   });
 
   it('rejects a second name rather than silently ignoring it', async () => {
-    const {code, stdout, stderr} = await runDispatch(['greet', 'Ada', 'Grace']);
+    const {code, stdout, stderr} = await runLegacy(['greet', 'Ada', 'Grace']);
 
     assert.equal(code, 2);
     assert.equal(stdout, '');
@@ -85,7 +101,7 @@ describe('dispatch greet', () => {
   });
 
   it('rejects an unknown flag', async () => {
-    const {code, stderr} = await runDispatch(['greet', '--shout', 'World']);
+    const {code, stderr} = await runLegacy(['greet', '--shout', 'World']);
 
     assert.equal(code, 2);
     assert.match(stderr, /--shout/u);

@@ -1,11 +1,27 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {describe, it} from 'node:test';
 
 import {logRecords, runDispatch} from '../test-harness.mts';
+import type {DispatchOptions} from '../test-harness.mts';
+
+// The wrapper routes every command except `graph` and `wait` to the src/
+// tree. These tests pin the legacy runner itself, so hold its entry fixed.
+const LEGACY_ENTRY = path.join(import.meta.dirname, 'main.mts');
+
+function runLegacy(
+  args: readonly string[],
+  {env = {}, ...rest}: DispatchOptions = {}
+): ReturnType<typeof runDispatch> {
+  return runDispatch(args, {
+    ...rest,
+    env: {DISPATCH_ENTRY: LEGACY_ENTRY, ...env},
+  });
+}
 
 describe('dispatch', () => {
   it('prints help on --help and exits 0', async () => {
-    const {code, stdout} = await runDispatch(['--help']);
+    const {code, stdout} = await runLegacy(['--help']);
 
     assert.equal(code, 0);
     assert.match(stdout, /usage: dispatch/u);
@@ -13,7 +29,7 @@ describe('dispatch', () => {
   });
 
   it('rejects no command with a usage error and the command list', async () => {
-    const {code, stdout, stderr} = await runDispatch([]);
+    const {code, stdout, stderr} = await runLegacy([]);
 
     assert.equal(code, 2);
     assert.equal(stdout, '');
@@ -22,7 +38,7 @@ describe('dispatch', () => {
   });
 
   it('rejects an unknown command by name', async () => {
-    const {code, stderr} = await runDispatch(['sing', 'World']);
+    const {code, stderr} = await runLegacy(['sing', 'World']);
 
     assert.equal(code, 2);
     assert.match(stderr, /error: unknown command "sing"/u);
@@ -30,7 +46,7 @@ describe('dispatch', () => {
   });
 
   it('logs at info by default, without debug records', async () => {
-    const {stderr} = await runDispatch(['greet', 'World']);
+    const {stderr} = await runLegacy(['greet', 'World']);
     const records = logRecords(stderr);
 
     assert.ok(records.length > 0, 'expected logfmt records on stderr');
@@ -47,7 +63,7 @@ describe('dispatch', () => {
   });
 
   it('emits debug records when --log-level debug is passed', async () => {
-    const {code, stdout, stderr} = await runDispatch([
+    const {code, stdout, stderr} = await runLegacy([
       '--log-level',
       'debug',
       'greet',
@@ -64,7 +80,7 @@ describe('dispatch', () => {
   });
 
   it('takes the log level from DISPATCH_LOG_LEVEL', async () => {
-    const {code, stdout, stderr} = await runDispatch(['greet', 'World'], {
+    const {code, stdout, stderr} = await runLegacy(['greet', 'World'], {
       env: {DISPATCH_LOG_LEVEL: 'error'},
     });
 
@@ -78,7 +94,7 @@ describe('dispatch', () => {
   });
 
   it('lets --log-level win over DISPATCH_LOG_LEVEL', async () => {
-    const {stderr} = await runDispatch(
+    const {stderr} = await runLegacy(
       ['--log-level', 'debug', 'greet', 'World'],
       {env: {DISPATCH_LOG_LEVEL: 'error'}}
     );
@@ -90,7 +106,7 @@ describe('dispatch', () => {
   });
 
   it('rejects an unknown log level instead of guessing one', async () => {
-    const {code, stderr} = await runDispatch([
+    const {code, stderr} = await runLegacy([
       '--log-level',
       'chatty',
       'greet',
@@ -102,7 +118,7 @@ describe('dispatch', () => {
   });
 
   it('does not treat a global option value as the command name', async () => {
-    const {code, stdout} = await runDispatch([
+    const {code, stdout} = await runLegacy([
       '--log-level',
       'warn',
       'greet',
@@ -116,7 +132,7 @@ describe('dispatch', () => {
 
 describe('dispatch global options after the command', () => {
   it('rejects them and says where they belong', async () => {
-    const {code, stdout, stderr} = await runDispatch([
+    const {code, stdout, stderr} = await runLegacy([
       'greet',
       '--log-level',
       'debug',
@@ -131,7 +147,7 @@ describe('dispatch global options after the command', () => {
   });
 
   it('leaves a global-looking flag after -- alone', async () => {
-    const {code, stdout} = await runDispatch(['greet', '--', '--log-level']);
+    const {code, stdout} = await runLegacy(['greet', '--', '--log-level']);
 
     assert.equal(code, 0);
     assert.equal(stdout, 'hello --log-level\n');
@@ -140,7 +156,7 @@ describe('dispatch global options after the command', () => {
 
 describe('dispatch <command> --help', () => {
   it('prints the command usage and exits 0', async () => {
-    const {code, stdout, stderr} = await runDispatch(['greet', '--help']);
+    const {code, stdout, stderr} = await runLegacy(['greet', '--help']);
 
     assert.equal(code, 0);
     assert.match(stdout, /^usage: dispatch greet <name>$/mu);
@@ -152,7 +168,7 @@ describe('dispatch <command> --help', () => {
   });
 
   it('greets a literal --help passed after --', async () => {
-    const {code, stdout} = await runDispatch(['greet', '--', '--help']);
+    const {code, stdout} = await runLegacy(['greet', '--', '--help']);
 
     assert.equal(code, 0);
     assert.equal(stdout, 'hello --help\n');

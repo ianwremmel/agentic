@@ -26,8 +26,7 @@ interface InitializeResponse {
 describe('bin/dispatch-mcp', () => {
   // `.mcp.json` names this wrapper and passes it no environment, because
   // whether the MCP loader merges or replaces a server's env is unspecified.
-  // The wrapper must therefore reach the `src` tree on its own: the legacy
-  // `cli` tree has no `mcp` command and would exit non-zero here.
+  // The wrapper must therefore reach the `src` tree on its own.
   it('serves the MCP entry point with nothing set by its caller', async () => {
     const {code, stdout, stderr} = await runDispatch([], {
       bin: DISPATCH_MCP_BIN,

@@ -1,43 +1,113 @@
 # build-graph — reference
 
-## Commands
+Flag tables for the commands [`SKILL.md`](./SKILL.md) uses. Every command also
+takes `--db` (graph database path; defaults to `$DISPATCH_DB`, else
+`$XDG_STATE_HOME/dispatch/graph-v2.db`), omitted from the tables below.
 
-| Command                                               | Does                                                     |
-| ----------------------------------------------------- | -------------------------------------------------------- |
-| `graph project set --id P [--name N]`                 | Declare a project (only declared projects go terminal).  |
-| `graph project rm --id P`                             | Forget a project; its tasks are left alone.              |
-| `graph task set --id T --project P --role R [flags]`  | Upsert a task (see below).                               |
-| `graph task rm --id T`                                | Delete a task, its edges, and any claim.                 |
-| `graph milestone set --id M --project P [--name N]`   | Upsert a milestone.                                      |
-| `graph milestone rm --id M`                           | Delete a milestone, its edges, and its review.           |
-| `graph milestone show --id M`                         | Print one milestone's gate state and member nodes.       |
-| `graph edge add --blocker B --blocked D`              | `B` blocks `D` — `D` depends on `B`.                     |
-| `graph edge rm --blocker B --blocked D`               | Remove one edge.                                         |
-| `graph edge set --blocked D --blockers a,b`           | Replace all of `D`'s blockers. Empty list clears them.   |
-| `graph edge set --blocker B --blocks a,b`             | Replace all of `B`'s blocked. Empty list clears them.    |
-| `graph cursor [--source S] [--set token \| --clear]`  | Read, set, or clear the sync cursor.                     |
-| `graph reset`                                         | Wipe the graph (keeps claims, reviews, cursors).         |
+## `dispatch refresh`
 
-`task set` flags: `--milestone <id>`, `--priority <n>` (lower = more urgent; omit
-if none), `--url`, `--title`, `--labels a,b`, `--branch-hint`, `--updated-at <ts>`
-(RFC 3339; anything unparseable fails), `--injected` (rank to the top of the
-frontier). `--role` takes a normalized protocol role — the caller does the
-tracker-state mapping.
+| Flag        | Required | Meaning                                                    |
+| ----------- | -------- | ---------------------------------------------------------- |
+| `--tracker` | yes      | Tracker to refresh, e.g. linear.                           |
+| `--project` | yes      | Comma-separated project ids to scan.                       |
+| `--rebuild` | no       | Drop the graph and scan from scratch, ignoring the cursor. |
 
-Edge endpoints may be tasks or milestones. Two tasks form a dependency; two
-milestones form sequencing; an edge that would join a task to a milestone is
-refused (attach a task with `--milestone` instead). An edge may name an id that
-has not been written yet — it holds its dependents blocked until the id is
-written.
+## `dispatch refresh done`
+
+| Flag        | Required | Meaning                                                                                     |
+| ----------- | -------- | ------------------------------------------------------------------------------------------- |
+| `--tracker` | yes      | Tracker whose scan is complete.                                                             |
+| `--cursor`  | no       | Opaque tracker token marking how far this scan read. Recorded only when the refresh closes. |
+
+## `dispatch refresh status`
+
+| Flag        | Required | Meaning               |
+| ----------- | -------- | --------------------- |
+| `--tracker` | yes      | Tracker to report on. |
+
+## `dispatch project set`
+
+| Flag        | Required | Meaning                                                                      |
+| ----------- | -------- | ---------------------------------------------------------------------------- |
+| `--id`      | yes      | Tracker identifier for the project.                                          |
+| `--name`    | yes      | Human-readable project name.                                                 |
+| `--tracker` | yes      | Tracker the project lives on, e.g. linear. Every ticket in it inherits this. |
+
+## `dispatch project rm`
+
+| Flag   | Required | Meaning                             |
+| ------ | -------- | ----------------------------------- |
+| `--id` | yes      | Tracker identifier for the project. |
+
+## `dispatch milestone set`
+
+| Flag        | Required | Meaning                               |
+| ----------- | -------- | ------------------------------------- |
+| `--id`      | yes      | Tracker identifier for the milestone. |
+| `--project` | yes      | Project the milestone belongs to.     |
+| `--name`    | yes      | Human-readable milestone name.        |
+
+## `dispatch milestone rm`
+
+| Flag   | Required | Meaning                               |
+| ------ | -------- | ------------------------------------- |
+| `--id` | yes      | Tracker identifier for the milestone. |
+
+## `dispatch ticket set`
+
+| Flag               | Required | Meaning                                                                                                                                                                             |
+| ------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--id`             | yes      | Tracker identifier, e.g. CLC-945.                                                                                                                                                    |
+| `--project`        | yes      | Project the ticket belongs to.                                                                                                                                                       |
+| `--status`         | yes      | Normalized lifecycle status. One of: backlog, paused, awaiting-external, available, in-progress, in-review, finished, delivered, verified, canceled. |
+| `--title`          | no       | Ticket title.                                                                                                                                                                        |
+| `--url`            | no       | Ticket URL.                                                                                                                                                                          |
+| `--target-kind`    | no       | What finishing this ticket produces. One of: pr, verification, human-only. Defaults to pr.                                                                                           |
+| `--requires-human` | no       | Only a human may work this ticket.                                                                                                                                                   |
+| `--injected`       | no       | Rank this ticket to the top of the frontier.                                                                                                                                         |
+| `--priority`       | no       | Lower is more urgent; omit if the tracker has none.                                                                                                                                  |
+| `--labels`         | no       | Comma-separated tracker labels, passed through as-is.                                                                                                                                |
+| `--branch-hint`    | no       | Branch-name seed the tracker suggests.                                                                                                                                               |
+| `--updated-at`     | no       | When the tracker last saw the ticket move (RFC 3339).                                                                                                                                |
+
+## `dispatch ticket rm`
+
+| Flag   | Required | Meaning                            |
+| ------ | -------- | ---------------------------------- |
+| `--id` | yes      | Tracker identifier for the ticket. |
+
+## `dispatch ticket missing`
+
+| Flag   | Required | Meaning                                     |
+| ------ | -------- | ------------------------------------------- |
+| `--id` | yes      | The ticket id the tracker has no record of. |
+
+## `dispatch edge add` / `dispatch edge rm`
+
+| Flag        | Required | Meaning                           |
+| ----------- | -------- | --------------------------------- |
+| `--blocker` | yes      | The node that must resolve first. |
+| `--blocked` | yes      | The node that waits on it.        |
+
+An edge may name an id no command has written yet. The CLI records a
+placeholder and issues its own `fetch_ticket` instruction for it.
+
+## `dispatch edge set`
+
+| Flag          | Required | Meaning                                                |
+| ------------- | -------- | ------------------------------------------------------ |
+| `--node`      | yes      | The node whose edges are being redeclared.             |
+| `--direction` | yes      | Which side to replace. One of: blockers, blocks.       |
+| `--others`    | no       | Comma-separated node ids. Omitted or empty clears the direction. |
 
 ## Exit codes
 
-| Code | Means                   | Do                                          |
-| ---- | ----------------------- | ------------------------------------------- |
-| 0    | success                 | —                                           |
-| 1    | a bug in the CLI        | report it; retrying will not help           |
-| 2    | called wrong            | fix the invocation                          |
-| 3    | the environment refused | retry (a live claim held by another is 3)   |
-| 4    | bad data                | fix the input, then re-run                  |
-
 Every failure prints `error:` and a `hint:` line saying what to change.
+
+| Code | Error              | Thrown when                                                                                                                                           |
+| ---- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `CommandError`     | A command fails for a reason no more specific class covers.                                                                                            |
+| 1    | `DefinitionError`  | A command is defined or registered wrong — a plugin bug, not your input.                                                                               |
+| 2    | `UsageError`       | A flag is missing, unknown, or outside its choices; fix the invocation.                                                                                |
+| 3    | `EnvironmentError` | The process environment is unusable — a required variable or tool is absent.                                                                           |
+| 4    | `DataError`        | The store refuses the write: an edge would close a cycle, `refresh done` finds no open refresh, or `ticket missing` names an id with no open request.  |

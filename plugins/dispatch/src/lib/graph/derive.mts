@@ -30,7 +30,7 @@ export async function derive(
 ): Promise<DerivedGraph> {
   const items = await classifiedItems(db, options);
   const tickets = items.filter((entry) => entry.item.kind === 'ticket');
-  const prompt = items.filter((entry) => entry.item.kind === 'pr');
+  const prs = items.filter((entry) => entry.item.kind === 'pr');
   const milestones = await milestoneStates(db, options);
 
   const allProjects = db
@@ -72,11 +72,11 @@ export async function derive(
       ...tally(tickets.filter((entry) => entry.item.project === project.id)),
       terminal: isTerminal(project.id),
     })),
-    prompt,
+    prs,
     anomalies: await anomalies(db),
     terminal:
       projects.every((project) => project.terminal) &&
-      !prompt.some((entry) => OPEN.includes(entry.classification)),
+      !prs.some((entry) => OPEN.includes(entry.classification)),
   };
 }
 

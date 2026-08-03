@@ -342,7 +342,7 @@ describe('claims and passes', () => {
 });
 
 describe('bare PRs and ranking', () => {
-  it('queues a bare PR and never a ticket-attached one', async () => {
+  it('queues bare and ticket-attached PR items alike', async () => {
     const db = await fresh();
     await addTicket(db, 'T1', 'backlog');
     const prs = new PrStore(db);
@@ -373,7 +373,61 @@ describe('bare PRs and ranking', () => {
       updatedAt: null,
     });
 
-    assert.deepEqual(await queueOf(db), [{id: 'o/r#7', pass: null}]);
+    assert.deepEqual(await queueOf(db), [
+      {id: 'o/r#7', pass: null},
+      {id: 'o/r#8', pass: null},
+    ]);
+    const attached = (await classifiedItems(db, {now: NOW})).find(
+      (entry) => entry.item.id === 'o/r#8'
+    );
+    assert.ok(attached);
+    assert.equal(attached.item.ticket, 'T1');
+    assert.equal(attached.item.project, 'P');
+    await db.close();
+  });
+
+  it('holds a decomposed ticket while its PR items are open, then finalizes it', async () => {
+    const db = await fresh();
+    await addTicket(db, 'T1', 'in-progress');
+    await new PrStore(db).upsertPr({
+      id: 'o/r#9',
+      ticket: 'T1',
+      origin: 'ticket',
+      repo: 'o/r',
+      prNumber: null,
+      url: null,
+      branch: null,
+      title: 'the work',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+    await block(db, 'o/r#9', 'T1');
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'T1',
+        outcome: 'decomposed',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    assert.deepEqual(await queueOf(db), [{id: 'o/r#9', pass: null}]);
+
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'o/r#9',
+        outcome: 'delivered',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+    assert.deepEqual(await queueOf(db), [{id: 'T1', pass: 'finalize'}]);
     await db.close();
   });
 

@@ -69,7 +69,7 @@ describe('derive', () => {
     const graph = await derive(db, {now: NOW});
     assert.equal(graph.projects[0]?.terminal, true);
     assert.equal(graph.terminal, false);
-    assert.equal(graph.prompt[0]?.classification, 'available');
+    assert.equal(graph.prs[0]?.classification, 'available');
     await db.close();
   });
 

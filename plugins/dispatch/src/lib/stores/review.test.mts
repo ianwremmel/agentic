@@ -6,9 +6,11 @@ import {Database} from '../db/database.mts';
 import {DataError} from '../errors/index.mts';
 import {milestoneStates} from '../graph/index.mts';
 import {
+  CoordinationStore,
   EdgeStore,
   MilestoneStore,
   ProjectStore,
+  SessionStore,
   TicketStore,
 } from './index.mts';
 import {ReviewStore} from './review.mts';
@@ -66,6 +68,28 @@ describe('ReviewStore', () => {
       new ReviewStore(db).record('M1', NOW),
       (err: unknown) => err instanceof DataError && err.message.includes('T2')
     );
+    await db.close();
+  });
+
+  it('release drops the reviewing claim without opening the gate', async () => {
+    const db = await fixture();
+    await new SessionStore(db).register({
+      id: 'S1',
+      startedAt: NOW,
+      heartbeatAt: NOW,
+    });
+    await new CoordinationStore(db).claim({
+      node: 'M1',
+      session: 'S1',
+      claimedAt: NOW,
+    });
+
+    const store = new ReviewStore(db);
+    assert.equal(await store.release('M1'), true);
+    assert.equal(await store.release('M1'), false);
+    assert.deepEqual(await new CoordinationStore(db).claims(), []);
+    const state = await milestoneStates(db, {now: NOW});
+    assert.equal(state[0]?.reviewRecorded, false);
     await db.close();
   });
 

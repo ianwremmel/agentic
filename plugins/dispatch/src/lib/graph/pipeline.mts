@@ -39,9 +39,10 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   dependency; open once its review is also valid. A member of a milestone is
  *   gated while any sequencing ancestor of that milestone is not open.
  *   Readiness never looks at sequencing, which keeps milestone gating acyclic.
- * - `item` — the dispatchable universe: every ticket, plus every bare PR (no
- *   `ticket_id` — a ticket-attached PR is that ticket's implementation
- *   detail). A bare PR has no status; its lifecycle is its outcome row.
+ * - `item` — the dispatchable universe: every ticket, plus every PR item. A
+ *   bare PR (no `ticket_id`) is prompt work; a ticket-attached one is a unit
+ *   of implementation its ticket-worker registered, inheriting the ticket's
+ *   project. A PR item has no status; its lifecycle is its outcome row.
  * - `classified` — the derived classification, highest precedence first:
  *   resolved → in-flight (started status, or a live claim) → dormant
  *   (backlog) → blocked → human-blocked → available.
@@ -192,6 +193,7 @@ item AS (
     n.external_id AS id,
     'ticket' AS kind,
     np.external_id AS project,
+    NULL AS ticket,
     t.url,
     t.title,
     t.status,
@@ -210,7 +212,8 @@ item AS (
     pr.node_id,
     n.external_id,
     'pr',
-    NULL,
+    np.external_id,
+    nt.external_id,
     pr.url,
     pr.title,
     NULL,
@@ -223,7 +226,9 @@ item AS (
     pr.updated_at
   FROM pr
   JOIN node n ON n.id = pr.node_id
-  WHERE pr.ticket_id IS NULL
+  LEFT JOIN node nt ON nt.id = pr.ticket_id
+  LEFT JOIN ticket t2 ON t2.node_id = pr.ticket_id
+  LEFT JOIN node np ON np.id = t2.project_id
 ),
 classified AS (
   SELECT

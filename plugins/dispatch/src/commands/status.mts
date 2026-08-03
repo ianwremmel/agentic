@@ -45,8 +45,12 @@ export class Command extends AbstractCommand {
             `review-recorded=${String(milestone.reviewRecorded)} open=${String(milestone.open)}\n`
         );
       }
-      for (const entry of graph.prompt) {
-        ctx.io.write(`prompt ${entry.item.id} ${entry.classification}\n`);
+      for (const entry of graph.prs) {
+        ctx.io.write(
+          `pr ${entry.item.id}` +
+            (entry.item.ticket === null ? '' : ` ticket=${entry.item.ticket}`) +
+            ` ${entry.classification}\n`
+        );
       }
       for (const anomaly of graph.anomalies) {
         ctx.io.write(`anomaly ${anomaly.kind} ${anomaly.detail}\n`);

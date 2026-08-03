@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Drive one or more tracker projects to completion — build the dependency graph, then execute the CLI's work orders as they arrive, launching ticket-worker, prompt-worker, and milestone-reviewer agents. Use when the unit of work is a whole project, not one ticket.
+description: Drive one or more tracker projects to completion — build the dependency graph, then execute the CLI's work orders as they arrive, launching ticket-worker, pr-worker, and milestone-reviewer agents. Use when the unit of work is a whole project, not one ticket.
 ---
 
 # orchestrate
@@ -22,7 +22,8 @@ skill launches agents and writes state.
 1. Resolve each project name the operator gave to its project id. Load
    `tracker-adapter-${user_config.tracker}` and use its lookup; without an
    adapter, drive the tracker's MCP server directly.
-2. Run `dispatch refresh --tracker <tracker> --project <project-ids>`.
+2. Run `dispatch refresh --tracker <tracker> --project <ids>` — one
+   comma-separated value, not repeated flags.
 3. Stop and wait — work arrives as instructions, each handled per the table
    below, until `project_complete` covers every project the operator named or
    the operator says stop.
@@ -38,7 +39,7 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `fetch_ticket`             | Run [`build-graph`](../build-graph/SKILL.md) for the single ticket named.                        |
 | `refresh_complete`         | Report the graph is built. Stay resident — dispatch begins.                                      |
 | `dispatch_ticket`          | Launch a background `ticket-worker` agent, passing the event's ticket, project, and pass.        |
-| `dispatch_pr`              | Launch a background `prompt-worker` agent, passing the event's PR item id and pass.              |
+| `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, ticket, and pass.         |
 | `perform_milestone_review` | Launch a background `milestone-reviewer` agent, passing the milestone and project.               |
 | `park_human_blocked`       | Park the ticket yourself via the adapter (awaiting-external, else paused) and post the handoff.  |
 | `alert_failure`            | Alert the operator on the ticket via the adapter; recovery is tracker-side.                      |

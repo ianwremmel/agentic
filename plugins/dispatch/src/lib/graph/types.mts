@@ -43,10 +43,12 @@ export interface OutcomeView {
   detail: string | null;
 }
 
-/** One dispatchable work item: a ticket, or a bare PR (no ticket attached). */
+/** One dispatchable work item: a ticket, or a PR item (bare or ticket-backed). */
 export interface WorkItem {
   id: string;
   kind: 'ticket' | 'pr';
+  /** The ticket a PR item implements; null for tickets and bare PRs. */
+  ticket: string | null;
   /** Null for a bare PR. */
   project: string | null;
   url: string | null;
@@ -123,9 +125,9 @@ export interface DerivedGraph {
   items: ClassifiedItem[];
   milestones: MilestoneState[];
   counts: ProjectCounts[];
-  /** Bare-PR work items, outside any project's counts. */
-  prompt: ClassifiedItem[];
+  /** PR work items — prompt-injected or ticket-registered. */
+  prs: ClassifiedItem[];
   anomalies: Anomaly[];
-  /** Every selected project terminal and no bare-PR item open. */
+  /** Every selected project terminal and no PR item open. */
   terminal: boolean;
 }

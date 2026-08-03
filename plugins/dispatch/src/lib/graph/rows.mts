@@ -63,6 +63,7 @@ export function toClassified(row: Row): ClassifiedItem {
     item: {
       id: text(row.id) ?? '',
       kind: text(row.kind) === 'pr' ? 'pr' : 'ticket',
+      ticket: text(row.ticket),
       project: text(row.project),
       url: text(row.url),
       title: text(row.title) ?? '',

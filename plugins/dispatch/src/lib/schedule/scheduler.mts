@@ -95,8 +95,12 @@ export class Scheduler {
       if (entry.item.kind === 'pr') {
         orders.push({
           kind: 'dispatch_pr',
-          meta: {pr: entry.item.id, pass: pass ?? 'available'},
-          body: `Launch a prompt-worker agent for PR item ${entry.item.id}${passNote}. It is claimed for this session; the agent records the outcome when done.`,
+          meta: {
+            pr: entry.item.id,
+            pass: pass ?? 'available',
+            ...(entry.item.ticket === null ? {} : {ticket: entry.item.ticket}),
+          },
+          body: `Launch a pr-worker agent for PR item ${entry.item.id}${entry.item.ticket === null ? '' : ` (implements ticket ${entry.item.ticket})`}${passNote}. It is claimed for this session; the agent records the outcome when done.`,
         });
       } else {
         orders.push({

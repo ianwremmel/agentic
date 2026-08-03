@@ -62,10 +62,10 @@ runs the named skill and never has to read or understand the graph.
 
 One source the server **cannot** reach is a tracker exposed only over MCP (Linear
 today). A channel is an MCP server, not a client; it cannot call another MCP
-server. So a tracker refresh is itself a work order: the server asks the session
-— which holds the MCP client and the tracker adapter skill — to fetch and write
-the delta back through `dispatch graph`, then observes the result in the DB on
-its next tick. The trust boundary the rest of the spec relies on (MCP access
+server. So a tracker refresh is delegated: the server pushes fetch
+instructions (`scan_project`, `fetch_ticket`) and the session — which holds the
+MCP client and the tracker adapter skill — fetches and writes the delta back
+through the flat `dispatch` write commands, which the server observes. The trust boundary the rest of the spec relies on (MCP access
 stays in the session) is preserved, and the server drives the refresh instead of
 a skill self-timing it.
 

@@ -73,23 +73,26 @@ with `no-server-for-session` rather than answer about another session's server
 
 ## Work registration
 
-Work to monitor lives in the graph database (§2.6); there is no separate task
-registry and no command that "launches the daemon." A session's server monitors
-the work that session has claimed and its open PRs. Work enters the graph in
-three ways:
+Work lives in the graph database (§2.6); there is no separate task registry
+and no command that "launches the daemon." Work enters the graph three ways:
 
-1. **Tracker projects and tickets** are registered by running the graph producer
-   (the `build-graph` skill) against the tracker and writing the result through
-   the `dispatch graph` commands. Because reading a tracker may require the
-   session's MCP client, this is session work — it is not a standalone CLI command
-   that fetches a tracker. The server can prompt it with a `refresh_graph`
-   delegation (§3.1.2).
-2. **A bare pull request** is injected with `dispatch graph pr add`, which records
-   a ticketless PR as a top-priority work item (see the graph command surface).
-3. **Claiming** (`dispatch graph next --claim`) is what makes a node this
-   session's to watch; releasing or recording an outcome removes it from active
-   monitoring.
+1. **Tracker projects and tickets** are written through the flat commands
+   (`dispatch project set`, `milestone set`, `ticket set`, `edge add|rm|set`)
+   in answer to the server's ingest instructions, opened by
+   `dispatch refresh --tracker T --project P[,P]` and closed by
+   `dispatch refresh done [--cursor]`. Because reading a tracker may require
+   the session's MCP client, the fetching is session work; the deciding is the
+   CLI's (§3.1.2).
+2. **A bare pull request or prompt item** is injected with
+   `dispatch pr set --injected`, and a runtime-injected ticket with
+   `dispatch ticket set --injected`; both rank to the head of the queue.
+3. **Claiming is the server's**: the scheduler claims a node before emitting
+   its work order. Workers report through `dispatch outcome set` (releasing
+   claim and slot), hold compute with `dispatch slot acquire`/`release`, and
+   open milestone gates with `dispatch review record` (or
+   `dispatch review release` to end a review with the gate closed).
 
-The registry view is `dispatch graph doc` / `dispatch graph summary`; there is no
-separate `tasks list`. Cross-session concurrency and stale-claim recovery are
-governed by §2.6 and §3.1.2 (Multi-session).
+The registry views are `dispatch status` (counts, milestone gates, anomalies,
+the terminal verdict) and `dispatch queue` (what the scheduler would hand out
+next). Cross-session concurrency and stale-claim recovery are governed by §2.6
+and §3.1.2 (Multi-session).

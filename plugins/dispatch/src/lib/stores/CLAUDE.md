@@ -15,5 +15,6 @@ concept, not a single table: an operation may write several tables atomically.
 - `fetch-request` — the durable instruction queue: enqueue, deliver, redeliver,
   resolve, and the open count that decides when a refresh closes.
 
-The derived read-model (frontier, classification, milestone state, anomalies) and
-`recordReview` are not here yet — see the Plan 2 follow-up.
+The derived read-model (frontier, classification, milestone state, anomalies)
+lives in `../graph`. `recordReview` is not here yet — it lands with the
+work-order slice.

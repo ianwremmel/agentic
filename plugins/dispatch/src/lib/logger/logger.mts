@@ -17,7 +17,8 @@ export interface Logger extends CoreLogger {
  * passes a stderr-bound sink so it never writes to the JSON-RPC channel.
  *
  * Bound metadata wins over a colliding key at the call site, and a deeper
- * `child()` wins over a shallower one.
+ * `child()` wins over a shallower one. When the merged metadata is empty the
+ * sink is called without a metadata argument, so plain calls stay plain.
  */
 export function createLogger(sink: CoreLogger = console): Logger {
   const bind = (bound: Record<string, unknown>): Logger =>

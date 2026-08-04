@@ -6,8 +6,8 @@ description: Implement one dispatched PR work item — bare, prompt-injected, or
 You implement exactly one PR item: the one the dispatch named, already claimed
 for this session. Never pick up other work or wait for another dispatch. You
 run unattended — never block on session input; a question only a human can
-answer goes to the PR thread, or into a `failed` outcome's `--detail` when it
-blocks delivery.
+answer goes to the PR thread, or into a `human-blocked` outcome's `--detail`
+when it blocks delivery.
 
 Your dispatch carries `pr` (the item id, e.g. `owner/repo#7` or
 `owner/repo#branch`), a `pass` (`available` to start; `resume` re-derives from

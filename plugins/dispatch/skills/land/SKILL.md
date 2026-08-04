@@ -45,10 +45,11 @@ One run drives exactly one PR. Resolve the input before Setup:
   ticket-backed ([`ticket.md`](./ticket.md)).
 - **Freeform prompt** — no ticket. The prompt is the brief.
 
-Then run `pr-status` once, before Setup, to establish where the PR already
-stands. **Never assume there is no PR.** A ticket or a prompt can name work a
-killed session already opened one for, so look for it — by the ticket's linked
-PRs and by the branch — and take Setup's Resume path if one exists.
+Then, before Setup, find the PR: a PR input names it; for a ticket or a prompt,
+search the ticket's linked PRs and the branch. **Never assume there is no PR** —
+a killed session may already have opened one. If one exists, run `pr-status` on
+it to establish where it stands, then take Setup's Resume path. If none exists,
+go to Setup and open one.
 
 Gates, lifecycle, and ending are the same for all three. A ticket-backed run
 also keeps the ticket's role in sync and claims it before the first push; a run
@@ -87,7 +88,10 @@ band never reaches the snapshot — accept it when you see it:
    passing; repo can suppress non-blocking checks via `informational="true"`).
 2. **No conflicts** — `<merge-conflicts present="false"/>`.
 3. **No actionable annotations** — zero `<annotation actionable="true">`.
-4. **No actionable comments** — zero `<comment actionable="true">`.
+4. **No actionable comments or review bodies** — zero `<comment
+   actionable="true">` and zero `<review actionable="true">`. A review's own
+   prose is a work item like any other; the inline threads it came with are
+   gate 5's business, not this one's.
 5. **No actionable threads** — zero `<thread actionable="true">`.
 6. **Operator-approved** (always required). Your credentials file lists the
    signal forms that exist in this environment; your operator-mode file names
@@ -141,7 +145,8 @@ for `pr-status` to surface it.
 Address **every** actionable item, not just the first. `actionable="true"` is
 your only task source: work the item, then reply and apply a terminal signal so
 it settles. An item marked `actionable="false"` carries a `reason=` (`resolved`,
-`agent-artifact`, `agent-terminal-reply`, `acked`) — leave it alone. `<summary>`
+`agent-artifact`, `agent-terminal-reply`, `acked`, `no-body`, `dismissed`) —
+leave it alone. `<summary>`
 recaps what an item *says*, never whether it's resolved, so an item you already
 settled still reads as open. That is expected, and never grounds to reopen it.
 
@@ -151,6 +156,7 @@ settled still reads as open. That is expected, and never grounds to reopen it.
 | `<checks state="failing">` (gate 1)                   | Diagnose root cause; fix.                                                 |
 | Actionable `<comment>` or `<thread>` (gates 4–5)      | Reply (commit link **or** one-line dismissal naming what's dismissed) and apply a terminal signal. Dismissing a bot's point needs only that line; dismissing a human's needs you to say why their concern doesn't apply — if you can't say it, do what they asked. **Never resolve the thread** — even your own; that's a human's call, and the terminal signal already suppresses re-evaluation. |
 | Actionable `<annotation>` (gate 3)                    | Fix the code, OR dismiss it: write the rationale to the path in `cache=` with `.md` swapped for `.ack` (a sibling file, not a child), and record it in the plan comment or commit body. |
+| Actionable `<review>` (gate 4)                        | Read the body from `cache=` — it is prose the reviewer wrote outside any thread. Act on it and reply in a top-level comment saying what you did; a body that asks for nothing (a bot's overview) needs no reply. Either way, settle it by writing the `cache=` path with `.md` swapped for `.ack` (a sibling file), rationale inside — the review object itself takes no reply or reaction, so the `.ack` is what clears the gate. |
 
 ## Cross-cutting behaviors
 

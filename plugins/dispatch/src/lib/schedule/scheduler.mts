@@ -13,7 +13,7 @@ import {
 } from '../stores/index.mts';
 import type {NoticeKind} from '../stores/notice.mts';
 
-/** Compute-slot ledger size when nothing configures one. */
+/** Compute-slot ledger size and admission cap when nothing configures one. */
 export const DEFAULT_MAX_PARALLEL = 3;
 
 export interface WorkOrder {
@@ -67,22 +67,32 @@ export class Scheduler {
     // No work order before the acknowledgement: a work order claims a node,
     // which a session that never hears the channel would never release.
     if (own?.ackedAt != null) {
-      orders.push(...(await this.#fill(now)));
-      orders.push(...(await this.#reviews(now)));
+      // One admission budget per tick: the cap minus everything in flight — a
+      // claim is an obligation to run an agent, so it consumes capacity from
+      // the moment it exists, not from when its worker takes a slot. Reviews
+      // spend first: a review is the continuation of already-landed work and
+      // opens a gate other work waits behind.
+      const coordination = new CoordinationStore(this.#db);
+      const inFlight = await coordination.inFlightCount({
+        now,
+        staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+      });
+      const budget = Math.max(0, this.#maxParallel - inFlight);
+      const reviews = await this.#reviews(now, budget);
+      orders.push(...reviews);
+      orders.push(...(await this.#fill(now, budget - reviews.length)));
       orders.push(...(await this.#conditions(now)));
     }
     return {orders, retired: false};
   }
 
-  /** Claim-then-emit for the dispatch queue, up to free compute capacity. */
-  async #fill(now: string): Promise<WorkOrder[]> {
+  /** Claim-then-emit for the dispatch queue, up to the remaining budget. */
+  async #fill(now: string, budget: number): Promise<WorkOrder[]> {
     const coordination = new CoordinationStore(this.#db);
-    const held = await coordination.slotCount();
-    let budget = Math.max(0, this.#maxParallel - held);
     const orders: WorkOrder[] = [];
 
     for (const {entry, pass} of await dispatchQueue(this.#db, {now})) {
-      if (budget === 0) break;
+      if (orders.length >= budget) break;
       const claim = await coordination.claim({
         node: entry.item.id,
         session: this.#session,
@@ -90,7 +100,6 @@ export class Scheduler {
       });
       if (claim.outcome !== 'claimed' && claim.outcome !== 'refreshed')
         continue;
-      budget -= 1;
       const passNote = pass === null ? '' : ` (pass: ${pass})`;
       if (entry.item.kind === 'pr') {
         orders.push({
@@ -117,11 +126,15 @@ export class Scheduler {
     return orders;
   }
 
-  /** One review order per open gate, tracked by a milestone-keyed claim. */
-  async #reviews(now: string): Promise<WorkOrder[]> {
+  /**
+   * One review order per open gate, tracked by a milestone-keyed claim and
+   * bounded by the shared budget — a review order launches an agent too.
+   */
+  async #reviews(now: string, budget: number): Promise<WorkOrder[]> {
     const coordination = new CoordinationStore(this.#db);
     const orders: WorkOrder[] = [];
     for (const milestone of await milestoneStates(this.#db, {now})) {
+      if (orders.length >= budget) break;
       if (!milestone.readyForReview || milestone.reviewRecorded) continue;
       if (milestone.claim?.live === true) continue;
       const claim = await coordination.claim({

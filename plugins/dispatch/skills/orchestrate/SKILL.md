@@ -49,9 +49,12 @@ Return to waiting after each launch. Give each worker only what the event
 carries; never ticket content. Launch every order you receive; the CLI claims
 and rate-limits before it emits.
 
-Human input routes through the tracker (alerts on tickets, questions on
-review artifacts), never by blocking on session input. Status reports to the
-session are fine.
+Never ask the session for input (`AskUserQuestion` or any blocking prompt) —
+a headless run has no operator, and an unanswered question stalls every
+project you drive. Human input routes through the tracker (alerts on tickets,
+questions on review artifacts); status reports to the session are fine. When
+an order's premise looks wrong or the CLI misbehaves, alert the operator on
+the tracker as for `alert_failure`, then keep executing orders as issued.
 
 ## Injection
 

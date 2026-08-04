@@ -51,21 +51,27 @@ Each tick, in order:
    their claims and slots cascade away, which is how a crashed session's work
    returns to the queue (as `resume`).
 2. Reconcile ingest (§3.1.2): deliver owed fetch instructions and completions.
-3. Only once its probe is acknowledged (§3.1.2): **fill** — for each queue
-   entry up to free compute capacity, claim the node for this session under an
-   immediate transaction, then emit one work order. A node already claimed by
-   any live session MUST be skipped, so two servers on one database cannot
-   double-dispatch.
-4. Emit `perform_milestone_review` for each milestone ready-for-review with no
-   valid review and no live claim, claiming the milestone first.
+3. Only once its probe is acknowledged (§3.1.2): compute the tick's admission
+   budget — `max-parallel` minus everything in flight, where a unit in flight
+   is a node claimed by a live session or a held slot, a unit holding both
+   counted once. Then **reviews** — emit `perform_milestone_review` for each
+   milestone ready-for-review with no valid review and no live claim, claiming
+   the milestone first, up to the budget. Reviews spend first: a review
+   continues already-landed work and opens a gate other work waits behind.
+4. **Fill** — for each queue entry up to the remaining budget, claim the node
+   for this session under an immediate transaction, then emit one work order.
+   A node already claimed by any live session MUST be skipped, so two servers
+   on one database cannot double-dispatch.
 5. Emit the condition orders once per episode, tracked durably:
    `park_human_blocked` for a human-blocked ticket not yet parked,
    `alert_failure` for a non-retryable failure, `project_complete` when a
    project's counts go terminal. A lapsed condition MUST clear its marker so a
    new episode fires again.
 
-Admission is capped by free ledger capacity (`max-parallel` minus held slots)
-per tick; the binding compute bound remains the atomic slot acquire below.
+A claim is an obligation to launch an agent, so the budget bounds total
+obligations outstanding, not admissions per tick: claims accumulated on
+earlier ticks consume capacity until their outcomes release them. The atomic
+slot acquire below remains the binding bound on concurrent compute.
 
 ## Work orders and the session
 

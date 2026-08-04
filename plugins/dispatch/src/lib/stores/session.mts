@@ -70,9 +70,10 @@ export class SessionStore {
   }
 
   /**
-   * Live sessions carrying a Claude session id, for correlating a caller to
-   * its own server. Liveness is heartbeat freshness — the server heartbeats
-   * every tick, so a quiet row is a dead one.
+   * Heartbeat-fresh sessions carrying a Claude session id, for correlating a
+   * caller to its own server. Freshness is this store's half of liveness;
+   * callers judge the other half — whether the registered process still
+   * exists — through `lib/liveness`.
    */
   async liveForCaller(
     claudeSessionId: string,
@@ -88,6 +89,17 @@ export class SessionStore {
            AND unixepoch(?) - unixepoch(heartbeat_at) <= ?
          ORDER BY id`,
         [claudeSessionId, now, windowSeconds]
+      )
+      .map(toSession);
+  }
+
+  /** Every row carrying this Claude session id, fresh or not. */
+  async forCaller(claudeSessionId: string): Promise<Session[]> {
+    return this.#db
+      .all(
+        `SELECT id, host, pid, claude_session_id, acked_at, started_at, heartbeat_at
+         FROM session WHERE claude_session_id = ? ORDER BY id`,
+        [claudeSessionId]
       )
       .map(toSession);
   }

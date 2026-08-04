@@ -341,6 +341,75 @@ describe('claims and passes', () => {
   });
 });
 
+describe('waiting on an operator response', () => {
+  it('classifies a human-blocked PR item and withholds it from the queue', async () => {
+    const db = await fresh();
+    await new PrStore(db).upsertPr({
+      id: 'o/r#7',
+      ticket: null,
+      origin: 'prompt',
+      repo: 'o/r',
+      prNumber: 7,
+      url: null,
+      branch: null,
+      title: 'bare',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'o/r#7',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: 'which auth flow?',
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    const item = (await classifiedItems(db, {now: NOW})).find(
+      (entry) => entry.item.id === 'o/r#7'
+    );
+    assert.equal(item?.classification, 'human-blocked');
+    assert.deepEqual(await queueOf(db), []);
+    await db.close();
+  });
+
+  it('re-serves a parked ticket as resume once its status leaves the parked state', async () => {
+    const db = await fresh();
+    await addTicket(db, 'A', 'awaiting-external');
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'A',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    // Still parked: the wait is on.
+    assert.deepEqual(await queueOf(db), []);
+
+    // The human responded and reopened the ticket.
+    await addTicket(db, 'A', 'available');
+    assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'resume'}]);
+
+    // A response that moves it straight back to started also resumes.
+    await addTicket(db, 'A', 'in-progress');
+    assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'resume'}]);
+
+    // A live claim means a worker already picked it up: withhold.
+    await claim(db, 'A', 'S1');
+    assert.deepEqual(await queueOf(db), []);
+    await db.close();
+  });
+});
+
 describe('bare PRs and ranking', () => {
   it('queues bare and ticket-attached PR items alike', async () => {
     const db = await fresh();

@@ -16,7 +16,11 @@ The CLI MUST derive, from the stored graph alone:
 
 - **Classification** per work item, highest precedence first: `verified`,
   `canceled`, `in-flight` (a started status, or a live claim), `dormant`
-  (backlog), `blocked`, `human-blocked`, `available`.
+  (backlog), `blocked`, `human-blocked`, `available`. A PR item whose outcome
+  is `human-blocked` classifies `human-blocked` directly — it has no status to
+  park. A ticket whose `human-blocked` outcome its status contradicts (it left
+  `awaiting-external`/`paused`: the human responded) re-enters the queue as a
+  `resume` pass.
 - **Effective blocking**: a ticket is blocked by an unresolved ancestor over
   blocking edges — a `verified`/`canceled` ticket does not block, and
   cancellation releases downstream work; a placeholder blocks until written.
@@ -64,7 +68,8 @@ Each tick, in order:
    on one database cannot double-dispatch.
 5. Emit the condition orders once per episode, tracked durably:
    `park_human_blocked` for a human-blocked ticket not yet parked,
-   `alert_failure` for a non-retryable failure, `project_complete` when a
+   `alert_failure` for a non-retryable failure or a PR item waiting on an
+   operator response (`human-blocked` outcome), `project_complete` when a
    project's counts go terminal. A lapsed condition MUST clear its marker so a
    new episode fires again.
 

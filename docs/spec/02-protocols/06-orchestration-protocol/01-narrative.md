@@ -67,6 +67,13 @@ that parked the ticket. The scheduler never dispatches them; it emits one
 posts the handoff through the adapter. The parked ticket holds no slot, and
 its dependents unblock when a human moves it.
 
+A worker-discovered wall is a different condition from `requires-human`: the
+work is agent-workable, but mid-flight an operator response became the
+blocker. A ticket parks and resumes as above. A PR item has no status to
+park, so its worker records a `human-blocked` outcome instead; the scheduler
+alerts the operator once per episode, and removing the outcome requeues the
+item.
+
 ## Runtime injection
 
 Ad-hoc work enters through the store mid-run: a ticket written with

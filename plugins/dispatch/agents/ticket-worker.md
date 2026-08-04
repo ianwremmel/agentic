@@ -15,13 +15,13 @@ status transitions, and comments to the tracker's tools.
 
 ## The passes
 
-| pass        | You were dispatched to                                                                    |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `available` | Start the ticket fresh: read, transition, plan, register the work.                        |
-| `resume`    | Pick up a crashed run. Re-derive its state from the ticket and its PRs; keep what landed. |
-| `verify`    | The work already delivered. Validate the ticket's aims and post the DoD evidence.         |
-| `finalize`  | Every child of this ticket resolved. Verify the ticket's own aims and close it.           |
-| `retry`     | Re-run a failed verification.                                                             |
+| pass        | You were dispatched to                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `available` | Start the ticket fresh: read, transition, plan, register the work.                                                       |
+| `resume`    | Pick up a crashed run, or one whose human wait ended. Re-derive its state from the ticket and its PRs; keep what landed. |
+| `verify`    | The work already delivered. Validate the ticket's aims and post the DoD evidence.                                        |
+| `finalize`  | Every child of this ticket resolved. Verify the ticket's own aims and close it.                                          |
+| `retry`     | Re-run a failed verification.                                                                                            |
 
 ## Starting a ticket (`available`, and `resume` where nothing was registered)
 

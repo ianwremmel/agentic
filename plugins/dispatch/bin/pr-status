@@ -159,13 +159,25 @@ PR_NUMBER="$(jq -r .number <<<"$PR_JSON")"
 OWNER="${REPO%/*}"
 REPO_NAME="${REPO#*/}"
 
-THREADS_JSON="$(gh api graphql \
+# Gate 5 is "zero actionable threads", so a thread the query never returns reads
+# as a passing gate: the review-heavy PR that exceeds one 100-node page is
+# exactly the one where dropped feedback matters. `--paginate` walks every page
+# via $endCursor; `--jq …nodes[]` emits one node per line across all pages, which
+# `jq -s` collects back into a single array.
+#
+# The nested comments(last:50) cap stays. Actionability keys on the newest
+# comment, which `last:50` keeps, so no gate can be decided on missing data; what
+# it costs is a truncated cached thread body on a >50-comment thread, tracked
+# separately as issue #203. Lifting it needs a per-thread follow-up query rather
+# than a flag, since `--paginate` follows exactly one connection's cursor and
+# this query spends it on reviewThreads.
+THREADS_JSON="$(gh api graphql --paginate \
   -F owner="$OWNER" -F repo="$REPO_NAME" -F pr="$PR_NUMBER" \
   -f query='
-    query($owner:String!, $repo:String!, $pr:Int!) {
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
       repository(owner:$owner, name:$repo) {
         pullRequest(number:$pr) {
-          reviewThreads(first:100) {
+          reviewThreads(first:100, after:$endCursor) {
             nodes {
               id
               isResolved
@@ -173,10 +185,11 @@ THREADS_JSON="$(gh api graphql \
                 nodes { body author { login } }
               }
             }
+            pageInfo { hasNextPage endCursor }
           }
         }
       }
-    }' --jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
+    }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]' | jq -s '.')"
 
 # §2.2.2 requires EVERY top-level comment to appear, and Gate 6 reads reactions
 # off the (recent) engagement comment, so the comments connection must be fully

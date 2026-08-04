@@ -45,7 +45,9 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   project. A PR item has no status; its lifecycle is its outcome row.
  * - `classified` — the derived classification, highest precedence first:
  *   resolved → in-flight (started status, or a live claim) → dormant
- *   (backlog) → blocked → human-blocked → available.
+ *   (backlog) → blocked → human-blocked → available. A PR item whose outcome
+ *   is `human-blocked` classifies human-blocked directly: it has no status to
+ *   park, and the outcome is its worker saying "waiting on an operator".
  * - `queued` — what the scheduler may hand out, and as which pass. An
  *   `available` item with no outcome row is dispatchable as-is; a started item
  *   with no live claim and no outcome is a crashed run — its claim is stale or
@@ -53,8 +55,13 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   recorded outcome re-admits the item for exactly one follow-up
  *   pass — `verify` for a delivered ticket (a bare PR is done at delivered),
  *   `finalize` for a decomposed parent whose subtasks all resolved, `retry`
- *   for a retryable failure. Nothing human-owned, parked, resolved, or held
- *   by a live claim is ever handed out.
+ *   for a retryable failure, and `resume` for a ticket whose `human-blocked`
+ *   outcome a later tracker update contradicts — the ticket was updated after
+ *   the report and now reads available, so the human responded and unparked
+ *   it. The timestamp guard keeps a stale local row (ingest lagging the
+ *   worker's own park transition) from reading as a response. Nothing
+ *   human-owned, parked, resolved, or held by a live claim is ever handed
+ *   out.
  */
 export const PREFIX = `
 WITH RECURSIVE
@@ -246,6 +253,7 @@ classified AS (
     o.outcome AS outcome,
     o.retryable AS outcome_retryable,
     o.detail AS outcome_detail,
+    o.recorded_at AS outcome_recorded_at,
     (SELECT group_concat(nx.external_id, ',' ORDER BY nx.external_id)
        FROM blocker_view bv JOIN node nx ON nx.id = bv.id
       WHERE bv.target = i.node_id) AS blocked_by,
@@ -259,6 +267,7 @@ classified AS (
     CASE
       WHEN i.kind = 'pr' AND o.outcome IN ('delivered', 'verified') THEN 'verified'
       WHEN i.kind = 'pr' AND o.outcome = 'canceled' THEN 'canceled'
+      WHEN i.kind = 'pr' AND o.outcome = 'human-blocked' THEN 'human-blocked'
       WHEN i.status = 'verified' THEN 'verified'
       WHEN i.status = 'canceled' THEN 'canceled'
       WHEN i.status IN ('in-progress','in-review','finished','delivered') THEN 'in-flight'
@@ -287,6 +296,10 @@ queued AS (
       WHEN outcome IS NULL AND classification = 'available' THEN 'available'
       WHEN outcome IS NULL AND (claim_live IS NULL OR claim_live = 0)
         AND classification = 'in-flight' THEN 'resume'
+      WHEN outcome = 'human-blocked' AND (claim_live IS NULL OR claim_live = 0)
+        AND classification = 'available'
+        AND updated_at IS NOT NULL
+        AND unixepoch(updated_at) > unixepoch(outcome_recorded_at) THEN 'resume'
       WHEN outcome IS NULL OR claim_live = 1 THEN NULL
       WHEN outcome = 'delivered' AND kind = 'ticket' THEN 'verify'
       WHEN outcome = 'decomposed'

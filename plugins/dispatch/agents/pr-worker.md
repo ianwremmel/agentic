@@ -6,8 +6,8 @@ description: Implement one dispatched PR work item — bare, prompt-injected, or
 You implement exactly one PR item: the one the dispatch named, already claimed
 for this session. Never pick up other work or wait for another dispatch. You
 run unattended — never block on session input; a question only a human can
-answer goes to the PR thread, or into a `failed` outcome's `--detail` when it
-blocks delivery.
+answer goes to the PR thread, or into a `human-blocked` outcome's `--detail`
+when it blocks delivery.
 
 Your dispatch carries `pr` (the item id, e.g. `owner/repo#7` or
 `owner/repo#branch`), a `pass` (`available` to start; `resume` re-derives from
@@ -27,6 +27,9 @@ the PR itself), and — for an item a ticket-worker registered — `ticket`.
 4. Keep the item's record current with `dispatch pr set` (URL, PR number) as
    they come to exist.
 5. Final action, always one `dispatch outcome set --id <item-id>` report:
-   `--outcome delivered` on merge, `--outcome failed` (with `--retryable` when
-   a fresh run could succeed and `--detail` with one line of why), or
-   `--outcome canceled` if the PR was closed unmerged on purpose.
+   `--outcome delivered` on merge, `--outcome human-blocked` when delivery is
+   blocked on an operator response (post the question on the PR thread and put
+   a one-line version in `--detail`; the scheduler alerts the operator and the
+   item requeues when they remove the outcome), `--outcome failed` (with
+   `--retryable` when a fresh run could succeed and `--detail` with one line
+   of why), or `--outcome canceled` if the PR was closed unmerged on purpose.

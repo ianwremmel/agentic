@@ -6,6 +6,7 @@ import {Database} from '../db/database.mts';
 import {
   CoordinationStore,
   MilestoneStore,
+  PrStore,
   ProjectStore,
   ReviewStore,
   SessionStore,
@@ -286,6 +287,62 @@ describe('Scheduler', () => {
     assert.deepEqual(kinds(first.orders), ['alert_failure']);
     const second = await scheduler.tick(LATER);
     assert.deepEqual(second.orders, []);
+    await db.close();
+  });
+
+  it('alerts a PR item waiting on an operator response once, until requeued', async () => {
+    const {db, scheduler} = await fresh();
+    await new PrStore(db).upsertPr({
+      id: 'o/r#7',
+      ticket: null,
+      origin: 'prompt',
+      repo: 'o/r',
+      prNumber: 7,
+      url: null,
+      branch: null,
+      title: 'bare',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'o/r#7',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: 'which auth flow?',
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    const first = await scheduler.tick(NOW);
+    const alerts = first.orders.filter(
+      (order) => order.kind === 'alert_failure'
+    );
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0]?.meta.pr, 'o/r#7');
+    assert.match(alerts[0].body, /operator response/);
+    assert.ok(
+      !first.orders.some((order) => order.kind === 'park_human_blocked'),
+      'a PR item has no status to park'
+    );
+
+    const second = await scheduler.tick(LATER);
+    assert.ok(
+      !second.orders.some((order) => order.kind === 'alert_failure'),
+      'the alert fires once per episode'
+    );
+
+    // The operator answered and removed the outcome: the item requeues.
+    await new CoordinationStore(db).removeOutcome('o/r#7');
+    const third = await scheduler.tick(LATER);
+    assert.deepEqual(
+      third.orders
+        .filter((order) => order.kind === 'dispatch_pr')
+        .map((order) => order.meta.pr),
+      ['o/r#7']
+    );
     await db.close();
   });
 

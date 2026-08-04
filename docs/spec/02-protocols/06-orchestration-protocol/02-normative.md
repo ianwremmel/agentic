@@ -16,7 +16,11 @@ The CLI MUST derive, from the stored graph alone:
 
 - **Classification** per work item, highest precedence first: `verified`,
   `canceled`, `in-flight` (a started status, or a live claim), `dormant`
-  (backlog), `blocked`, `human-blocked`, `available`.
+  (backlog), `blocked`, `human-blocked`, `available`. A PR item whose outcome
+  is `human-blocked` classifies `human-blocked` directly — it has no status to
+  park. A ticket whose `human-blocked` outcome a later tracker update
+  contradicts (updated after the report, now available: the human responded)
+  re-enters the queue as a `resume` pass.
 - **Effective blocking**: a ticket is blocked by an unresolved ancestor over
   blocking edges — a `verified`/`canceled` ticket does not block, and
   cancellation releases downstream work; a placeholder blocks until written.
@@ -29,10 +33,11 @@ The CLI MUST derive, from the stored graph alone:
   into the milestone MUST re-close the gate by invalidating that snapshot.
 - **The dispatch queue**: available work ranked injected-first, then priority,
   then descendant fan-out, then id — plus re-admission passes for invested
-  work: `resume` (started, no live claim, no outcome), `verify` (delivered
-  ticket), `finalize` (decomposed parent whose subtasks resolved), `retry`
-  (retryable failure). Nothing human-owned, parked, resolved, or held by a
-  live claim is ever queued.
+  work: `resume` (started, no live claim, no outcome — or a `human-blocked`
+  ticket back to available via a tracker update that postdates the report),
+  `verify` (delivered ticket), `finalize` (decomposed parent whose subtasks
+  resolved), `retry` (retryable failure). Nothing human-owned, parked,
+  resolved, or held by a live claim is ever queued.
 - **Counts and a terminal verdict** per project. A project with an owed
   milestone review is not terminal.
 - **Anomalies**: dangling placeholder endpoints, mutually blocking projects,
@@ -64,7 +69,8 @@ Each tick, in order:
    on one database cannot double-dispatch.
 5. Emit the condition orders once per episode, tracked durably:
    `park_human_blocked` for a human-blocked ticket not yet parked,
-   `alert_failure` for a non-retryable failure, `project_complete` when a
+   `alert_failure` for a non-retryable failure or a PR item waiting on an
+   operator response (`human-blocked` outcome), `project_complete` when a
    project's counts go terminal. A lapsed condition MUST clear its marker so a
    new episode fires again.
 
@@ -83,7 +89,7 @@ The orchestrate session MUST execute orders and derive nothing:
 | `dispatch_pr`              | launch a background pr-worker agent with the order's meta           |
 | `perform_milestone_review` | launch a background milestone-reviewer agent with the order's meta  |
 | `park_human_blocked`       | park the ticket via the adapter and post the human handoff          |
-| `alert_failure`            | alert the operator on the ticket via the adapter                    |
+| `alert_failure`            | alert the operator at the venue the order body names (PR-first)     |
 | `project_complete`         | announce it; stop once every selected project is complete           |
 
 The session passes a worker only what the order carries plus credential

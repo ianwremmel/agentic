@@ -190,7 +190,9 @@ coordinator's inputs are the PR's forge identity (`repo`, `pr_number`, `pr_url`,
 claim, decompose, or transition: the coordinator simply drives the one PR to a
 terminal state through §2.4 Delivery and reports a PR-terminal outcome —
 `delivered` when the PR merges (terminal here, since a ticketless PR has no
-separate verification step) or `canceled`/`failed` when it closes without merging.
+separate verification step), `canceled`/`failed` when it closes without merging,
+or `human-blocked` (non-terminal, §Human handoff) when delivery waits on an
+operator response.
 Its liveness lock is **PR-keyed** (§2.6 §Dispatch contract), not ticket-keyed.
 
 If the injected PR **is** linked to a ticket, the coordinator instead behaves as a
@@ -213,6 +215,12 @@ manual step in an external system — it MUST:
    exits; a standalone coordinator enters the §2.3 wait state on the chosen
    venue.
 
+For a **PR item** there is no ticket status to park: the worker posts the
+question on the PR thread (tagging a human per §2.1), records a
+`human-blocked` outcome carrying a one-line version of the question, and
+exits. The §2.6 tick alerts the operator once per episode; removing the
+outcome requeues the item.
+
 The coordinator MUST NOT block a session on input as a condition of forward
 progress. Resolution follows §2.3: when a human responds with addressable
 content, the ticket is resumed (parked → `available` per §2.3) and re-worked from
@@ -225,14 +233,14 @@ A **dispatched** coordinator MUST, as its final action, write an **outcome
 artifact** for its caller. The artifact's location and transport are defined by the
 dispatch contract (§2.6); its content MUST encode the outcome, which is one of:
 
-| Outcome         | Meaning                                                                                                                                    | Terminal?                 | How work resumes                                                                                                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `verified`      | Ticket-backed only: aims validated and the §2.3 DoD artifact posted; ticket at `verified`.                                                 | yes                       | —                                                                                                                                       |
-| `canceled`      | Work abandoned: a ticket canceled per §2.3 with a rationale, or a ticketless bare PR closed without merging.                               | yes                       | —                                                                                                                                       |
-| `delivered`     | The change landed. Ticket-backed: all required PRs merged but verification is owned elsewhere. Ticketless bare PR: the PR merged.          | ticket: no / bare PR: yes | (ticket-backed) a separate verification coordinator (§2.6) takes it to `verified`; a bare PR is done.                                   |
-| `human-blocked` | Parked in `awaiting-external` pending a human; alert posted.                                                                               | no                        | re-dispatched from a fresh claim once the human resolves it.                                                                            |
-| `decomposed`    | Split into subtasks; parent stays `in-progress`, effectively blocked by the subtasks.                                                      | no                        | parent re-enters work and is finalized once all subtasks reach `verified`/`canceled` (§Decomposition, §2.6).                            |
-| `failed`        | Could not complete; reason recorded (on the ticket, or in the artifact for a ticketless PR). Verification work carries a `retryable` flag. | no                        | a `retryable` verification failure auto-re-dispatches on a later tick (§2.6); otherwise the operator decides (retry, re-scope, cancel). |
+| Outcome         | Meaning                                                                                                                                                        | Terminal?                 | How work resumes                                                                                                                                                            |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verified`      | Ticket-backed only: aims validated and the §2.3 DoD artifact posted; ticket at `verified`.                                                                     | yes                       | —                                                                                                                                                                           |
+| `canceled`      | Work abandoned: a ticket canceled per §2.3 with a rationale, or a ticketless bare PR closed without merging.                                                   | yes                       | —                                                                                                                                                                           |
+| `delivered`     | The change landed. Ticket-backed: all required PRs merged but verification is owned elsewhere. Ticketless bare PR: the PR merged.                              | ticket: no / bare PR: yes | (ticket-backed) a separate verification coordinator (§2.6) takes it to `verified`; a bare PR is done.                                                                       |
+| `human-blocked` | Parked in `awaiting-external` pending a human; alert posted. A PR item (no status to park) records this outcome directly; the tick alerts the operator (§2.6). | no                        | ticket: re-served as `resume` once a tracker update after the report moves it out of the parked state; PR item: the operator removes the outcome once the response arrives. |
+| `decomposed`    | Split into subtasks; parent stays `in-progress`, effectively blocked by the subtasks.                                                                          | no                        | parent re-enters work and is finalized once all subtasks reach `verified`/`canceled` (§Decomposition, §2.6).                                                                |
+| `failed`        | Could not complete; reason recorded (on the ticket, or in the artifact for a ticketless PR). Verification work carries a `retryable` flag.                     | no                        | a `retryable` verification failure auto-re-dispatches on a later tick (§2.6); otherwise the operator decides (retry, re-scope, cancel).                                     |
 
 A **standalone** coordinator has no artifact obligation; it reports the same
 outcome to the session and stops.

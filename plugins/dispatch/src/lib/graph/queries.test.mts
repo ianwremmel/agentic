@@ -341,6 +341,84 @@ describe('claims and passes', () => {
   });
 });
 
+describe('waiting on an operator response', () => {
+  it('classifies a human-blocked PR item and withholds it from the queue', async () => {
+    const db = await fresh();
+    await new PrStore(db).upsertPr({
+      id: 'o/r#7',
+      ticket: null,
+      origin: 'prompt',
+      repo: 'o/r',
+      prNumber: 7,
+      url: null,
+      branch: null,
+      title: 'bare',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'o/r#7',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: 'which auth flow?',
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    const item = (await classifiedItems(db, {now: NOW})).find(
+      (entry) => entry.item.id === 'o/r#7'
+    );
+    assert.equal(item?.classification, 'human-blocked');
+    assert.deepEqual(await queueOf(db), []);
+    await db.close();
+  });
+
+  it('re-serves a parked ticket as resume only after a tracker update postdates the report', async () => {
+    const BEFORE = '2026-08-03T11:30:00.000Z';
+    const AFTER = '2026-08-03T12:30:00.000Z';
+    const db = await fresh();
+    await addTicket(db, 'A', 'awaiting-external', {updatedAt: BEFORE});
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'A',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    // Still parked: the wait is on.
+    assert.deepEqual(await queueOf(db), []);
+
+    // A stale local row that still reads available predates the report —
+    // ingest lag, not a response.
+    await addTicket(db, 'A', 'available', {updatedAt: BEFORE});
+    assert.deepEqual(await queueOf(db), []);
+
+    // The human responded: the tracker update postdates the report.
+    await addTicket(db, 'A', 'available', {updatedAt: AFTER});
+    assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'resume'}]);
+
+    // A response that takes the ticket over (started status) is a human
+    // working it, not a redispatch signal.
+    await addTicket(db, 'A', 'in-progress', {updatedAt: AFTER});
+    assert.deepEqual(await queueOf(db), []);
+
+    // Back to available but claimed: a worker already picked it up.
+    await addTicket(db, 'A', 'available', {updatedAt: AFTER});
+    await claim(db, 'A', 'S1');
+    assert.deepEqual(await queueOf(db), []);
+    await db.close();
+  });
+});
+
 describe('bare PRs and ranking', () => {
   it('queues bare and ticket-attached PR items alike', async () => {
     const db = await fresh();

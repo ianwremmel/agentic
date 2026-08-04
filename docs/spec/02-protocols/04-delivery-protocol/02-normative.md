@@ -418,5 +418,6 @@ The agent MUST NOT stop monitoring solely because:
 - Its plan is fully checked off.
 - CI is green.
 - Review was requested.
+- A notification was sent, or nobody is expected to be available to read it.
 
 Until a termination condition is met, the agent MUST remain monitoring.

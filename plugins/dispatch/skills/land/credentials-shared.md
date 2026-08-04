@@ -41,6 +41,10 @@ separately, since a review request can't reach them:
 2. otherwise, in the session: say you are waiting on the operator's approval and
    what for.
 
+Notifying is not waiting. Whichever venue you used, keep polling in the same
+turn, watching that venue as well as `pr-status` — nothing else observes the
+reply.
+
 The engagement comment never notifies anyone — it posts under the operator's
 own account — but it still anchors the reaction- and reply-based Gate 6
 signals.

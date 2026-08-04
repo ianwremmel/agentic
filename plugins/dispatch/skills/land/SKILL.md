@@ -216,8 +216,10 @@ The table is an upper bound; re-checking sooner is fine, never under a minute.
   process polls forever while the agent is reaped; the PR sits orphaned.
 - **`Monitor` as the poll vehicle** — the armed-monitor wake observably fails on
   long polls. Use foreground `sleep`.
-- **Ending the turn while the run is still going** — returning early for "no work
-  right now" or "the caller will check back" orphans the PR. Don't design a
+- **Ending the turn while the run is still going** — no reasoning licenses it:
+  not "no work right now," not who has seen what, not where a notification was
+  sent or whether anyone is around to read it. The poll loop is the only thing
+  that observes a reply, so returning early orphans the PR. Don't design a
   caller around mid-lifecycle re-dispatch.
 
 Tune the schedule within the run from what you observe: once you've watched this

@@ -105,6 +105,63 @@ describe('Scheduler', () => {
     await db.close();
   });
 
+  it('counts live claims against the cap across ticks', async () => {
+    const {db, scheduler} = await fresh();
+    const tickets = new TicketStore(db);
+    for (const id of ['A', 'B', 'C', 'D']) {
+      await tickets.upsertTicket(baseTicket(id, 'P'));
+    }
+
+    const first = await scheduler.tick(NOW);
+    assert.deepEqual(kinds(first.orders), [
+      'dispatch_ticket',
+      'dispatch_ticket',
+      'dispatch_ticket',
+    ]);
+
+    // The three claims are live obligations: no fresh budget next tick, even
+    // though no worker has taken a slot yet.
+    const second = await scheduler.tick(LATER);
+    assert.deepEqual(second.orders, []);
+
+    // Recording an outcome releases its claim, freeing exactly one admission.
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: String(first.orders[0]?.meta.ticket),
+        outcome: 'canceled',
+        retryable: null,
+        detail: null,
+        recordedAt: LATER,
+      },
+      {session: 'S1'}
+    );
+    const third = await scheduler.tick(LATER);
+    assert.deepEqual(kinds(third.orders), ['dispatch_ticket']);
+    assert.equal(third.orders[0]?.meta.ticket, 'D');
+    await db.close();
+  });
+
+  it('counts a worker holding both its claim and a slot once', async () => {
+    const {db, scheduler} = await fresh();
+    const tickets = new TicketStore(db);
+    for (const id of ['A', 'B', 'C', 'D']) {
+      await tickets.upsertTicket(baseTicket(id, 'P'));
+    }
+    const coordination = new CoordinationStore(db);
+    await coordination.claim({node: 'A', session: 'S1', claimedAt: NOW});
+    await coordination.acquireSlot({
+      session: 'S1',
+      actor: 'A',
+      max: 3,
+      acquiredAt: NOW,
+    });
+
+    // A is one unit in flight, not two: budget is 2, not 1.
+    const {orders} = await scheduler.tick(NOW);
+    assert.deepEqual(kinds(orders), ['dispatch_ticket', 'dispatch_ticket']);
+    await db.close();
+  });
+
   it('dispatches a milestone review once per open gate', async () => {
     const {db, scheduler} = await fresh();
     await new MilestoneStore(db).upsertMilestone({
@@ -129,6 +186,42 @@ describe('Scheduler', () => {
     await new ReviewStore(db).record('M1', LATER);
     const after = await scheduler.tick(LATER);
     assert.deepEqual(kinds(after.orders), ['project_complete']);
+    await db.close();
+  });
+
+  it('bounds review orders by the shared budget, reviews first', async () => {
+    const {db, scheduler} = await fresh();
+    const tickets = new TicketStore(db);
+    const milestones = new MilestoneStore(db);
+    const {EdgeStore} = await import('../stores/index.mts');
+    const edges = new EdgeStore(db);
+    for (const n of ['1', '2', '3', '4']) {
+      await milestones.upsertMilestone({
+        id: `M${n}`,
+        project: 'P',
+        name: `M${n}`,
+      });
+      await tickets.upsertTicket({
+        ...baseTicket(`T${n}`, 'P'),
+        status: 'verified',
+      });
+      await edges.addEdge(`T${n}`, `M${n}`);
+    }
+    await tickets.upsertTicket(baseTicket('A', 'P'));
+
+    // Four open gates and one available ticket against a cap of 3: reviews
+    // spend the budget first and the ticket waits.
+    const {orders} = await scheduler.tick(NOW);
+    const dispatched = orders.filter(
+      (order) =>
+        order.kind === 'perform_milestone_review' ||
+        order.kind === 'dispatch_ticket'
+    );
+    assert.deepEqual(kinds(dispatched), [
+      'perform_milestone_review',
+      'perform_milestone_review',
+      'perform_milestone_review',
+    ]);
     await db.close();
   });
 

@@ -172,6 +172,32 @@ export class CoordinationStore {
   }
 
   /**
+   * Units of work currently in flight: every held slot plus every node with a
+   * live claim, counting a unit that holds both exactly once (a worker's slot
+   * actor is the external id of the node it claimed). A claim is an obligation
+   * to run an agent whether or not that agent has reached its compute phase,
+   * so this — not the slot count alone — is what admissions budget against.
+   */
+  async inFlightCount(input: {
+    now: string;
+    staleAfterSeconds: number;
+  }): Promise<number> {
+    assertInstant(input.now, 'now');
+    const row = this.#db.get(
+      `SELECT
+         (SELECT COUNT(*) FROM slot)
+         + (SELECT COUNT(*)
+            FROM claim c
+            JOIN session s ON s.id = c.session_id
+            JOIN node n ON n.id = c.node_id
+            WHERE unixepoch(?) - unixepoch(s.heartbeat_at) <= ?
+              AND n.external_id NOT IN (SELECT actor FROM slot)) AS n`,
+      [input.now, input.staleAfterSeconds]
+    );
+    return Number(row?.n ?? 0);
+  }
+
+  /**
    * Record a unit's final report on a node, releasing its claim and slot in the
    * same transaction — the artifact proves its writer exited. One row per node;
    * a later pass's report replaces it.

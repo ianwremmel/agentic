@@ -182,6 +182,7 @@ export class Scheduler {
       items
         .filter(
           (entry) =>
+            entry.item.kind === 'ticket' &&
             entry.classification === 'human-blocked' &&
             entry.item.status !== 'paused' &&
             entry.item.status !== 'awaiting-external'
@@ -198,7 +199,9 @@ export class Scheduler {
 
     // A human-blocked PR item shares the alert channel with failures: the
     // item has no status to park, so the alert is the only way the operator
-    // hears the question its worker left behind.
+    // hears the question its worker left behind. The episode marker keys on
+    // the outcome kind too, so replacing a failed outcome with a fresh
+    // human-blocked question (or vice versa) starts a new episode.
     await emit(
       'alert_failure',
       items
@@ -210,7 +213,7 @@ export class Scheduler {
               entry.outcome?.outcome === 'human-blocked')
         )
         .map((entry) => ({
-          node: entry.item.id,
+          node: `${entry.item.id}#${entry.outcome?.outcome ?? ''}`,
           meta:
             entry.item.kind === 'pr'
               ? {
@@ -222,7 +225,7 @@ export class Scheduler {
               : {project: entry.item.project ?? '', ticket: entry.item.id},
           body:
             entry.outcome?.outcome === 'human-blocked'
-              ? `PR item ${entry.item.id} is waiting on an operator response${entry.outcome.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator — on its ticket if it has one, otherwise on the PR — and requeue with \`dispatch outcome rm --id ${entry.item.id}\` once the response arrives.`
+              ? `PR item ${entry.item.id} is waiting on an operator response${entry.outcome.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the PR if one exists, else on its ticket, and requeue with \`dispatch outcome rm --id ${entry.item.id}\` once the response arrives.`
               : entry.item.kind === 'pr'
                 ? `PR item ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator; requeue by removing the outcome once addressed.`
                 : `Ticket ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the ticket; requeue by removing the outcome once addressed.`,

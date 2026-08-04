@@ -377,9 +377,11 @@ describe('waiting on an operator response', () => {
     await db.close();
   });
 
-  it('re-serves a parked ticket as resume once its status leaves the parked state', async () => {
+  it('re-serves a parked ticket as resume only after a tracker update postdates the report', async () => {
+    const BEFORE = '2026-08-03T11:30:00.000Z';
+    const AFTER = '2026-08-03T12:30:00.000Z';
     const db = await fresh();
-    await addTicket(db, 'A', 'awaiting-external');
+    await addTicket(db, 'A', 'awaiting-external', {updatedAt: BEFORE});
     await session(db, 'S1', NOW);
     await new CoordinationStore(db).recordOutcome(
       {
@@ -395,15 +397,22 @@ describe('waiting on an operator response', () => {
     // Still parked: the wait is on.
     assert.deepEqual(await queueOf(db), []);
 
-    // The human responded and reopened the ticket.
-    await addTicket(db, 'A', 'available');
+    // A stale local row that still reads available predates the report —
+    // ingest lag, not a response.
+    await addTicket(db, 'A', 'available', {updatedAt: BEFORE});
+    assert.deepEqual(await queueOf(db), []);
+
+    // The human responded: the tracker update postdates the report.
+    await addTicket(db, 'A', 'available', {updatedAt: AFTER});
     assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'resume'}]);
 
-    // A response that moves it straight back to started also resumes.
-    await addTicket(db, 'A', 'in-progress');
-    assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'resume'}]);
+    // A response that takes the ticket over (started status) is a human
+    // working it, not a redispatch signal.
+    await addTicket(db, 'A', 'in-progress', {updatedAt: AFTER});
+    assert.deepEqual(await queueOf(db), []);
 
-    // A live claim means a worker already picked it up: withhold.
+    // Back to available but claimed: a worker already picked it up.
+    await addTicket(db, 'A', 'available', {updatedAt: AFTER});
     await claim(db, 'A', 'S1');
     assert.deepEqual(await queueOf(db), []);
     await db.close();

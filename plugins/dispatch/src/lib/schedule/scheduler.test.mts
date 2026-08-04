@@ -323,6 +323,10 @@ describe('Scheduler', () => {
     assert.equal(alerts.length, 1);
     assert.equal(alerts[0]?.meta.pr, 'o/r#7');
     assert.match(alerts[0].body, /operator response/);
+    assert.ok(
+      !first.orders.some((order) => order.kind === 'park_human_blocked'),
+      'a PR item has no status to park'
+    );
 
     const second = await scheduler.tick(LATER);
     assert.ok(

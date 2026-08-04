@@ -42,7 +42,7 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, pass, and (when the item is ticket-backed) its ticket. |
 | `perform_milestone_review` | Launch a background `milestone-reviewer` agent, passing the milestone and project.               |
 | `park_human_blocked`       | Park the ticket yourself via the adapter (awaiting-external, else paused) and post the handoff.  |
-| `alert_failure`            | Alert the operator where the order body says — the ticket via the adapter, else the PR.          |
+| `alert_failure`            | Alert the operator where the order body says — the PR when one exists, else the ticket.          |
 | `project_complete`         | Announce it. Stop once every project the operator named is complete.                             |
 
 Return to waiting after each launch. Give each worker only what the event

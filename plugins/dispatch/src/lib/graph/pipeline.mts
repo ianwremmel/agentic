@@ -56,9 +56,12 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   pass — `verify` for a delivered ticket (a bare PR is done at delivered),
  *   `finalize` for a decomposed parent whose subtasks all resolved, `retry`
  *   for a retryable failure, and `resume` for a ticket whose `human-blocked`
- *   outcome its tracker status contradicts — the human responded and moved it
- *   out of its parked state, so the wait is over. Nothing human-owned, parked,
- *   resolved, or held by a live claim is ever handed out.
+ *   outcome a later tracker update contradicts — the ticket was updated after
+ *   the report and now reads available, so the human responded and unparked
+ *   it. The timestamp guard keeps a stale local row (ingest lagging the
+ *   worker's own park transition) from reading as a response. Nothing
+ *   human-owned, parked, resolved, or held by a live claim is ever handed
+ *   out.
  */
 export const PREFIX = `
 WITH RECURSIVE
@@ -250,6 +253,7 @@ classified AS (
     o.outcome AS outcome,
     o.retryable AS outcome_retryable,
     o.detail AS outcome_detail,
+    o.recorded_at AS outcome_recorded_at,
     (SELECT group_concat(nx.external_id, ',' ORDER BY nx.external_id)
        FROM blocker_view bv JOIN node nx ON nx.id = bv.id
       WHERE bv.target = i.node_id) AS blocked_by,
@@ -293,7 +297,9 @@ queued AS (
       WHEN outcome IS NULL AND (claim_live IS NULL OR claim_live = 0)
         AND classification = 'in-flight' THEN 'resume'
       WHEN outcome = 'human-blocked' AND (claim_live IS NULL OR claim_live = 0)
-        AND classification IN ('available', 'in-flight') THEN 'resume'
+        AND classification = 'available'
+        AND updated_at IS NOT NULL
+        AND unixepoch(updated_at) > unixepoch(outcome_recorded_at) THEN 'resume'
       WHEN outcome IS NULL OR claim_live = 1 THEN NULL
       WHEN outcome = 'delivered' AND kind = 'ticket' THEN 'verify'
       WHEN outcome = 'decomposed'

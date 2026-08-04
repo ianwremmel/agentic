@@ -11,7 +11,8 @@ import {CoordinationStore} from '../../lib/stores/index.mts';
 const options = {
   actor: {
     type: 'string',
-    description: 'Who is computing — an agent id or the node being worked.',
+    description:
+      'The id of the node being worked (the PR item, ticket, or milestone). The scheduler counts a claim and its slot as one obligation only when they name the same node.',
     positional: false,
     required: true,
   },

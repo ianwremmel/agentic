@@ -118,6 +118,12 @@ export class CoordinationStore {
   /**
    * Acquire a compute slot, bounded globally by `max`. Idempotent per
    * `(session, actor)` via the UNIQUE constraint: a re-acquire refreshes.
+   *
+   * `actor` is the external id of the node being worked — the convention
+   * every worker follows (`slot acquire --actor <item-id>`), and what lets
+   * `inFlightCount` count a worker's claim and slot as one obligation. An
+   * actor that names anything else still bounds compute correctly but is
+   * counted as its own obligation, shrinking the admission budget.
    */
   async acquireSlot(input: {
     session: string;
@@ -174,9 +180,12 @@ export class CoordinationStore {
   /**
    * Units of work currently in flight: every held slot plus every node with a
    * live claim, counting a unit that holds both exactly once (a worker's slot
-   * actor is the external id of the node it claimed). A claim is an obligation
-   * to run an agent whether or not that agent has reached its compute phase,
-   * so this — not the slot count alone — is what admissions budget against.
+   * actor is the external id of the node it claimed — the convention
+   * `acquireSlot` documents). A claim is an obligation to run an agent
+   * whether or not that agent has reached its compute phase, so this — not
+   * the slot count alone — is what admissions budget against. A slot whose
+   * actor matches no claimed node counts as its own obligation: the error is
+   * conservative (a smaller budget), never an over-admission.
    */
   async inFlightCount(input: {
     now: string;

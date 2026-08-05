@@ -5,7 +5,7 @@
  * runtime state), so a bump's recovery is "delete the file and re-sync" — there
  * is no migration machinery.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -88,6 +88,37 @@ CREATE TABLE IF NOT EXISTS claim (
   claimed_at TEXT NOT NULL
 ) STRICT;
 
+/* A worker's PR wait, handed to the server. The snapshot column holds the last
+   observation the poll took; diffing the next one against it is what turns
+   "something changed" into named events. */
+CREATE TABLE IF NOT EXISTS watch (
+  node_id    INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+  reason     TEXT NOT NULL CHECK (reason IN ('ci','review','merge')),
+  state      TEXT NOT NULL CHECK (state IN ('watching','fired')),
+  snapshot   TEXT,
+  interval_s INTEGER NOT NULL,
+  session_id TEXT,
+  created_at TEXT NOT NULL,
+  checked_at TEXT,
+  expires_at TEXT NOT NULL
+) STRICT;
+
+/* Observations owed to a session, oldest first. Delivery is recorded so a
+   server restart re-pushes what nobody heard rather than assuming it landed.
+   session_id is the session whose worker armed the wait: with a shared graph
+   DB several servers drain this table, and only that one can route the event
+   to the worker holding the PR. A null session_id is drainable by any. */
+CREATE TABLE IF NOT EXISTS pr_event (
+  id           INTEGER PRIMARY KEY,
+  node_id      INTEGER NOT NULL REFERENCES node(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL,
+  summary      TEXT NOT NULL,
+  meta         TEXT NOT NULL,
+  session_id   TEXT,
+  observed_at  TEXT NOT NULL,
+  delivered_at TEXT
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS outcome (
   node_id     INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
   outcome     TEXT NOT NULL CHECK (outcome IN
@@ -150,4 +181,5 @@ CREATE INDEX IF NOT EXISTS pr_ticket           ON pr (ticket_id);
 CREATE INDEX IF NOT EXISTS edge_blocked        ON edge (blocked);
 CREATE INDEX IF NOT EXISTS claim_session       ON claim (session_id);
 CREATE INDEX IF NOT EXISTS fetch_request_open  ON fetch_request (source, resolution);
+CREATE INDEX IF NOT EXISTS pr_event_undelivered ON pr_event (delivered_at, session_id, id);
 `;

@@ -11,3 +11,7 @@ export * from './refresh.mts';
 export * from './fetch-request.mts';
 export * from './notice.mts';
 export * from './review.mts';
+export {PrEventStore} from './pr-event.mts';
+export type {PendingEvent} from './pr-event.mts';
+export {WatchStore} from './watch.mts';
+export type {DueWatch} from './watch.mts';

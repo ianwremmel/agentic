@@ -8,6 +8,7 @@ import {DEFAULT_STALE_AFTER_SECONDS} from '../lib/graph/index.mts';
 import {processStartIso, retireNonLive} from '../lib/liveness/index.mts';
 import {runMcpServer} from '../lib/mcp/index.mts';
 import {createTickState, runServerTick} from '../lib/schedule/index.mts';
+import {selfLogin} from '../lib/watch/index.mts';
 import {SessionStore} from '../lib/stores/index.mts';
 
 const options = {
@@ -75,7 +76,15 @@ export class Command extends AbstractCommand {
     // not strand it until the heartbeat sweep.
     try {
       const tree = await discover(new URL('./', import.meta.url));
-      const state = createTickState(registryId, parsed['max-parallel']);
+      // The account the agent writes as. Resolved once at startup: a watch
+      // that fired on the agent's own comment would wake a worker to tell it
+      // what it just did, which is the failure that makes server-side waiting
+      // worse than polling. A failed lookup degrades to firing on everything.
+      const state = createTickState(
+        registryId,
+        parsed['max-parallel'],
+        await selfLogin(ctx.log)
+      );
       await runMcpServer({
         tree,
         stdin: process.stdin,

@@ -5,6 +5,8 @@ import {DataError, ensure} from '../lib/errors/index.mts';
 import {META_KEY, drainInstructions} from '../lib/mcp/index.mts';
 import type {ChannelSink} from '../lib/mcp/index.mts';
 import {Scheduler, resolveSession} from '../lib/schedule/index.mts';
+import type {WorkOrder} from '../lib/schedule/index.mts';
+import {githubFingerprint, pollWatches} from '../lib/watch/index.mts';
 
 const options = {
   session: {
@@ -105,26 +107,42 @@ export class Command extends AbstractCommand {
   ): Promise<void> {
     const printer = new EventPrinter(ctx.io);
 
-    // Session resolution and the scheduler pass run before the drain, so a
+    // Session resolution and the scheduler pass run before everything else:
+    // the heartbeat lands before the watch poll shells out to gh, and a
     // caller that fails to correlate cannot have marked any instruction
     // delivered on the way to its error.
-    const orders = await withDatabase(parsed.db, ctx.env, async (db) => {
-      const session = await resolveSession(db, ctx.env, parsed.session);
-      const scheduler = new Scheduler(db, {
-        session,
-        maxParallel: parsed['max-parallel'],
-        requireAck: false,
+    const schedule = async (): Promise<WorkOrder[]> =>
+      withDatabase(parsed.db, ctx.env, async (db) => {
+        const session = await resolveSession(db, ctx.env, parsed.session);
+        const scheduler = new Scheduler(db, {
+          session,
+          maxParallel: parsed['max-parallel'],
+          requireAck: false,
+        });
+        const result = await scheduler.tick(nowIso());
+        ensure(
+          !result.retired,
+          () =>
+            new DataError(
+              'the server registry row for this session is retired',
+              {
+                hint: 'the server was retired mid-tick; restart the session so a fresh server registers.',
+              }
+            )
+        );
+        return result.orders;
       });
-      const result = await scheduler.tick(nowIso());
-      ensure(
-        !result.retired,
-        () =>
-          new DataError('the server registry row for this session is retired', {
-            hint: 'the server was retired mid-tick; restart the session so a fresh server registers.',
-          })
-      );
-      return result.orders;
+
+    let orders = await schedule();
+
+    // A watch that fires re-queues its item; a second scheduler pass
+    // dispatches it in this same tick. Claims make the extra pass idempotent.
+    const {fired} = await pollWatches(ctx.env, {
+      fingerprint: githubFingerprint,
+      dbPath: parsed.db,
+      log: ctx.log,
     });
+    if (fired.length > 0) orders = [...orders, ...(await schedule())];
 
     // Ingest instructions print before the orders — the same delivery order
     // as the server tick.

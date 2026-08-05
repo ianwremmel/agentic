@@ -120,6 +120,22 @@ and no command that "launches the daemon." Work enters the graph three ways:
    that does the ledger polling itself so a worker's wait costs one
    foreground call — and open milestone gates with `dispatch review record`
    (or `dispatch review release` to end a review with the gate closed).
+4. **PR waits are the server's too**: a pr-worker that reaches a wait point
+   (CI running, a reviewer pending, awaiting merge) MUST hand it off with
+   `dispatch pr watch --id <item> --for ci|review|merge` and return, instead
+   of polling the PR in-band. The handoff arms the watch with the PR's
+   fingerprint as of that moment — a change that lands before the first
+   server poll still fires — and releases the caller's own claim and slot,
+   never another session's. The server fingerprints the PR on its tick
+   (§3.1.2's polling strategy and intervals) and a change re-queues the item
+   as a `resume` pass, whose worker re-derives where the PR stands and
+   continues. Every watch also expires on a per-reason deadline and fires
+   unconditionally: the fingerprint cannot see out-of-band signals (a
+   ticket-side approval, a reaction on the engagement comment), so the
+   periodic resume is what surfaces them; a resumed worker that finds
+   nothing new just re-arms. The watch survives its dispatch — only an
+   outcome report or a fresh watch removes it — so a crashed resume
+   re-serves as `resume`, not as fresh work.
 
 The registry views are `dispatch status` (counts, milestone gates, anomalies,
 the terminal verdict) and `dispatch queue` (what the scheduler would hand out

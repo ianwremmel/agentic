@@ -281,6 +281,14 @@ For each event source the server MUST use the least-expensive available strategy
 | Buildkite build     | `bk build wait` subprocess                                          |
 | Graph DB            | SQLite read on the poll tick                                        |
 
+The implemented baseline for GitHub PR watching is the `watch` row a worker
+records with `dispatch pr watch` (§3.2.2): the tick fingerprints each due PR
+through one `gh api graphql` call — head, state, draft, review decision,
+comment/review/thread counts, check rollup — and a changed fingerprint fires
+the row, re-queuing the item as `resume`. This trades the per-kind trigger
+events above for re-dispatch until those events are built; the intervals
+below still govern the cadence, chosen by the watch's `--for` reason.
+
 Dynamic polling intervals:
 
 | Stage                              | Default interval                           |

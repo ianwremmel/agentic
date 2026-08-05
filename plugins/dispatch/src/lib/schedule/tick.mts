@@ -4,6 +4,8 @@ import type {ChannelSink} from '../mcp/channel.mts';
 import {drainInstructions} from '../mcp/drain.mts';
 import type {Logger} from '../logger/index.mts';
 import {SessionStore} from '../stores/index.mts';
+import {githubFingerprint, pollWatches} from '../watch/index.mts';
+import type {Fingerprint} from '../watch/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
 
@@ -48,7 +50,7 @@ export async function runServerTick(
   channel: ChannelSink,
   env: NodeJS.ProcessEnv,
   state: TickState,
-  opts: {nowMs?: number; log?: Logger} = {}
+  opts: {nowMs?: number; log?: Logger; fingerprint?: Fingerprint} = {}
 ): Promise<void> {
   if (state.retired) return;
   const now = nowIso();
@@ -56,34 +58,59 @@ export async function runServerTick(
 
   let orders: WorkOrder[] = [];
   let acked = false;
-  await withDatabase(undefined, env, async (db) => {
-    const scheduler = new Scheduler(db, {
-      session: state.registryId,
-      maxParallel: state.maxParallel,
-    });
-    const result = await scheduler.tick(now);
-    if (result.retired) {
-      state.retired = true;
-      return;
-    }
-    orders = result.orders;
+  const schedule = async (): Promise<void> => {
+    await withDatabase(undefined, env, async (db) => {
+      const scheduler = new Scheduler(db, {
+        session: state.registryId,
+        maxParallel: state.maxParallel,
+      });
+      const result = await scheduler.tick(now);
+      if (result.retired) {
+        state.retired = true;
+        return;
+      }
+      orders = [...orders, ...result.orders];
 
-    const own = await new SessionStore(db).getSession(state.registryId);
-    if (own !== null && own.ackedAt === null && nowMs >= state.probeDueAtMs) {
-      channel.push(
-        'probe',
-        {server: state.registryId},
-        `Run \`dispatch mcp ack --server ${state.registryId}\` (the \`mcp_ack\` tool) to acknowledge this channel; work orders wait on it.`
-      );
-      state.probeDueAtMs = nowMs + state.probeDelayMs;
-      state.probeDelayMs = Math.min(state.probeDelayMs * 2, PROBE_DELAY_CAP_MS);
-    }
-    acked = own !== null && own.ackedAt !== null;
-  });
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the withDatabase callback above sets `state.retired`; the analyzer cannot see the closure write
+      const own = await new SessionStore(db).getSession(state.registryId);
+      if (own !== null && own.ackedAt === null && nowMs >= state.probeDueAtMs) {
+        channel.push(
+          'probe',
+          {server: state.registryId},
+          `Run \`dispatch mcp ack --server ${state.registryId}\` (the \`mcp_ack\` tool) to acknowledge this channel; work orders wait on it.`
+        );
+        state.probeDueAtMs = nowMs + state.probeDelayMs;
+        state.probeDelayMs = Math.min(
+          state.probeDelayMs * 2,
+          PROBE_DELAY_CAP_MS
+        );
+      }
+      acked = own !== null && own.ackedAt !== null;
+    });
+  };
+
+  // Heartbeat before the PR watch poll: fingerprinting shells out to gh, and
+  // a slow pass must not let this session read as stale mid-tick.
+  await schedule();
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure sets `state.retired`; the analyzer cannot see the write
   if (state.retired) return;
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the withDatabase callback above assigns `acked`; the analyzer cannot see the closure write
+  try {
+    const {fired} = await pollWatches(env, {
+      fingerprint: opts.fingerprint ?? githubFingerprint,
+      log: opts.log,
+    });
+    // A fired watch re-queued its item; a second pass dispatches it in this
+    // tick instead of the next. Claims make the extra pass idempotent.
+    if (fired.length > 0) await schedule();
+  } catch (error) {
+    opts.log?.error('watch pass failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure sets `state.retired`; the analyzer cannot see the write
+  if (state.retired) return;
+
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure assigns `acked`; the analyzer cannot see the write
   if (acked) {
     try {
       await drainInstructions(channel, env);

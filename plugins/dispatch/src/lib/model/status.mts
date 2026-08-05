@@ -86,6 +86,13 @@ export function isOutcome(value: string): value is OutcomeKind {
   return (OUTCOMES as readonly string[]).includes(value);
 }
 
+export const WATCH_REASONS = ['ci', 'review', 'merge'] as const;
+export type WatchReason = (typeof WATCH_REASONS)[number];
+
+export function isWatchReason(value: string): value is WatchReason {
+  return (WATCH_REASONS as readonly string[]).includes(value);
+}
+
 export const STATUS_LIST = STATUSES.join(', ');
 export const TARGET_KIND_LIST = TARGET_KINDS.join(', ');
 export const PR_ORIGIN_LIST = PR_ORIGINS.join(', ');

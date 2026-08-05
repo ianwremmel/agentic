@@ -269,6 +269,9 @@ export class CoordinationStore {
           holder.actor,
         ]);
       }
+      // A final report ends any server-side wait: a watch left behind would
+      // re-serve work that just concluded.
+      this.#db.run('DELETE FROM watch WHERE node_id = ?', [node.id]);
     });
   }
 

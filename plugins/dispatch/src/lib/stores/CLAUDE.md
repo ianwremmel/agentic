@@ -16,6 +16,8 @@ concept, not a single table: an operation may write several tables atomically.
   resolve, and the open count that decides when a refresh closes.
 - `notice` — once-per-episode markers for the scheduler's condition orders.
 - `review` — milestone reviews with the member snapshot that expires them.
+- `watch` — a worker's PR wait handed to the server: fingerprint rows the
+  tick polls, fired on change to re-queue the item.
 
 The derived read-model (frontier, classification, milestone state, anomalies)
 lives in `../graph`; the scheduler that acts on it lives in `../schedule`.

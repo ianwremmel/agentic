@@ -5,7 +5,7 @@
  * runtime state), so a bump's recovery is "delete the file and re-sync" — there
  * is no migration machinery.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -103,6 +103,17 @@ CREATE TABLE IF NOT EXISTS outcome (
   retryable   INTEGER CHECK (retryable IN (0,1)),
   detail      TEXT,
   recorded_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS watch (
+  node_id     INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+  reason      TEXT NOT NULL CHECK (reason IN ('ci','review','merge')),
+  state       TEXT NOT NULL DEFAULT 'watching' CHECK (state IN ('watching','fired')),
+  fingerprint TEXT,
+  interval_s  INTEGER NOT NULL CHECK (interval_s > 0),
+  checked_at  TEXT,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS review (

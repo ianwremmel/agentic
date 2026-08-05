@@ -42,7 +42,8 @@ export class CoordinationStore {
     branch?: string;
     claimedAt: string;
     /**
-     * Bound on live claims machine-wide. A fresh claim past `max` is refused
+     * Bound on live claims across every session sharing this database — the
+     * host's compute, not one session's share of it. A fresh claim past `max` is refused
      * as `full`; refreshing a claim this session already holds never is, so a
      * cap lowered under running work does not strand it. Omit to claim
      * unbounded. Both fields travel together because a live-claim count is

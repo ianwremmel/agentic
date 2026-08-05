@@ -75,12 +75,7 @@ Run `dispatch mcp status`. `active <id>` means the channel works — keep
 waiting; silence means there is nothing to do yet, which is a normal state.
 
 Anything else names why the channel does not work. **Report that verdict to
-the operator and stop.** Do not launch work.
+the operator and stop.**
 
-Never launch from `dispatch queue`. Its entries are unclaimed, so launching
-them spends no admission budget and bounds nothing — one unacked session will
-happily start a worker per queue entry. `dispatch queue` and `dispatch status`
-are read-only diagnostics for a human; they are not a work source, and there
-is no mode in which they become one. A work order is the only thing that
-authorizes launching an agent, because a work order has already claimed its
-node.
+A work order is the only thing that authorizes launching an agent.
+`dispatch queue` and `dispatch status` are read-only diagnostics.

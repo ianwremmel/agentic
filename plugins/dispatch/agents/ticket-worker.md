@@ -53,7 +53,9 @@ just the child tickets and PRs; a loose implementation can satisfy its PR
 description and still miss the ticket's aim. Post the evidence as a ticket
 comment, transition the ticket per the adapter, then report. Acquire a compute
 slot first (`dispatch slot acquire --actor <ticket>`) only if verifying means
-building or running tests, and release it before you return.
+building or running tests, and release it before you return. A full ledger
+means one blocking `dispatch slot wait --actor <ticket>` call (CLI only),
+never a background monitor or a stop/notify cycle.
 
 ## Reporting
 

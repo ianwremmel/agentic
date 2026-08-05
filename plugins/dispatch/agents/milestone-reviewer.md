@@ -35,4 +35,7 @@ Constraints:
 - Never record a review to clear the order while gaps remain, and never work
   the gaps yourself — follow-up tickets are the scheduler's to dispatch.
 - You hold no compute slot for the review itself; acquire one only if
-  verifying means building or running tests, and release it before you return.
+  verifying means building or running tests, and release it before you
+  return. A full ledger means one blocking
+  `dispatch slot wait --actor <milestone>` call (CLI only), never a
+  background monitor or a stop/notify cycle.

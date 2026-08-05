@@ -109,7 +109,9 @@ Every dispatched worker MUST:
 - work only the unit its order names, and never select further work;
 - acquire a compute slot before any stage that writes code, installs, builds,
   or tests, and release it for any wait and on exit (`dispatch slot
-  acquire`/`release`); at capacity it waits and retries, never proceeds;
+  acquire`/`release`); at capacity it waits and retries, never proceeds — and
+  the waiting MUST be a blocking `dispatch slot wait` call, not a background
+  monitor or a stop/notify loop that wakes the orchestrator each interval;
 - record its final report as its last act: `dispatch outcome set` with
   `verified`, `delivered`, `decomposed`, `canceled`, `human-blocked`, or
   `failed` (`--retryable` only when a fresh run could succeed). Recording

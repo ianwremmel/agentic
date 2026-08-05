@@ -115,9 +115,11 @@ and no command that "launches the daemon." Work enters the graph three ways:
    `dispatch ticket set --injected`; both rank to the head of the queue.
 3. **Claiming is the server's**: the scheduler claims a node before emitting
    its work order. Workers report through `dispatch outcome set` (releasing
-   claim and slot), hold compute with `dispatch slot acquire`/`release`, and
-   open milestone gates with `dispatch review record` (or
-   `dispatch review release` to end a review with the gate closed).
+   claim and slot), hold compute with `dispatch slot acquire`/`release` —
+   blocking on a full ledger with `dispatch slot wait`, a CLI-only command
+   that does the ledger polling itself so a worker's wait costs one
+   foreground call — and open milestone gates with `dispatch review record`
+   (or `dispatch review release` to end a review with the gate closed).
 
 The registry views are `dispatch status` (counts, milestone gates, anomalies,
 the terminal verdict) and `dispatch queue` (what the scheduler would hand out

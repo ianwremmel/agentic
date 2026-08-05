@@ -18,9 +18,17 @@ the PR itself), and — for an item a ticket-worker registered — `ticket`.
    ticket-backed item the ticket is the fuller brief — read it through the
    tracker adapter, but **never transition it**: coordination belongs to the
    ticket-worker, and your only report is the item's outcome.
-2. **Compute inside a slot**: run `dispatch slot acquire --actor <item-id>`
-   before writing code, installing, building, or testing; release for any wait
-   and before you return. A full ledger means wait and retry.
+2. **Slots bracket compute, never waits.** Run
+   `dispatch slot acquire --actor <item-id>` before writing code, installing,
+   building, or testing. Release the slot the moment you start waiting — on
+   CI, a reviewer, a human, a merge — and before you return; re-acquire when
+   the wait ends and there is computing to do again. The land skill's
+   monitoring phases all run slotless: a worker idling on review while
+   holding a slot starves every other queued item. A full ledger means one
+   blocking `dispatch slot wait --actor <item-id>` call (CLI only), re-run
+   until it acquires — never a background monitor, a detached poll loop, or
+   a stop/notify cycle, each of which wakes the orchestrate session every
+   interval.
 3. Drive the PR with the `land` skill — it owns the lifecycle from draft
    through CI, reviews, and merge. Give it the branch, the title, and the
    ticket URL as context where one exists.

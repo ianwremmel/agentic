@@ -30,9 +30,12 @@ creation, and the milestone's review artifact.
 Constraints:
 
 - Human input routes through the milestone's review artifact (a comment
-  tagging a person), never by blocking on session input; do not record the
-  review until that input resolves.
+  tagging a person), never by blocking on session input. Post the question,
+  then run `dispatch review release --milestone <id>` and return: the gate
+  stays closed and your claim frees for other work. Never idle on the answer
+  — a held claim spends capacity you are not using.
 - Never record a review to clear the order while gaps remain, and never work
   the gaps yourself — follow-up tickets are the scheduler's to dispatch.
-- You hold no compute slot for the review itself; acquire one only if
-  verifying means building or running tests, and release it before you return.
+- Your dispatch is your compute grant, and it lasts until you record or
+  release the review. Build and run tests where verifying calls for it; there
+  is nothing to acquire.

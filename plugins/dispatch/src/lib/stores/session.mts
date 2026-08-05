@@ -8,7 +8,7 @@ import type {Session} from '../model/types.mts';
 
 /**
  * Sessions: one row per live MCP server process, the only liveness primitive.
- * Claims and slots reference a session and cascade when it is deleted — on a
+ * Claims reference a session and cascade when it is deleted — on a
  * clean `close`, or when `sweepStale` reaps a process whose heartbeat stopped.
  */
 export class SessionStore {
@@ -114,7 +114,7 @@ export class SessionStore {
     );
   }
 
-  /** Clean exit: delete the session; its claims and slots cascade. */
+  /** Clean exit: delete the session; its claims cascade. */
   async close(id: string): Promise<boolean> {
     return this.#db.run('DELETE FROM session WHERE id = ?', [id]) > 0;
   }
@@ -122,7 +122,7 @@ export class SessionStore {
   /**
    * Reap sessions whose heartbeat is older than `windowSeconds` before `now`.
    * The staleness sweep is the only place liveness is judged by age. Returns the
-   * number of sessions removed (their claims and slots cascade).
+   * number of sessions removed (their claims cascade).
    */
   async sweepStale(now: string, windowSeconds: number): Promise<number> {
     assertInstant(now, 'now');

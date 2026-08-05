@@ -72,9 +72,10 @@ the queue; the next tick dispatches them.
 ## If nothing arrives
 
 Run `dispatch mcp status`. `active <id>` means the channel works — keep
-waiting. Anything else names why it does not; fall back to polling on a
-self-paced loop: `dispatch refresh status --tracker <tracker>` for unanswered
-fetch instructions, then `dispatch queue` and `dispatch status` for
-dispatchable work and open conditions, handling each exactly as the table
-above does. `terminal=true` from `dispatch status` is completion in this
-fallback.
+waiting; silence means there is nothing to do yet, which is a normal state.
+
+Anything else names why the channel does not work. **Report that verdict to
+the operator and stop.**
+
+A work order is the only thing that authorizes launching an agent.
+`dispatch queue` and `dispatch status` are read-only diagnostics.

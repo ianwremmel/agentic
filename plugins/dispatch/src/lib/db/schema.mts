@@ -1,11 +1,11 @@
 /**
  * Bumped on any change an existing database file cannot absorb. `Database.open`
  * refuses a file whose recorded version differs. The database is a rebuildable
- * cache (the graph re-derives from a full sync; sessions/claims/slots are pure
+ * cache (the graph re-derives from a full sync; sessions and claims are pure
  * runtime state), so a bump's recovery is "delete the file and re-sync" — there
  * is no migration machinery.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -86,14 +86,6 @@ CREATE TABLE IF NOT EXISTS claim (
   worktree   TEXT,
   branch     TEXT,
   claimed_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS slot (
-  id          INTEGER PRIMARY KEY,
-  session_id  TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
-  actor       TEXT NOT NULL,
-  acquired_at TEXT NOT NULL,
-  UNIQUE (session_id, actor)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS outcome (

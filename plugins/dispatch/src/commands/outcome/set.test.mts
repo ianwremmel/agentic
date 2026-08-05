@@ -14,7 +14,7 @@ import {Command} from './set.mts';
 const NOW = '2026-08-03T12:00:00.000Z';
 
 describe('outcome set', () => {
-  it('records the outcome and releases the claim and slot', async () => {
+  it('records the outcome and releases the claim', async () => {
     const env = await tempEnv();
     await withDatabase(undefined, env, async (db) => {
       await new ProjectStore(db).upsertProject({
@@ -28,19 +28,16 @@ describe('outcome set', () => {
         startedAt: NOW,
         heartbeatAt: NOW,
       });
-      const coordination = new CoordinationStore(db);
-      await coordination.claim({node: 'A', session: 'S1', claimedAt: NOW});
-      await coordination.acquireSlot({
+      await new CoordinationStore(db).claim({
+        node: 'A',
         session: 'S1',
-        actor: 'worker-A',
-        max: 3,
-        acquiredAt: NOW,
+        claimedAt: NOW,
       });
     });
 
     const out = await runCommand(
       new Command(),
-      {id: 'A', outcome: 'delivered', actor: 'worker-A'},
+      {id: 'A', outcome: 'delivered', session: 'S1'},
       env
     );
     assert.equal(out, 'outcome A delivered\n');
@@ -49,7 +46,6 @@ describe('outcome set', () => {
       const coordination = new CoordinationStore(db);
       assert.equal((await coordination.getOutcome('A'))?.outcome, 'delivered');
       assert.deepEqual(await coordination.claims(), []);
-      assert.equal(await coordination.slotCount(), 0);
     });
   });
 
@@ -72,7 +68,7 @@ describe('outcome set', () => {
     assert.equal(out, 'outcome A verified\n');
   });
 
-  it('releases the slot even when the claim is already gone', async () => {
+  it('records the outcome when no claim is held at all', async () => {
     const env = await tempEnv();
     await withDatabase(undefined, env, async (db) => {
       await new ProjectStore(db).upsertProject({
@@ -81,27 +77,55 @@ describe('outcome set', () => {
         source: 'linear',
       });
       await new TicketStore(db).upsertTicket(ticket('A', 'P'));
-      await new SessionStore(db).register({
-        id: 'S1',
-        startedAt: NOW,
-        heartbeatAt: NOW,
+    });
+
+    // The claim was swept with its session before the worker reported. The
+    // report must still land: the outcome is what re-admits the node.
+    await runCommand(new Command(), {id: 'A', outcome: 'delivered'}, env);
+
+    await withDatabase(undefined, env, async (db) => {
+      assert.equal(
+        (await new CoordinationStore(db).getOutcome('A'))?.outcome,
+        'delivered'
+      );
+    });
+  });
+
+  it('leaves a live claim alone when a swept worker reports late', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new ProjectStore(db).upsertProject({
+        id: 'P',
+        name: 'P',
+        source: 'linear',
       });
-      await new CoordinationStore(db).acquireSlot({
-        session: 'S1',
-        actor: 'worker-A',
-        max: 3,
-        acquiredAt: NOW,
+      await new TicketStore(db).upsertTicket(ticket('A', 'P'));
+      const sessions = new SessionStore(db);
+      await sessions.register({id: 'S1', startedAt: NOW, heartbeatAt: NOW});
+      await sessions.register({id: 'S2', startedAt: NOW, heartbeatAt: NOW});
+      // S1's claim was swept; S2 picked the node back up and is running it.
+      await new CoordinationStore(db).claim({
+        node: 'A',
+        session: 'S2',
+        claimedAt: NOW,
       });
     });
 
+    // S1 reports late. The outcome lands, but S2's grant must survive —
+    // deleting it would leave a running agent with no claim, and the node
+    // would be handed to a third worker.
     await runCommand(
       new Command(),
-      {id: 'A', outcome: 'delivered', actor: 'worker-A'},
+      {id: 'A', outcome: 'failed', session: 'S1'},
       env
     );
 
     await withDatabase(undefined, env, async (db) => {
-      assert.equal(await new CoordinationStore(db).slotCount(), 0);
+      const coordination = new CoordinationStore(db);
+      assert.equal((await coordination.getOutcome('A'))?.outcome, 'failed');
+      assert.deepEqual(await coordination.claims(), [
+        {node: 'A', session: 'S2', actor: null},
+      ]);
     });
   });
 });

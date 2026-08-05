@@ -87,10 +87,13 @@ and no command that "launches the daemon." Work enters the graph three ways:
    `dispatch pr set --injected`, and a runtime-injected ticket with
    `dispatch ticket set --injected`; both rank to the head of the queue.
 3. **Claiming is the server's**: the scheduler claims a node before emitting
-   its work order. Workers report through `dispatch outcome set` (releasing
-   claim and slot), hold compute with `dispatch slot acquire`/`release`, and
-   open milestone gates with `dispatch review record` (or
-   `dispatch review release` to end a review with the gate closed).
+   its work order, and that claim is also the worker's compute grant — there
+   is nothing for a worker to acquire. Workers report through
+   `dispatch outcome set` (releasing the claim) and open milestone gates with
+   `dispatch review record` (or `dispatch review release` to end a review with
+   the gate closed). Each of these releases only the caller's own claim: a
+   worker whose session was swept can report after the node was re-dispatched,
+   and revoking the replacement's grant would strand it.
 
 The registry views are `dispatch status` (counts, milestone gates, anomalies,
 the terminal verdict) and `dispatch queue` (what the scheduler would hand out

@@ -37,9 +37,9 @@ orchestrator itself stays kind-agnostic.
   terminal state through §2.4 Delivery. Single-PR is the common case; multi-PR is
   the general one. PRs run sequentially by default — small PRs review faster, and
   one active build at a time keeps the coordinator's draw on the shared
-  compute-slot ledger (§2.6) minimal — but a ticket whose work genuinely
-  parallelizes MAY run several at once, taking one slot per concurrently-building
-  PR.
+  compute budget (§2.6) minimal — but a ticket whose work genuinely
+  parallelizes MAY register several PR items at once, each dispatched under its
+  own claim as capacity allows.
 - **The ticket's role.** As its PRs progress, the coordinator transitions the
   ticket through the §2.3 roles (`in-progress` → `in-review` → `delivered` →
   `verified`), emitting the state-change comment and log entries §2.3 requires.
@@ -50,9 +50,9 @@ orchestrator itself stays kind-agnostic.
 ## What the coordinator does NOT own
 
 It does not own the PR lifecycle — Delivery (§2.4) does. It does not own the
-graph, ranking, the global slot policy (`MAX_PARALLEL`), or dispatch — the
-orchestrator (§2.6) does, and the coordinator does not reason over the whole graph;
-it only acquires and releases its own compute-slot entries from the shared ledger.
+graph, ranking, the global parallelism policy (`MAX_PARALLEL`), or dispatch —
+the orchestrator (§2.6) does, and the coordinator does not reason over the whole
+graph; its own claim is granted and released for it.
 It MAY, though, read context from its **immediate** dependency neighbors — its
 direct predecessors (what shipped just before) and direct successors (what's
 planned next), one edge away — when that shapes how it delivers; knowing what came
@@ -71,7 +71,7 @@ a human holds, a manual step in an external system. This is the
 When a coordinator hits such a wall, it does not block a session waiting for a
 human (§2.3 forbids that once assigned). It posts a human-tagged alert through
 the §2.3 routing rule, parks the ticket in `awaiting-external`, logs a `WAIT`,
-and steps away — releasing its slot so the orchestrator can keep other work
+and steps away — releasing its claim so the orchestrator can keep other work
 moving. When the human resolves it, the ticket leaves `awaiting-external` and is
 re-dispatched fresh. Both handoff paths — orchestrator-detected and
 worker-discovered — converge on the same resting state: `awaiting-external`

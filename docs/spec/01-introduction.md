@@ -22,7 +22,7 @@ covers six conformance protocols and one operational layer:
   the §2.3 transitions, decomposing, and handing off to a human when needed.
 - **§2.6 Orchestration Protocol** — how a whole project (or several) is worked
   under CLI-issued work orders over a merged dependency graph: the derived
-  read-model, the scheduler tick, slot accounting, the milestone-review gate,
+  read-model, the scheduler tick, claim accounting, the milestone-review gate,
   and injection.
 - **§3.1 Channel Server** — the per-session channel server that pushes events
   into a live session: process model, the channel message protocol, event

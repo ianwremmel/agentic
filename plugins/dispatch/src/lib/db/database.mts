@@ -85,9 +85,9 @@ export class Database {
         string | undefined);
     if (recorded !== undefined && recorded !== String(SCHEMA_VERSION)) {
       throw new EnvironmentError(
-        'the dispatch database was written by another schema version',
+        `the dispatch database at ${path} was written by schema version ${recorded}, not ${String(SCHEMA_VERSION)}`,
         {
-          hint: 'delete the file and re-run a full sync. Claims and recorded reviews go with it — release or re-record what still matters first.',
+          hint: `delete ${path} and re-run a full sync. Claims and recorded reviews go with it — release or re-record what still matters first.`,
         }
       );
     }

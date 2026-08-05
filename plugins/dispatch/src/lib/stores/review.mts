@@ -18,7 +18,7 @@ export class ReviewStore {
     this.#db = db;
   }
 
-  async record(milestone: string, at: string): Promise<void> {
+  async record(milestone: string, at: string, session: string): Promise<void> {
     assertInstant(at, 'at');
     await this.#db.transaction(() => {
       const node = findNode(this.#db, milestone);
@@ -75,13 +75,22 @@ export class ReviewStore {
           [node.id, String(member.id)]
         );
       }
-      // The review opens the gate; the reviewing claim has served its purpose.
-      this.#db.run('DELETE FROM claim WHERE node_id = ?', [node.id]);
+      // The review opens the gate; the reviewing claim has served its
+      // purpose. Only the reporter's own claim goes: a reviewer whose session
+      // was swept can record late, by which time the milestone may have been
+      // re-dispatched, and revoking that reviewer's grant would strand it.
+      this.#db.run('DELETE FROM claim WHERE node_id = ? AND session_id = ?', [
+        node.id,
+        session,
+      ]);
     });
   }
 
-  /** End a review without recording it — the gate stays closed. */
-  async release(milestone: string): Promise<boolean> {
+  /**
+   * End a review without recording it — the gate stays closed. Releases only
+   * the caller's own claim, for the same reason `record` does.
+   */
+  async release(milestone: string, session: string): Promise<boolean> {
     return this.#db.guard(() => {
       const node = findNode(this.#db, milestone);
       ensure(
@@ -91,7 +100,12 @@ export class ReviewStore {
             hint: 'name the milestone the review order carried.',
           })
       );
-      return this.#db.run('DELETE FROM claim WHERE node_id = ?', [node.id]) > 0;
+      return (
+        this.#db.run('DELETE FROM claim WHERE node_id = ? AND session_id = ?', [
+          node.id,
+          session,
+        ]) > 0
+      );
     });
   }
 }

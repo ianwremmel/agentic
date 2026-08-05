@@ -20,7 +20,7 @@ state, implementing tickets, reviewing milestones, talking to humans.
 
 | Actor                    | Owns                                                                     | Defined in |
 | ------------------------ | ------------------------------------------------------------------------ | ---------- |
-| channel server           | the graph, scheduling, claims, slots, work-order emission                | §3.1       |
+| channel server           | the graph, scheduling, claims, work-order emission                       | §3.1       |
 | orchestrate session      | relaying: answer instructions, launch workers, make delegated tracker writes | §2.6   |
 | ticket-worker agent      | one ticket's coordination — brief, transitions, decomposition, verification | §2.5    |
 | pr-worker agent          | one PR item's implementation, bare or ticket-backed                      | §2.4       |
@@ -64,7 +64,7 @@ Some tickets must be handled by a human — an explicit tracker signal
 (`requires-human`, a `human-only` target kind), or a worker-discovered wall
 that parked the ticket. The scheduler never dispatches them; it emits one
 `park_human_blocked` order per episode, and the session parks the ticket and
-posts the handoff through the adapter. The parked ticket holds no slot, and
+posts the handoff through the adapter. The parked ticket holds no claim, and
 its dependents unblock when a human moves it.
 
 A worker-discovered wall is a different condition from `requires-human`: the
@@ -87,5 +87,5 @@ Orchestration sits on top of everything else. It consumes §2.3 (the status
 vocabulary, dependency and milestone rules), launches workers whose ticket and
 PR behavior are §2.5 and §2.4, rides the channel of §3.1, and inherits §2.1
 for every comment an agent writes. It adds the graph, the scheduler tick, the
-compute-slot ledger, the milestone gate, and injection — and nothing about an
+compute accounting, the milestone gate, and injection — and nothing about an
 individual ticket or PR, which the agents already own.

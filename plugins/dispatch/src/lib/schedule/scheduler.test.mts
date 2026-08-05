@@ -91,11 +91,10 @@ describe('Scheduler', () => {
     for (const id of ['A', 'B', 'C', 'D']) {
       await tickets.upsertTicket(baseTicket(id, 'P'));
     }
-    await new CoordinationStore(db).acquireSlot({
+    await new CoordinationStore(db).claim({
+      node: 'A',
       session: 'S1',
-      actor: 'busy',
-      max: 3,
-      acquiredAt: NOW,
+      claimedAt: NOW,
     });
 
     const {orders} = await scheduler.tick(NOW);
@@ -120,8 +119,8 @@ describe('Scheduler', () => {
       'dispatch_ticket',
     ]);
 
-    // The three claims are live obligations: no fresh budget next tick, even
-    // though no worker has taken a slot yet.
+    // The three claims are live obligations, and a claim is the compute
+    // grant: no fresh budget next tick.
     const second = await scheduler.tick(LATER);
     assert.deepEqual(second.orders, []);
 
@@ -142,24 +141,31 @@ describe('Scheduler', () => {
     await db.close();
   });
 
-  it('counts a worker holding both its claim and a slot once', async () => {
+  it("re-dispatches a dead session's claimed node and refunds its budget", async () => {
     const {db, scheduler} = await fresh();
     const tickets = new TicketStore(db);
     for (const id of ['A', 'B', 'C', 'D']) {
       await tickets.upsertTicket(baseTicket(id, 'P'));
     }
-    const coordination = new CoordinationStore(db);
-    await coordination.claim({node: 'A', session: 'S1', claimedAt: NOW});
-    await coordination.acquireSlot({
-      session: 'S1',
-      actor: 'A',
-      max: 3,
-      acquiredAt: NOW,
+    // A claim under a session that stopped heartbeating is nobody's
+    // obligation: the stale sweep cascades it, so the node returns to the
+    // queue and its admission comes back.
+    await new SessionStore(db).register({
+      id: 'DEAD',
+      startedAt: '2020-01-01T00:00:00Z',
+      heartbeatAt: '2020-01-01T00:00:00Z',
+    });
+    await new CoordinationStore(db).claim({
+      node: 'A',
+      session: 'DEAD',
+      claimedAt: '2020-01-01T00:00:00Z',
     });
 
-    // A is one unit in flight, not two: budget is 2, not 1.
     const {orders} = await scheduler.tick(NOW);
-    assert.deepEqual(kinds(orders), ['dispatch_ticket', 'dispatch_ticket']);
+    const dispatched = orders
+      .filter((order) => order.kind === 'dispatch_ticket')
+      .map((order) => order.meta.ticket);
+    assert.deepEqual(dispatched, ['A', 'B', 'C']);
     await db.close();
   });
 
@@ -184,7 +190,7 @@ describe('Scheduler', () => {
     assert.deepEqual(while_claimed.orders, []);
 
     // Recording the review finishes the project's last open work.
-    await new ReviewStore(db).record('M1', LATER);
+    await new ReviewStore(db).record('M1', LATER, 'S1');
     const after = await scheduler.tick(LATER);
     assert.deepEqual(kinds(after.orders), ['project_complete']);
     await db.close();

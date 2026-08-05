@@ -73,13 +73,6 @@ export interface Claim {
   claimedAt: string;
 }
 
-export interface Slot {
-  id: number;
-  session: string;
-  actor: string;
-  acquiredAt: string;
-}
-
 export interface Outcome {
   node: string;
   outcome: OutcomeKind;

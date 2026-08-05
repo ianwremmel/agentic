@@ -13,7 +13,8 @@ import {SessionStore} from '../lib/stores/index.mts';
 const options = {
   'max-parallel': {
     type: 'number',
-    description: 'Compute-slot ledger size this server admits against.',
+    description:
+      'How many agents may run at once across every session sharing this graph database. The bound is the host\u2019s compute, not this server\u2019s share of it: the claim count it admits against spans all sessions. Servers that disagree on the value each enforce their own.',
     positional: false,
     required: false,
   },
@@ -87,7 +88,7 @@ export class Command extends AbstractCommand {
         },
       });
     } finally {
-      // The session dies with its server; claims and slots cascade so another
+      // The session dies with its server; claims cascade so another
       // server can pick the work up through stale-free reclamation.
       await withDatabase(undefined, ctx.env, async (db) =>
         new SessionStore(db).close(registryId)

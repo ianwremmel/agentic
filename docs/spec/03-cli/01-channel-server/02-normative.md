@@ -85,8 +85,8 @@ silently. Detection MUST therefore be a positive acknowledgement:
 
 The server MUST begin watching without waiting for the acknowledgement, so a
 session that ends up in `polling` costs nothing but the probes. It MUST NOT emit
-a work order before the acknowledgement lands: a work order claims a ticket and a
-slot, which a refused session would never release while its live server keeps the
+a work order before the acknowledgement lands: a work order claims a ticket,
+which a refused session would never release while its live server keeps the
 claim fresh.
 
 ### Correlating a caller to its server
@@ -109,7 +109,7 @@ channel server and the commands the session runs alike. That is the correlator.
    is the only write that runs in a session shell at a moment when the server it
    answers is already known, so it is the one point where the two can be made to
    agree. Without it a server that outlives the session id it was spawned under
-   keeps claiming tickets and slots — its heartbeat holding them fresh — while
+   keeps claiming tickets — its heartbeat holding them fresh — while
    every later caller fails to correlate and drops to `polling`.
 3. **Match.** A command that needs a server and was given no `--server` MUST read
    the session id from its own environment and take the live registry row
@@ -299,10 +299,10 @@ single-server-per-machine requirement. Cross-session coordination MUST rely on
 the shared graph DB, not on a coordinating process:
 
 1. **Atomic claims.** Before emitting a `dispatch_ticket`, the server MUST claim
-   the ticket (and a slot) under an immediate transaction, so two servers MUST
-   NOT be able to hand the same node to their sessions.
-2. **Machine-wide compute cap.** The slot ledger (§2.6) enforces the global
-   parallelism limit across all sessions and servers.
+   the ticket under an immediate transaction, so two servers MUST NOT be able
+   to hand the same node to their sessions.
+2. **Machine-wide compute cap.** The live-claim count (§2.6) enforces the
+   global parallelism limit across all sessions and servers.
 3. **Liveness.** Each server MUST mint its own registry id on spawn — the runner
    supplies no registry id — and register itself in the DB under it: registry id,
    pid, start time, the session id from its environment, the acknowledgement

@@ -43,17 +43,15 @@ status transitions, and comments to the tracker's tools.
      skip registration.
 3. **Report and return**:
    `dispatch outcome set --id <ticket> --outcome decomposed`. The scheduler
-   dispatches the children as slots free up and sends the ticket back to you
-   as `finalize` once they all resolve.
+   dispatches the children as capacity frees up and sends the ticket back to
+   you as `finalize` once they all resolve.
 
 ## Verifying (`verify`, `finalize`, `retry`, and verification tickets)
 
 Check each stated aim against what actually landed — read the merged code, not
 just the child tickets and PRs; a loose implementation can satisfy its PR
 description and still miss the ticket's aim. Post the evidence as a ticket
-comment, transition the ticket per the adapter, then report. Acquire a compute
-slot first (`dispatch slot acquire --actor <ticket>`) only if verifying means
-building or running tests, and release it before you return.
+comment, transition the ticket per the adapter, then report.
 
 ## Reporting
 

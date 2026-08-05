@@ -13,7 +13,7 @@ import {
 } from '../stores/index.mts';
 import type {NoticeKind} from '../stores/notice.mts';
 
-/** Compute-slot ledger size and admission cap when nothing configures one. */
+/** How many agents may be in flight at once when nothing configures it. */
 export const DEFAULT_MAX_PARALLEL = 3;
 
 export interface WorkOrder {
@@ -67,9 +67,9 @@ export class Scheduler {
     // No work order before the acknowledgement: a work order claims a node,
     // which a session that never hears the channel would never release.
     if (own?.ackedAt != null) {
-      // One admission budget per tick: the cap minus everything in flight — a
-      // claim is an obligation to run an agent, so it consumes capacity from
-      // the moment it exists, not from when its worker takes a slot. Reviews
+      // One admission budget per tick: the cap minus everything in flight. A
+      // claim is both the obligation to run an agent and that agent's compute
+      // grant, so it consumes capacity from the moment it exists. Reviews
       // spend first: a review is the continuation of already-landed work and
       // opens a gate other work waits behind.
       const coordination = new CoordinationStore(this.#db);
@@ -86,7 +86,13 @@ export class Scheduler {
     return {orders, retired: false};
   }
 
-  /** Claim-then-emit for the dispatch queue, up to the remaining budget. */
+  /**
+   * Claim-then-emit for the dispatch queue, up to the remaining budget. The
+   * budget bounds this tick's work; the cap passed to `claim` is what actually
+   * binds, because a second server scheduling concurrently computed its budget
+   * from the same pre-claim reading. A `full` outcome ends the pass — the
+   * later entries cannot fit either.
+   */
   async #fill(now: string, budget: number): Promise<WorkOrder[]> {
     const coordination = new CoordinationStore(this.#db);
     const orders: WorkOrder[] = [];
@@ -97,7 +103,12 @@ export class Scheduler {
         node: entry.item.id,
         session: this.#session,
         claimedAt: now,
+        capacity: {
+          max: this.#maxParallel,
+          staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+        },
       });
+      if (claim.outcome === 'full') break;
       if (claim.outcome !== 'claimed' && claim.outcome !== 'refreshed')
         continue;
       const passNote = pass === null ? '' : ` (pass: ${pass})`;
@@ -141,7 +152,12 @@ export class Scheduler {
         node: milestone.id,
         session: this.#session,
         claimedAt: now,
+        capacity: {
+          max: this.#maxParallel,
+          staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+        },
       });
+      if (claim.outcome === 'full') break;
       if (claim.outcome !== 'claimed' && claim.outcome !== 'refreshed')
         continue;
       orders.push({

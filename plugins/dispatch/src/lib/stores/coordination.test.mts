@@ -86,60 +86,127 @@ describe('CoordinationStore claims', () => {
   });
 });
 
-describe('CoordinationStore slots', () => {
-  it('bounds acquisition and is idempotent per actor', async () => {
+describe('CoordinationStore claim capacity', () => {
+  it('refuses a fresh claim past the cap inside the transaction', async () => {
     const {db, store} = await fresh();
+    db.run("INSERT INTO node (external_id, kind) VALUES ('T2','ticket')");
     const at = '2026-07-31T00:00:00Z';
     assert.equal(
-      await store.acquireSlot({
-        session: 's1',
-        actor: 'w1',
-        max: 1,
-        acquiredAt: at,
-      }),
-      'acquired'
+      (
+        await store.claim({
+          node: 'T1',
+          session: 's1',
+          claimedAt: at,
+          capacity: {max: 1, staleAfterSeconds: 300},
+        })
+      ).outcome,
+      'claimed'
     );
+    // A second server counted the same free capacity before either claimed;
+    // only the transaction can refuse the loser.
     assert.equal(
-      await store.acquireSlot({
-        session: 's1',
-        actor: 'w1',
-        max: 1,
-        acquiredAt: at,
-      }),
-      'refreshed'
-    );
-    assert.equal(await store.slotCount(), 1);
-    assert.equal(
-      await store.acquireSlot({
-        session: 's2',
-        actor: 'w2',
-        max: 1,
-        acquiredAt: at,
-      }),
+      (
+        await store.claim({
+          node: 'T2',
+          session: 's2',
+          claimedAt: at,
+          capacity: {max: 1, staleAfterSeconds: 300},
+        })
+      ).outcome,
       'full'
-    );
-    assert.equal(await store.releaseSlot('s1', 'w1'), true);
-    assert.equal(
-      await store.acquireSlot({
-        session: 's2',
-        actor: 'w2',
-        max: 1,
-        acquiredAt: at,
-      }),
-      'acquired'
     );
     await db.close();
   });
 
-  it('rejects a malformed acquiredAt', async () => {
+  it('never refuses a refresh of a claim this session already holds', async () => {
+    const {db, store} = await fresh();
+    const at = '2026-07-31T00:00:00Z';
+    await store.claim({
+      node: 'T1',
+      session: 's1',
+      claimedAt: at,
+      capacity: {max: 1, staleAfterSeconds: 300},
+    });
+    // The cap is already met by this very claim; re-claiming it must not
+    // strand the worker that holds it.
+    assert.equal(
+      (
+        await store.claim({
+          node: 'T1',
+          session: 's1',
+          claimedAt: at,
+          capacity: {max: 0, staleAfterSeconds: 300},
+        })
+      ).outcome,
+      'refreshed'
+    );
+    await db.close();
+  });
+
+  it('does not count a dead session\u2019s claim toward the cap', async () => {
+    const {db, store} = await fresh();
+    db.run("INSERT INTO node (external_id, kind) VALUES ('T2','ticket')");
+    await store.claim({
+      node: 'T1',
+      session: 's1',
+      claimedAt: '2026-07-31T00:00:00Z',
+      capacity: {max: 1, staleAfterSeconds: 300},
+    });
+    // s1 stopped heartbeating an hour ago; its claim is not compute in use.
+    assert.equal(
+      (
+        await store.claim({
+          node: 'T2',
+          session: 's2',
+          claimedAt: '2026-07-31T01:00:00Z',
+          capacity: {max: 1, staleAfterSeconds: 300},
+        })
+      ).outcome,
+      'claimed'
+    );
+    await db.close();
+  });
+
+  it('bounds nothing when no cap is given', async () => {
+    const {db, store} = await fresh();
+    db.run("INSERT INTO node (external_id, kind) VALUES ('T2','ticket')");
+    const at = '2026-07-31T00:00:00Z';
+    await store.claim({node: 'T1', session: 's1', claimedAt: at});
+    assert.equal(
+      (await store.claim({node: 'T2', session: 's2', claimedAt: at})).outcome,
+      'claimed'
+    );
+    await db.close();
+  });
+});
+
+describe('CoordinationStore inFlightCount', () => {
+  it('counts a claim only while its session heartbeats', async () => {
+    const {db, store} = await fresh();
+    db.run("INSERT INTO node (external_id, kind) VALUES ('T2','ticket')");
+    const at = '2026-07-31T00:00:00Z';
+    await store.claim({node: 'T1', session: 's1', claimedAt: at});
+    await store.claim({node: 'T2', session: 's2', claimedAt: at});
+    assert.equal(
+      await store.inFlightCount({now: at, staleAfterSeconds: 300}),
+      2
+    );
+
+    // s2's heartbeat is now 10 minutes old: its claim is nobody's obligation
+    // and must stop consuming an admission.
+    const later = '2026-07-31T00:10:00Z';
+    db.run("UPDATE session SET heartbeat_at = ? WHERE id = 's1'", [later]);
+    assert.equal(
+      await store.inFlightCount({now: later, staleAfterSeconds: 300}),
+      1
+    );
+    await db.close();
+  });
+
+  it('rejects a malformed now', async () => {
     const {db, store} = await fresh();
     await assert.rejects(
-      store.acquireSlot({
-        session: 's1',
-        actor: 'w1',
-        max: 1,
-        acquiredAt: 'not-a-time',
-      }),
+      store.inFlightCount({now: 'not-a-time', staleAfterSeconds: 300}),
       (err: unknown) => err instanceof DataError
     );
     await db.close();
@@ -147,16 +214,10 @@ describe('CoordinationStore slots', () => {
 });
 
 describe('CoordinationStore recordOutcome', () => {
-  it("writes the outcome and releases the holder's claim and slot", async () => {
+  it("writes the outcome and releases the holder's claim", async () => {
     const {db, store} = await fresh();
     const at = '2026-07-31T00:00:00Z';
     await store.claim({node: 'T1', session: 's1', actor: 'c1', claimedAt: at});
-    await store.acquireSlot({
-      session: 's1',
-      actor: 'c1',
-      max: 4,
-      acquiredAt: at,
-    });
     await store.recordOutcome(
       {
         node: 'T1',
@@ -165,11 +226,29 @@ describe('CoordinationStore recordOutcome', () => {
         detail: null,
         recordedAt: at,
       },
-      {session: 's1', actor: 'c1'}
+      {session: 's1'}
     );
     assert.equal((await store.getOutcome('T1'))?.outcome, 'delivered');
     assert.equal(Number(db.get('SELECT COUNT(*) AS n FROM claim')?.n), 0);
-    assert.equal(await store.slotCount(), 0);
+    await db.close();
+  });
+
+  it("leaves another session's claim alone", async () => {
+    const {db, store} = await fresh();
+    const at = '2026-07-31T00:00:00Z';
+    await store.claim({node: 'T1', session: 's1', claimedAt: at});
+    await store.recordOutcome(
+      {
+        node: 'T1',
+        outcome: 'delivered',
+        retryable: null,
+        detail: null,
+        recordedAt: at,
+      },
+      {session: 's2'}
+    );
+    assert.equal((await store.getOutcome('T1'))?.outcome, 'delivered');
+    assert.equal(Number(db.get('SELECT COUNT(*) AS n FROM claim')?.n), 1);
     await db.close();
   });
 

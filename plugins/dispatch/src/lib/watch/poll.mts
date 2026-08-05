@@ -3,7 +3,7 @@ import {withDatabase} from '../db/index.mts';
 import type {Logger} from '../logger/index.mts';
 import type {WatchReason} from '../model/status.mts';
 import {WatchStore} from '../stores/index.mts';
-import {reviewedByOthers, satisfied} from './condition.mts';
+import {satisfied} from './condition.mts';
 import {diffSnapshots} from './diff.mts';
 import type {Snapshotter} from './snapshot.mts';
 
@@ -69,9 +69,7 @@ export async function pollWatches(
         // it would act on, or the thing it is waiting for already holds. The
         // second is what covers a change that landed before the baseline was
         // taken, which no diff can see.
-        const done = satisfied(due.reason, taken, {
-          reviewedByOthers: reviewedByOthers(taken),
-        });
+        const done = satisfied(due.reason, taken);
         // One transaction: recording events and firing the watch must not be
         // separable, or a crash between them re-emits the same events on the
         // next tick against the same unchanged snapshot.

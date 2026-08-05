@@ -28,7 +28,7 @@ writing one. There is no `usage` field on the contract.
 
 ## Module layout
 
-```
+```text
 src/lib/command/          # shared by cli and (future) mcp
   abstract-command.mts    # AbstractCommand base + Option/OptionsRecord/ParsedOptions/CommandContext types
   parse.mts               # raw values map -> validated values record (coerce, required, choices, default)

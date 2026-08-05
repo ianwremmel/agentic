@@ -96,7 +96,7 @@ is implemented so the gate means the same thing in both directions.
 generation, the JSON-RPC loop, and call dispatch — which exceeds the repo's
 ~200-line-per-file guideline, so it splits by that rule:
 
-```
+```text
 src/lib/mcp/
   tools.mts    # buildTools(tree): tree walk -> tool defs + lookup map
   mcp.mts      # runMcpServer(): JSON-RPC loop, request handlers, callTool

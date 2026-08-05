@@ -6,3 +6,4 @@ export {githubSnapshot, SNAPSHOT_QUERY} from './snapshot.mts';
 export type {PrSnapshot, Snapshotter} from './snapshot.mts';
 export {selfLogin} from './self.mts';
 export {AGENT_ID, writtenByThisAgent} from './marker.mts';
+export {prStatusPayload, prStatusScript} from './payload.mts';

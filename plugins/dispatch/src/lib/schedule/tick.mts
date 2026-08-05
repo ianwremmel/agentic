@@ -3,7 +3,12 @@ import {withDatabase} from '../db/index.mts';
 import type {Logger} from '../logger/index.mts';
 import type {ChannelWriter} from '../mcp/channel.mts';
 import {PrEventStore, PrStore, SessionStore} from '../stores/index.mts';
-import {githubSnapshot, pollWatches} from '../watch/index.mts';
+import {
+  githubSnapshot,
+  pollWatches,
+  prStatusPayload,
+  prStatusScript,
+} from '../watch/index.mts';
 import type {Snapshotter} from '../watch/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
@@ -118,7 +123,7 @@ export async function runServerTick(
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure assigns `acked`; the analyzer cannot see the write
   if (acked) {
     try {
-      await pushObservations(channel, env, state.registryId, now);
+      await pushObservations(channel, env, state.registryId, now, opts.log);
     } catch (error) {
       // A push failure must not cost this tick's already-claimed orders; the
       // rows stay undelivered and the next tick retries.
@@ -142,13 +147,19 @@ async function pushObservations(
   channel: ChannelWriter,
   env: NodeJS.ProcessEnv,
   session: string,
-  at: string
+  at: string,
+  log?: Logger
 ): Promise<void> {
   await withDatabase(undefined, env, async (db) => {
     const events = new PrEventStore(db);
     const prs = new PrStore(db);
+    const script = prStatusScript();
     for (const event of await events.undelivered(session)) {
       const pr = await prs.getPr(event.node);
+      const payload =
+        pr?.repo == null || pr.prNumber == null
+          ? null
+          : await prStatusPayload(pr.repo, pr.prNumber, {script, log});
       channel.push(
         event.kind,
         {
@@ -157,7 +168,8 @@ async function pushObservations(
           ...(pr?.repo == null ? {} : {repo: pr.repo}),
           ...(pr?.prNumber == null ? {} : {pr: String(pr.prNumber)}),
         },
-        `${event.summary} Re-read the PR with \`pr-status\` before acting; this names what moved, not the whole state.`
+        payload ??
+          `${event.summary} The pr-status payload could not be read; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`
       );
       await events.markDelivered(event.id, at);
     }

@@ -207,17 +207,37 @@ describe('diffSnapshots', () => {
     assert.deepEqual(kinds(truncated, newer), ['pr_comment']);
   });
 
-  it('coalesces two comments in one tick into one event', () => {
-    // Meta is single-valued, so one event cannot name two threads.
+  it('collapses everything one tick saw into a single event', () => {
+    // A worker told "CI failed" and then, separately, "a reviewer replied"
+    // handles the second without the first's context. One event, one turn.
     const event = only(
-      BASE,
+      snap({checks: [{name: 'test', conclusion: null, url: null}]}),
       snap({
+        checks: [{name: 'test', conclusion: 'FAILURE', url: null}],
+        reviews: [review({state: 'CHANGES_REQUESTED'})],
         comments: [comment({id: 'c1'}), comment({id: 'c2'})],
-        totals: {reviews: 0, threads: 0, comments: 2},
+        totals: {reviews: 1, threads: 0, comments: 2},
       })
     );
-    assert.equal(event.kind, 'pr_comment');
-    assert.equal(event.meta.more, '1');
+    // Kind is the most significant thing that moved; `changed` is the rest.
+    assert.equal(event.kind, 'ci_finished');
+    assert.deepEqual(event.meta.changed?.split(','), [
+      'ci_finished',
+      'pr_review',
+      'pr_comment',
+    ]);
+    assert.equal(event.meta.failing, 'test');
+    assert.equal(event.meta.reviewer, 'human');
+  });
+
+  it('leads with the lifecycle change when the PR also moved', () => {
+    const event = only(
+      snap({draft: true}),
+      snap({draft: false, mergeState: 'DIRTY'})
+    );
+    assert.equal(event.kind, 'pr_state_change');
+    assert.equal(event.meta.state, 'ready');
+    assert.match(String(event.meta.changed), /pr_conflicted/u);
   });
 
   it('reports leaving draft as a state change', () => {
@@ -244,10 +264,9 @@ describe('diffSnapshots', () => {
     const failed = snap({
       checks: [{name: 'test', conclusion: 'FAILURE', url: null}],
     });
-    assert.deepEqual(
-      diffSnapshots(failed, {...failed, head: 'bbbbbbbb'}).map((e) => e.kind),
-      ['pr_head_changed', 'ci_finished']
-    );
+    const event = only(failed, {...failed, head: 'bbbbbbbb'});
+    assert.equal(event.meta.rollup, 'failure');
+    assert.match(String(event.meta.changed), /ci_finished/u);
   });
 
   it('reports a conflict once, not every poll', () => {

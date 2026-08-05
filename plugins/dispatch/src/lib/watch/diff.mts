@@ -219,30 +219,45 @@ function reviewState(state: string): string {
 }
 
 /**
- * One event per kind per tick, as the channel's ordering rule requires: meta
- * is single-valued, so two comments on one tick cannot both be described by
- * one event's `thread`. The first is kept and a `more` count records what it
- * stands for; the worker reads the full `pr-status` body either way, so
- * nothing it needs to act on is lost.
+ * Everything one tick saw about one PR, as a single event.
+ *
+ * The alternative — one event per change — interrupts a worker mid-reaction:
+ * it is told CI failed, starts fixing, and is then told a reviewer replied,
+ * which it must handle as a second turn without the first one's context. The
+ * worker already reads one `pr-status` blob per tick and reacts to everything
+ * in it at once; the channel should not be worse than that.
+ *
+ * So the kind is a routing hint — the most significant thing that moved —
+ * `changed` lists every kind that fired, and the per-kind specifics ride
+ * along in meta. The body carries the state the worker acts on.
  */
+const PRIORITY: readonly ObservationKind[] = [
+  'pr_state_change',
+  'pr_conflicted',
+  'ci_finished',
+  'pr_review',
+  'pr_head_changed',
+  'pr_comment',
+];
+
 function coalesce(events: readonly Observation[]): Observation[] {
-  const byKind = new Map<ObservationKind, Observation>();
-  const extra = new Map<ObservationKind, number>();
-  for (const event of events) {
-    if (!byKind.has(event.kind)) {
-      byKind.set(event.kind, event);
-      continue;
-    }
-    extra.set(event.kind, (extra.get(event.kind) ?? 0) + 1);
+  if (events.length <= 1) return [...events];
+  const ranked = [...events].sort(
+    (a, b) => PRIORITY.indexOf(a.kind) - PRIORITY.indexOf(b.kind)
+  );
+  const [lead] = ranked;
+  if (lead === undefined) return [];
+  const meta: Record<string, string> = {};
+  // Least significant first, so the lead event's own keys win a collision.
+  for (const event of [...ranked].reverse()) {
+    for (const [key, value] of Object.entries(event.meta)) meta[key] = value;
   }
-  return [...byKind.values()].map((event) => {
-    const more = extra.get(event.kind);
-    return more === undefined
-      ? event
-      : {
-          ...event,
-          meta: {...event.meta, more: String(more)},
-          summary: `${event.summary} (+${String(more)} more)`,
-        };
-  });
+  meta.changed = [...new Set(ranked.map((event) => event.kind))].join(',');
+  return [
+    {
+      kind: lead.kind,
+      meta,
+      summary: ranked.map((event) => event.summary).join(' '),
+    },
+  ];
 }

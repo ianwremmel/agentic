@@ -92,15 +92,27 @@ describe('CoordinationStore claim capacity', () => {
     db.run("INSERT INTO node (external_id, kind) VALUES ('T2','ticket')");
     const at = '2026-07-31T00:00:00Z';
     assert.equal(
-      (await store.claim({node: 'T1', session: 's1', claimedAt: at, max: 1}))
-        .outcome,
+      (
+        await store.claim({
+          node: 'T1',
+          session: 's1',
+          claimedAt: at,
+          capacity: {max: 1, staleAfterSeconds: 300},
+        })
+      ).outcome,
       'claimed'
     );
     // A second server counted the same free capacity before either claimed;
     // only the transaction can refuse the loser.
     assert.equal(
-      (await store.claim({node: 'T2', session: 's2', claimedAt: at, max: 1}))
-        .outcome,
+      (
+        await store.claim({
+          node: 'T2',
+          session: 's2',
+          claimedAt: at,
+          capacity: {max: 1, staleAfterSeconds: 300},
+        })
+      ).outcome,
       'full'
     );
     await db.close();
@@ -109,12 +121,23 @@ describe('CoordinationStore claim capacity', () => {
   it('never refuses a refresh of a claim this session already holds', async () => {
     const {db, store} = await fresh();
     const at = '2026-07-31T00:00:00Z';
-    await store.claim({node: 'T1', session: 's1', claimedAt: at, max: 1});
+    await store.claim({
+      node: 'T1',
+      session: 's1',
+      claimedAt: at,
+      capacity: {max: 1, staleAfterSeconds: 300},
+    });
     // The cap is already met by this very claim; re-claiming it must not
     // strand the worker that holds it.
     assert.equal(
-      (await store.claim({node: 'T1', session: 's1', claimedAt: at, max: 0}))
-        .outcome,
+      (
+        await store.claim({
+          node: 'T1',
+          session: 's1',
+          claimedAt: at,
+          capacity: {max: 0, staleAfterSeconds: 300},
+        })
+      ).outcome,
       'refreshed'
     );
     await db.close();
@@ -127,7 +150,7 @@ describe('CoordinationStore claim capacity', () => {
       node: 'T1',
       session: 's1',
       claimedAt: '2026-07-31T00:00:00Z',
-      max: 1,
+      capacity: {max: 1, staleAfterSeconds: 300},
     });
     // s1 stopped heartbeating an hour ago; its claim is not compute in use.
     assert.equal(
@@ -136,7 +159,7 @@ describe('CoordinationStore claim capacity', () => {
           node: 'T2',
           session: 's2',
           claimedAt: '2026-07-31T01:00:00Z',
-          max: 1,
+          capacity: {max: 1, staleAfterSeconds: 300},
         })
       ).outcome,
       'claimed'

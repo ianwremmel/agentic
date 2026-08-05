@@ -2,7 +2,7 @@ import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, nowIso, withDatabase} from '../../lib/db/index.mts';
 import {OUTCOMES} from '../../lib/model/status.mts';
-import {resolveSession} from '../../lib/schedule/index.mts';
+import {correlateSession} from '../../lib/schedule/index.mts';
 import {CoordinationStore} from '../../lib/stores/index.mts';
 
 const options = {
@@ -58,9 +58,9 @@ export class Command extends AbstractCommand {
       // releasing that claim would revoke a running agent's compute grant.
       // A caller with no server (an operator at a terminal) still records the
       // outcome — that is what re-admits the node — and releases nothing.
-      const session = await resolveSession(db, ctx.env, parsed.session).catch(
-        () => ''
-      );
+      // Ambiguous correlation is not that case and refuses: silently
+      // releasing nothing there would strand the claim and its capacity.
+      const session = await correlateSession(db, ctx.env, parsed.session);
       await new CoordinationStore(db).recordOutcome(
         {
           node: parsed.id,
@@ -71,7 +71,7 @@ export class Command extends AbstractCommand {
           detail: parsed.detail ?? null,
           recordedAt: nowIso(),
         },
-        {session}
+        {session: session ?? ''}
       );
       ctx.io.write(`outcome ${parsed.id} ${parsed.outcome}\n`);
     });

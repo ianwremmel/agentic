@@ -103,7 +103,10 @@ export class Scheduler {
         node: entry.item.id,
         session: this.#session,
         claimedAt: now,
-        max: this.#maxParallel,
+        capacity: {
+          max: this.#maxParallel,
+          staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+        },
       });
       if (claim.outcome === 'full') break;
       if (claim.outcome !== 'claimed' && claim.outcome !== 'refreshed')
@@ -149,7 +152,10 @@ export class Scheduler {
         node: milestone.id,
         session: this.#session,
         claimedAt: now,
-        max: this.#maxParallel,
+        capacity: {
+          max: this.#maxParallel,
+          staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+        },
       });
       if (claim.outcome === 'full') break;
       if (claim.outcome !== 'claimed' && claim.outcome !== 'refreshed')

@@ -1,7 +1,6 @@
 import type {Database} from '../db/database.mts';
 import {assertInstant} from '../db/time.mts';
 import {DataError, ensure} from '../errors/index.mts';
-import {DEFAULT_STALE_AFTER_SECONDS} from '../graph/pipeline.mts';
 import {isOutcome, OUTCOMES} from '../model/status.mts';
 import type {OutcomeKind} from '../model/status.mts';
 import type {Outcome} from '../model/types.mts';
@@ -43,12 +42,13 @@ export class CoordinationStore {
     branch?: string;
     claimedAt: string;
     /**
-     * Cap on live claims machine-wide. A fresh claim past the cap is refused
+     * Bound on live claims machine-wide. A fresh claim past `max` is refused
      * as `full`; refreshing a claim this session already holds never is, so a
-     * cap lowered under running work does not strand it.
+     * cap lowered under running work does not strand it. Omit to claim
+     * unbounded. Both fields travel together because a live-claim count is
+     * meaningless without the staleness window that defines "live".
      */
-    max?: number | undefined;
-    staleAfterSeconds?: number | undefined;
+    capacity?: {max: number; staleAfterSeconds: number} | undefined;
   }): Promise<ClaimResult> {
     assertInstant(input.claimedAt, 'claimedAt');
     return this.#db.transaction(() => {
@@ -61,20 +61,17 @@ export class CoordinationStore {
       if (existing !== undefined && existing.session_id !== input.session) {
         return {outcome: 'held', heldBy: String(existing.session_id)};
       }
-      if (existing === undefined && input.max !== undefined) {
+      if (existing === undefined && input.capacity !== undefined) {
         const live = Number(
           this.#db.get(
             `SELECT COUNT(*) AS n
              FROM claim c
              JOIN session s ON s.id = c.session_id
              WHERE unixepoch(?) - unixepoch(s.heartbeat_at) <= ?`,
-            [
-              input.claimedAt,
-              input.staleAfterSeconds ?? DEFAULT_STALE_AFTER_SECONDS,
-            ]
+            [input.claimedAt, input.capacity.staleAfterSeconds]
           )?.n ?? 0
         );
-        if (live >= input.max) return {outcome: 'full'};
+        if (live >= input.capacity.max) return {outcome: 'full'};
       }
       this.#db.run(
         `INSERT INTO claim (node_id, session_id, actor, worktree, branch, claimed_at)

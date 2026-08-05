@@ -1,7 +1,7 @@
 import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, withDatabase} from '../../lib/db/index.mts';
-import {resolveSession} from '../../lib/schedule/index.mts';
+import {correlateSession} from '../../lib/schedule/index.mts';
 import {ReviewStore} from '../../lib/stores/index.mts';
 
 const options = {
@@ -33,9 +33,10 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
-      const session = await resolveSession(db, ctx.env, parsed.session).catch(
-        () => ''
-      );
+      // No server means no claim of this caller's to release; ambiguous
+      // correlation refuses rather than leave a real claim held.
+      const session =
+        (await correlateSession(db, ctx.env, parsed.session)) ?? '';
       const released = await new ReviewStore(db).release(
         parsed.milestone,
         session

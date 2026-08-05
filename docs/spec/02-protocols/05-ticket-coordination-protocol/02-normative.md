@@ -112,13 +112,13 @@ terminal state through the Delivery Protocol (§2.4). Each PR is a distinct §2.
 Delivery instance.
 
 - The coordinator SHOULD run its PRs **sequentially** — at most one actively
-  building PR at a time — to keep PRs small and its draw on the shared compute-slot
-  ledger (§2.6 §Slot accounting) minimal.
-- Each delivery worker MUST hold a compute-slot ledger entry while it may write
-  code, install, build, or run tests, and MUST release it while its PR awaits CI,
-  review, or merge. A coordinator MAY run PRs concurrently when the work is
-  genuinely independent, acquiring one ledger entry per concurrently-building PR;
-  when no entry is free it MUST sequence.
+  building PR at a time — to keep PRs small and its draw on the shared compute
+  budget (§2.6 §Compute accounting) minimal.
+- Each delivery worker holds its claim while it may write code, install, build,
+  or run tests, and the claim is released for it when its PR awaits CI, review,
+  or merge. A coordinator MAY register several PR items when the work is
+  genuinely independent; the scheduler dispatches them one claim at a time as
+  the budget allows.
 - The coordinator MUST record the ticket↔PR mapping on the ticket (a progress
   entry per the tracker's convention) so an observer can see which PRs satisfy
   the ticket.
@@ -173,7 +173,7 @@ When the work item is a **no-PR verification** ticket (`target-kind`
    records the §Definition of done artifact at `verified`. (No PR exists, so the
    path collapses onto whatever roles the tracker provides, per §2.3's
    graceful-degradation rule; the coordinator MUST NOT emit an unenumerated
-   transition.) It holds a compute slot only while actually running the suite.
+   transition.) Its claim lasts only as long as the run.
 
 A verification that cannot pass reports a `failed` outcome (§Reporting) carrying a
 `retryable` flag: **retryable** for a transient cause (target not yet at the

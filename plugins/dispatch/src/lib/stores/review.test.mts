@@ -41,7 +41,7 @@ async function fixture(): Promise<Database> {
 describe('ReviewStore', () => {
   it('records a review the read-model counts, until the member set changes', async () => {
     const db = await fixture();
-    await new ReviewStore(db).record('M1', NOW);
+    await new ReviewStore(db).record('M1', NOW, 'S1');
 
     const before = await milestoneStates(db, {now: NOW});
     assert.equal(before[0]?.reviewRecorded, true);
@@ -65,7 +65,7 @@ describe('ReviewStore', () => {
     await new EdgeStore(db).addEdge('T2', 'M1');
 
     await assert.rejects(
-      new ReviewStore(db).record('M1', NOW),
+      new ReviewStore(db).record('M1', NOW, 'S1'),
       (err: unknown) => err instanceof DataError && err.message.includes('T2')
     );
     await db.close();
@@ -85,8 +85,8 @@ describe('ReviewStore', () => {
     });
 
     const store = new ReviewStore(db);
-    assert.equal(await store.release('M1'), true);
-    assert.equal(await store.release('M1'), false);
+    assert.equal(await store.release('M1', 'S1'), true);
+    assert.equal(await store.release('M1', 'S1'), false);
     assert.deepEqual(await new CoordinationStore(db).claims(), []);
     const state = await milestoneStates(db, {now: NOW});
     assert.equal(state[0]?.reviewRecorded, false);
@@ -107,9 +107,34 @@ describe('ReviewStore', () => {
     });
 
     await assert.rejects(
-      new ReviewStore(db).record('M1', NOW),
+      new ReviewStore(db).record('M1', NOW, 'S1'),
       (err: unknown) => err instanceof DataError
     );
+    await db.close();
+  });
+
+  it("leaves another session's review claim alone", async () => {
+    const db = await fixture();
+    const sessions = new SessionStore(db);
+    await sessions.register({id: 'S1', startedAt: NOW, heartbeatAt: NOW});
+    await sessions.register({id: 'S2', startedAt: NOW, heartbeatAt: NOW});
+    await new CoordinationStore(db).claim({
+      node: 'M1',
+      session: 'S2',
+      claimedAt: NOW,
+    });
+
+    // A swept reviewer reporting late must not revoke the replacement's grant.
+    assert.equal(await new ReviewStore(db).release('M1', 'S1'), false);
+    assert.deepEqual(await new CoordinationStore(db).claims(), [
+      {node: 'M1', session: 'S2', actor: null},
+    ]);
+
+    // Recording carries the same rule: the gate opens, the live claim stays.
+    await new ReviewStore(db).record('M1', NOW, 'S1');
+    assert.deepEqual(await new CoordinationStore(db).claims(), [
+      {node: 'M1', session: 'S2', actor: null},
+    ]);
     await db.close();
   });
 });

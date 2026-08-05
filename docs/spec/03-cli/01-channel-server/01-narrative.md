@@ -56,7 +56,7 @@ session would fetch anyway — and the session applies its own judgment. Decidin
 what a review or a failing check demands is not deterministic, so it stays the
 session's job. **Work orders** are the opposite: the CLI does the deterministic
 graph reasoning itself — ranking the frontier, applying milestone gates,
-accounting for slots, claiming — and tells the session exactly what to do next
+accounting for capacity, claiming — and tells the session exactly what to do next
 (coordinate this ticket, review this milestone, refresh the graph). The session
 runs the named skill and never has to read or understand the graph.
 
@@ -106,8 +106,8 @@ event, reached through whichever agent spawned it) — no per-ticket sessions to
 launch. The CLI has long supported several such
 sessions on different projects at once; each owns a server watching its own
 tickets' PRs, all sharing the one graph DB. Overlap is prevented in the DB: the CLI
-claims a ticket and a slot atomically before dispatching a coordinator, so two
-orchestrators can't take the same ticket, and the slot ledger enforces the
+claims a ticket atomically before dispatching a coordinator, so two
+orchestrators can't take the same ticket, and the claim count enforces the
 machine-wide cap. A server heartbeats while its session is alive, so a crashed
 orchestrator's claims go stale and another server reclaims them; event-driven
 subagents have returned between events, so there is no per-worker

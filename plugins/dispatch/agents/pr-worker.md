@@ -18,15 +18,12 @@ the PR itself), and — for an item a ticket-worker registered — `ticket`.
    ticket-backed item the ticket is the fuller brief — read it through the
    tracker adapter, but **never transition it**: coordination belongs to the
    ticket-worker, and your only report is the item's outcome.
-2. **Compute inside a slot**: run `dispatch slot acquire --actor <item-id>`
-   before writing code, installing, building, or testing; release for any wait
-   and before you return. A full ledger means wait and retry.
-3. Drive the PR with the `land` skill — it owns the lifecycle from draft
+2. Drive the PR with the `land` skill — it owns the lifecycle from draft
    through CI, reviews, and merge. Give it the branch, the title, and the
    ticket URL as context where one exists.
-4. Keep the item's record current with `dispatch pr set` (URL, PR number) as
+3. Keep the item's record current with `dispatch pr set` (URL, PR number) as
    they come to exist.
-5. Final action, always one `dispatch outcome set --id <item-id>` report:
+4. Final action, always one `dispatch outcome set --id <item-id>` report:
    `--outcome delivered` on merge, `--outcome human-blocked` when delivery is
    blocked on an operator response (post the question on the PR thread and put
    a one-line version in `--detail`; the scheduler alerts the operator and the

@@ -61,7 +61,7 @@ Conformance language follows [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119):
 | File                                                                      | Contents                                                     |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | [01-narrative.md](02-protocols/06-orchestration-protocol/01-narrative.md) | Three tiers, graph-frontier, producers/adapters, injection   |
-| [02-normative.md](02-protocols/06-orchestration-protocol/02-normative.md) | Graph document, producer/cursor contract, tick, slots, gates |
+| [02-normative.md](02-protocols/06-orchestration-protocol/02-normative.md) | Graph document, producer/cursor contract, tick, claims, gates |
 
 ---
 

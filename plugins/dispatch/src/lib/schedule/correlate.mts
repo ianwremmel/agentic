@@ -7,7 +7,7 @@ import {SessionStore} from '../stores/index.mts';
 
 /**
  * The session a caller's writes should ride: an explicit registry id, else
- * the one live server carrying this environment's Claude session id. Slots
+ * the one live server carrying this environment's Claude session id. Claims
  * recorded under it cascade away if that server dies.
  */
 export async function resolveSession(

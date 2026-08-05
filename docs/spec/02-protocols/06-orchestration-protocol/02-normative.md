@@ -6,8 +6,8 @@ This protocol applies to driving one or more **projects** to completion under
 CLI-issued work orders. All selected projects MUST live on the same tracker
 (§2.3: a ticket on one tracker MUST NOT depend on a ticket on another).
 
-The deterministic half — the graph, scheduling, claims, slots, and emission —
-is the channel server's (§3.1). This section specifies what it MUST derive and
+The deterministic half — the graph, scheduling, claims, and emission — is the
+channel server's (§3.1). This section specifies what it MUST derive and
 emit, and what the orchestrate session and the worker agents MUST do with it.
 
 ## The derived read-model
@@ -53,13 +53,12 @@ Each tick, in order:
 
 1. Heartbeat its session row; a server whose row is gone MUST stop scheduling
    and exit rather than re-register. Sweep sessions whose heartbeat is stale —
-   their claims and slots cascade away, which is how a crashed session's work
-   returns to the queue (as `resume`).
+   their claims cascade away, which is how a crashed session's work returns
+   to the queue (as `resume`).
 2. Reconcile ingest (§3.1.2): deliver owed fetch instructions and completions.
 3. Only once its probe is acknowledged (§3.1.2): compute the tick's admission
    budget — `max-parallel` minus everything in flight, where a unit in flight
-   is a node claimed by a live session or a held slot, a unit holding both
-   counted once. Then **reviews** — emit `perform_milestone_review` for each
+   is a node claimed by a live session. Then **reviews** — emit `perform_milestone_review` for each
    milestone ready-for-review with no valid review and no live claim, claiming
    the milestone first, up to the budget. Reviews spend first: a review
    continues already-landed work and opens a gate other work waits behind.
@@ -74,10 +73,23 @@ Each tick, in order:
    project's counts go terminal. A lapsed condition MUST clear its marker so a
    new episode fires again.
 
-A claim is an obligation to launch an agent, so the budget bounds total
-obligations outstanding, not admissions per tick: claims accumulated on
-earlier ticks consume capacity until their outcomes release them. The atomic
-slot acquire below remains the binding bound on concurrent compute.
+A claim is an obligation to launch an agent and that agent's compute grant in
+one, so the budget bounds total obligations outstanding, not admissions per
+tick: claims accumulated on earlier ticks consume capacity until they are
+released.
+
+For the claim count to bound concurrent compute rather than merely concurrent
+obligations, a worker MUST NOT hold its claim across a wait: on reaching a
+wait for CI, a review, a merge, or a human, it MUST hand the wait to the
+server (§3.1.2) and return, which releases the claim. A worker that instead
+polls in the foreground holds capacity it is not using, and enough of them
+starve the queue.
+
+Because the budget is computed before any claim is taken, and two servers can
+compute it from the same reading, the budget alone does not bound anything
+across sessions. The claim write MUST therefore enforce the cap inside its own
+transaction and refuse a fresh claim that would exceed it; the budget only
+bounds how much one tick attempts.
 
 ## Work orders and the session
 
@@ -104,13 +116,12 @@ identically.
 Every dispatched worker MUST:
 
 - work only the unit its order names, and never select further work;
-- acquire a compute slot before any stage that writes code, installs, builds,
-  or tests, and release it for any wait and on exit (`dispatch slot
-  acquire`/`release`); at capacity it waits and retries, never proceeds;
+- treat its dispatch as its compute grant — there is nothing to acquire, and
+  a worker MUST NOT wait for capacity, because it is not launched without it;
 - record its final report as its last act: `dispatch outcome set` with
   `verified`, `delivered`, `decomposed`, `canceled`, `human-blocked`, or
   `failed` (`--retryable` only when a fresh run could succeed). Recording
-  releases the claim and the actor's slot atomically.
+  releases the claim atomically.
 
 A ticket-worker owns its ticket's coordination and never its implementation:
 the §2.3 transitions, decomposition into subtasks or PR items (written
@@ -123,13 +134,13 @@ opening the gate) or files follow-ups and releases the claim
 (`dispatch review release`) with the gate closed; it MUST NOT record a review
 to clear the order while gaps remain.
 
-## Slot accounting
+## Compute accounting
 
-A **slot** is local compute capacity. The ledger lives in the shared database,
-bounded by `max-parallel`; every slot row names the session it rides and an
-actor. A slot is released by its holder, by its outcome report, or by the
-stale-session sweep — a dead server cannot leak capacity. A unit merely
-awaiting CI, review, or a human holds no slot.
+There is one ledger: the claims, bounded by `max-parallel`. A claim is created
+by the scheduler when it emits a work order and released by the outcome report
+or the stale-session sweep — a dead server cannot leak capacity. A unit merely
+awaiting CI, review, or a human holds no claim, because the wait itself is
+handed back to the server.
 
 ## State and recovery
 
@@ -139,7 +150,7 @@ tracker/forge, never only in an agent's memory:
 | State                   | Location                                        |
 | ----------------------- | ----------------------------------------------- |
 | Graph, cursor, refresh  | the dispatch database (a rebuildable cache)     |
-| Claims, slots, outcomes | the dispatch database, cascading off sessions   |
+| Claims and outcomes     | the dispatch database, cascading off sessions   |
 | Reviews and snapshots   | the dispatch database                           |
 | Condition markers       | the dispatch database                           |
 | Ticket status & history | the tracker (authoritative)                     |

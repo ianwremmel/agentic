@@ -7,8 +7,9 @@ concept, not a single table: an operation may write several tables atomically.
   with the id-kind conflict check. Used by every write store.
 - `project` / `milestone` / `ticket` / `pr` — per-kind upsert/remove/read.
 - `edge` — the blocking DAG: add/remove/setEdges with cycle rejection.
-- `session` — session lifecycle; claims and slots cascade off it.
-- `coordination` — claims, slots, and outcomes (transactionally linked).
+- `session` — session lifecycle; claims cascade off it.
+- `coordination` — claims and outcomes (transactionally linked). A claim is
+  also the compute grant, so it is the only ledger admissions budget against.
 - `cursor` — delta-sync cursors.
 - `refresh` — the per-tracker ingest state machine, its pending cursor, and the
   completion-emitted marker.

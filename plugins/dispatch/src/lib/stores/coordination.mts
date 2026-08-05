@@ -1,6 +1,7 @@
 import type {Database} from '../db/database.mts';
 import {assertInstant} from '../db/time.mts';
 import {DataError, ensure} from '../errors/index.mts';
+import {DEFAULT_STALE_AFTER_SECONDS} from '../graph/pipeline.mts';
 import {isOutcome, OUTCOMES} from '../model/status.mts';
 import type {OutcomeKind} from '../model/status.mts';
 import type {Outcome} from '../model/types.mts';
@@ -10,16 +11,22 @@ import {findNode} from './materialize.mts';
  * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
 
 export interface ClaimResult {
-  outcome: 'claimed' | 'refreshed' | 'held' | 'unknown-node';
+  outcome: 'claimed' | 'refreshed' | 'held' | 'full' | 'unknown-node';
   /** The session that holds it when the outcome is `held`. */
   heldBy?: string;
 }
 
 /**
- * The runtime coordination a live unit holds and reports: claims (locks), slots
- * (compute capacity), and outcomes (final reports). Grouped because they are
- * transactionally linked — recording an outcome releases the reporter's claim
- * and slot in the same write.
+ * The runtime coordination a live unit holds and reports: claims and outcomes
+ * (final reports). Grouped because they are transactionally linked — recording
+ * an outcome releases the reporter's claim in the same write.
+ *
+ * The claim is also the compute grant: a worker is launched by the work order
+ * that claims its node, and the claim is what the admission budget counts. That
+ * makes the claim the machine-wide compute bound, so `claim` enforces the cap
+ * inside its own transaction rather than trusting a caller's earlier count —
+ * two servers scheduling at once both read the same free capacity, and only the
+ * transaction can decide which of them gets it.
  */
 export class CoordinationStore {
   readonly #db: Database;
@@ -35,6 +42,13 @@ export class CoordinationStore {
     worktree?: string;
     branch?: string;
     claimedAt: string;
+    /**
+     * Cap on live claims machine-wide. A fresh claim past the cap is refused
+     * as `full`; refreshing a claim this session already holds never is, so a
+     * cap lowered under running work does not strand it.
+     */
+    max?: number | undefined;
+    staleAfterSeconds?: number | undefined;
   }): Promise<ClaimResult> {
     assertInstant(input.claimedAt, 'claimedAt');
     return this.#db.transaction(() => {
@@ -46,6 +60,21 @@ export class CoordinationStore {
       );
       if (existing !== undefined && existing.session_id !== input.session) {
         return {outcome: 'held', heldBy: String(existing.session_id)};
+      }
+      if (existing === undefined && input.max !== undefined) {
+        const live = Number(
+          this.#db.get(
+            `SELECT COUNT(*) AS n
+             FROM claim c
+             JOIN session s ON s.id = c.session_id
+             WHERE unixepoch(?) - unixepoch(s.heartbeat_at) <= ?`,
+            [
+              input.claimedAt,
+              input.staleAfterSeconds ?? DEFAULT_STALE_AFTER_SECONDS,
+            ]
+          )?.n ?? 0
+        );
+        if (live >= input.max) return {outcome: 'full'};
       }
       this.#db.run(
         `INSERT INTO claim (node_id, session_id, actor, worktree, branch, claimed_at)
@@ -116,76 +145,11 @@ export class CoordinationStore {
   /* eslint-enable @typescript-eslint/no-base-to-string */
 
   /**
-   * Acquire a compute slot, bounded globally by `max`. Idempotent per
-   * `(session, actor)` via the UNIQUE constraint: a re-acquire refreshes.
-   *
-   * `actor` is the external id of the node being worked — the convention
-   * every worker follows (`slot acquire --actor <item-id>`), and what lets
-   * `inFlightCount` count a worker's claim and slot as one obligation. An
-   * actor that names anything else still bounds compute correctly but is
-   * counted as its own obligation, shrinking the admission budget.
-   */
-  async acquireSlot(input: {
-    session: string;
-    actor: string;
-    max: number;
-    acquiredAt: string;
-  }): Promise<'acquired' | 'refreshed' | 'full'> {
-    assertInstant(input.acquiredAt, 'acquiredAt');
-    return this.#db.transaction(() => {
-      const held = this.#db.get(
-        'SELECT 1 FROM slot WHERE session_id = ? AND actor = ?',
-        [input.session, input.actor]
-      );
-      if (held !== undefined) {
-        this.#db.run(
-          'UPDATE slot SET acquired_at = ? WHERE session_id = ? AND actor = ?',
-          [input.acquiredAt, input.session, input.actor]
-        );
-        return 'refreshed';
-      }
-      const count = Number(
-        this.#db.get('SELECT COUNT(*) AS n FROM slot')?.n ?? 0
-      );
-      if (count >= input.max) return 'full';
-      this.#db.run(
-        'INSERT INTO slot (session_id, actor, acquired_at) VALUES (?, ?, ?)',
-        [input.session, input.actor, input.acquiredAt]
-      );
-      return 'acquired';
-    });
-  }
-
-  async releaseSlot(session: string, actor: string): Promise<boolean> {
-    return (
-      this.#db.run('DELETE FROM slot WHERE session_id = ? AND actor = ?', [
-        session,
-        actor,
-      ]) > 0
-    );
-  }
-
-  /** The session whose slot an actor holds, or null when none does. */
-  async slotHolder(actor: string): Promise<string | null> {
-    const row = this.#db.get('SELECT session_id FROM slot WHERE actor = ?', [
-      actor,
-    ]);
-    return row === undefined ? null : String(row.session_id);
-  }
-
-  async slotCount(): Promise<number> {
-    return Number(this.#db.get('SELECT COUNT(*) AS n FROM slot')?.n ?? 0);
-  }
-
-  /**
-   * Units of work currently in flight: every held slot plus every node with a
-   * live claim, counting a unit that holds both exactly once (a worker's slot
-   * actor is the external id of the node it claimed — the convention
-   * `acquireSlot` documents). A claim is an obligation to run an agent
-   * whether or not that agent has reached its compute phase, so this — not
-   * the slot count alone — is what admissions budget against. A slot whose
-   * actor matches no claimed node counts as its own obligation: the error is
-   * conservative (a smaller budget), never an over-admission.
+   * Units of work currently in flight: every node held by a live claim. A
+   * claim is an obligation to run an agent — created when the scheduler emits
+   * the work order, dropped when the agent reports an outcome or hands its
+   * wait back to the server — so counting live claims is what bounds how many
+   * agents run at once.
    */
   async inFlightCount(input: {
     now: string;
@@ -193,23 +157,19 @@ export class CoordinationStore {
   }): Promise<number> {
     assertInstant(input.now, 'now');
     const row = this.#db.get(
-      `SELECT
-         (SELECT COUNT(*) FROM slot)
-         + (SELECT COUNT(*)
-            FROM claim c
-            JOIN session s ON s.id = c.session_id
-            JOIN node n ON n.id = c.node_id
-            WHERE unixepoch(?) - unixepoch(s.heartbeat_at) <= ?
-              AND n.external_id NOT IN (SELECT actor FROM slot)) AS n`,
+      `SELECT COUNT(*) AS n
+       FROM claim c
+       JOIN session s ON s.id = c.session_id
+       WHERE unixepoch(?) - unixepoch(s.heartbeat_at) <= ?`,
       [input.now, input.staleAfterSeconds]
     );
     return Number(row?.n ?? 0);
   }
 
   /**
-   * Record a unit's final report on a node, releasing its claim and slot in the
-   * same transaction — the artifact proves its writer exited. One row per node;
-   * a later pass's report replaces it.
+   * Record a unit's final report on a node, releasing its claim in the same
+   * transaction — the artifact proves its writer exited. One row per node; a
+   * later pass's report replaces it.
    */
   async recordOutcome(
     report: {
@@ -219,7 +179,7 @@ export class CoordinationStore {
       detail: string | null;
       recordedAt: string;
     },
-    holder: {session: string; actor?: string}
+    holder: {session: string}
   ): Promise<void> {
     ensure(
       isOutcome(report.outcome),
@@ -263,12 +223,6 @@ export class CoordinationStore {
         node.id,
         holder.session,
       ]);
-      if (holder.actor !== undefined) {
-        this.#db.run('DELETE FROM slot WHERE session_id = ? AND actor = ?', [
-          holder.session,
-          holder.actor,
-        ]);
-      }
     });
   }
 

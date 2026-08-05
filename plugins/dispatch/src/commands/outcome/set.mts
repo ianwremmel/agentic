@@ -2,6 +2,7 @@ import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, nowIso, withDatabase} from '../../lib/db/index.mts';
 import {OUTCOMES} from '../../lib/model/status.mts';
+import {resolveSession} from '../../lib/schedule/index.mts';
 import {CoordinationStore} from '../../lib/stores/index.mts';
 
 const options = {
@@ -30,9 +31,10 @@ const options = {
     positional: false,
     required: false,
   },
-  actor: {
+  session: {
     type: 'string',
-    description: 'Actor whose compute slot releases with this report.',
+    description:
+      'Registry id whose claim this report releases; defaults to the session correlated from the environment.',
     positional: false,
     required: false,
   },
@@ -41,8 +43,7 @@ const options = {
 
 export class Command extends AbstractCommand {
   readonly name = 'set';
-  readonly summary =
-    'Record a final report on a node, releasing its claim and slot.';
+  readonly summary = 'Record a final report on a node, releasing its claim.';
   readonly env = [];
   readonly options = options;
 
@@ -51,18 +52,16 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
-      const coordination = new CoordinationStore(db);
-      const holder = (await coordination.claims()).find(
-        (claim) => claim.node === parsed.id
+      // The reporter releases its *own* claim, never whoever holds the node
+      // now. A worker whose session was swept mid-run can report late, by
+      // which time the node may have been re-dispatched to a live worker;
+      // releasing that claim would revoke a running agent's compute grant.
+      // A caller with no server (an operator at a terminal) still records the
+      // outcome — that is what re-admits the node — and releases nothing.
+      const session = await resolveSession(db, ctx.env, parsed.session).catch(
+        () => ''
       );
-      // A claim can be gone (swept with its session) while the actor's slot
-      // survives; the slot's own session keeps the release from being a no-op.
-      const session =
-        holder?.session ??
-        (parsed.actor === undefined
-          ? null
-          : await coordination.slotHolder(parsed.actor));
-      await coordination.recordOutcome(
+      await new CoordinationStore(db).recordOutcome(
         {
           node: parsed.id,
           outcome: parsed.outcome,
@@ -72,12 +71,7 @@ export class Command extends AbstractCommand {
           detail: parsed.detail ?? null,
           recordedAt: nowIso(),
         },
-        {
-          session: session ?? '',
-          ...(parsed.actor === undefined || session === null
-            ? {}
-            : {actor: parsed.actor}),
-        }
+        {session}
       );
       ctx.io.write(`outcome ${parsed.id} ${parsed.outcome}\n`);
     });

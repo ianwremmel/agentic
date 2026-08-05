@@ -1,6 +1,7 @@
 import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, withDatabase} from '../../lib/db/index.mts';
+import {resolveSession} from '../../lib/schedule/index.mts';
 import {ReviewStore} from '../../lib/stores/index.mts';
 
 const options = {
@@ -9,6 +10,13 @@ const options = {
     description: 'The milestone whose review ended without recording.',
     positional: false,
     required: true,
+  },
+  session: {
+    type: 'string',
+    description:
+      'Registry id whose claim this releases; defaults to the session correlated from the environment.',
+    positional: false,
+    required: false,
   },
   db: DB_OPTION,
 } as const;
@@ -25,7 +33,13 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
-      const released = await new ReviewStore(db).release(parsed.milestone);
+      const session = await resolveSession(db, ctx.env, parsed.session).catch(
+        () => ''
+      );
+      const released = await new ReviewStore(db).release(
+        parsed.milestone,
+        session
+      );
       ctx.io.write(
         `released review ${parsed.milestone} existed=${String(released)}\n`
       );

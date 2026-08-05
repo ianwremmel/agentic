@@ -68,7 +68,7 @@ describe('SessionStore', () => {
     await db.close();
   });
 
-  it("close cascades the session's claims and slots", async () => {
+  it("close cascades the session's claims", async () => {
     const {db, store} = await fresh();
     await store.register({
       id: 's1',
@@ -83,12 +83,8 @@ describe('SessionStore', () => {
       "INSERT INTO claim (node_id, session_id, claimed_at) VALUES (?, 's1', '2026-07-31T00:00:00Z')",
       [nid]
     );
-    db.run(
-      "INSERT INTO slot (session_id, actor, acquired_at) VALUES ('s1', 'w1', '2026-07-31T00:00:00Z')"
-    );
     assert.equal(await store.close('s1'), true);
     assert.equal(Number(db.get('SELECT COUNT(*) AS n FROM claim')?.n), 0);
-    assert.equal(Number(db.get('SELECT COUNT(*) AS n FROM slot')?.n), 0);
     await db.close();
   });
 

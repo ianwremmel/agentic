@@ -2,6 +2,7 @@ import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, nowIso, withDatabase} from '../../lib/db/index.mts';
 import {DEFAULT_STALE_AFTER_SECONDS} from '../../lib/graph/index.mts';
+import {withLiveProcesses} from '../../lib/liveness/index.mts';
 import {SessionStore} from '../../lib/stores/index.mts';
 
 const options = {
@@ -42,6 +43,16 @@ export class Command extends AbstractCommand {
           ctx.io.write('inactive no-server-for-session\n');
           return;
         }
+        // `--server` takes precedence over the match, not over liveness: a
+        // named row whose heartbeat went quiet or whose process is gone is
+        // no server at all.
+        const fresh =
+          Date.parse(now) - Date.parse(named.heartbeatAt) <=
+          DEFAULT_STALE_AFTER_SECONDS * 1_000;
+        if (!fresh || (await withLiveProcesses([named])).length === 0) {
+          ctx.io.write('inactive no-server-for-session\n');
+          return;
+        }
         ctx.io.write(
           named.ackedAt === null
             ? 'inactive awaiting-ack\n'
@@ -54,10 +65,10 @@ export class Command extends AbstractCommand {
         ctx.io.write('inactive no-session-id\n');
         return;
       }
-      const live = await sessions.liveForCaller(
-        caller,
-        now,
-        DEFAULT_STALE_AFTER_SECONDS
+      // Heartbeat freshness alone would keep a killed server's row "live"
+      // for the whole staleness window; the process check rules it out now.
+      const live = await withLiveProcesses(
+        await sessions.liveForCaller(caller, now, DEFAULT_STALE_AFTER_SECONDS)
       );
       if (live.length === 0) {
         ctx.io.write('inactive no-server-for-session\n');

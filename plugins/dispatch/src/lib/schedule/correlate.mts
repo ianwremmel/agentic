@@ -2,6 +2,7 @@ import type {Database} from '../db/database.mts';
 import {nowIso} from '../db/time.mts';
 import {DataError, ensure} from '../errors/index.mts';
 import {DEFAULT_STALE_AFTER_SECONDS} from '../graph/index.mts';
+import {withLiveProcesses} from '../liveness/index.mts';
 import {SessionStore} from '../stores/index.mts';
 
 /**
@@ -19,10 +20,12 @@ export async function resolveSession(
   const live =
     caller === null
       ? []
-      : await new SessionStore(db).liveForCaller(
-          caller,
-          nowIso(),
-          DEFAULT_STALE_AFTER_SECONDS
+      : await withLiveProcesses(
+          await new SessionStore(db).liveForCaller(
+            caller,
+            nowIso(),
+            DEFAULT_STALE_AFTER_SECONDS
+          )
         );
   const only = live.length === 1 ? live[0] : undefined;
   ensure(

@@ -2,6 +2,7 @@ export {
   parseEtime,
   probeProcessStart,
   processStartIso,
+  provenReused,
   sameProcess,
   withLiveProcesses,
 } from './liveness.mts';

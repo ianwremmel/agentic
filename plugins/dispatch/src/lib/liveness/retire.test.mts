@@ -82,6 +82,29 @@ describe('retireNonLive', () => {
     await db.close();
   });
 
+  it('keeps a row whose registration merely lagged its process start', async () => {
+    const {db, store} = await seeded();
+    await register(store, 'own');
+    await register(store, 'laggard');
+
+    const retired = await retireNonLive(db, {
+      claudeSessionId: 'claude-1',
+      keep: 'own',
+      now: NOW,
+      staleAfterSeconds: 300,
+      host: HOST,
+      // The probed start is well before the registered instant — delayed
+      // registration, or a row written by an older plugin version that
+      // recorded registration time. A reused pid can only start later, so
+      // this proves nothing about death.
+      probe: () => Promise.resolve(Date.parse(NOW) - 3_600_000),
+    });
+
+    assert.equal(retired, 0);
+    assert.ok(await store.getSession('laggard'));
+    await db.close();
+  });
+
   it('keeps a genuinely live rival rather than resolving ambiguity by recency', async () => {
     const {db, store} = await seeded();
     await register(store, 'own');

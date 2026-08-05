@@ -93,6 +93,28 @@ export function sameProcess(probedStartMs: number, startedAt: string): boolean {
 }
 
 /**
+ * Whether a probed start proves the registered process is gone: a reused
+ * pid can only start after the registered server died, so only a probed
+ * start decisively past the registered instant is proof. An earlier probed
+ * start merely means registration lagged the process start — rows written
+ * by older plugin versions recorded the registration instant here — and
+ * proves nothing about death.
+ *
+ * `slackMs` should be generous — the staleness window, not the matching
+ * slack: retiring a live row (say, after a forward clock step) is
+ * unrecoverable, while a reuse this slack fails to prove only leaves a row
+ * the heartbeat sweep bounds anyway.
+ */
+export function provenReused(
+  probedStartMs: number,
+  startedAt: string,
+  slackMs: number
+): boolean {
+  const registered = Date.parse(startedAt);
+  return Number.isFinite(registered) && probedStartMs > registered + slackMs;
+}
+
+/**
  * Keep only rows whose server process this one can vouch for: same host, a
  * recorded pid, and a running process whose start matches the registered
  * one (which rules out a reused pid). This is the other half of liveness

@@ -8,6 +8,7 @@ import {
   parseEtime,
   probeProcessStart,
   processStartIso,
+  provenReused,
   withLiveProcesses,
 } from './liveness.mts';
 
@@ -47,6 +48,22 @@ describe('parseEtime', () => {
     assert.equal(parseEtime('garbage'), null);
     assert.equal(parseEtime('00:01\n00:02'), null);
     assert.equal(parseEtime('12'), null);
+  });
+});
+
+describe('provenReused', () => {
+  it('proves death only for a probed start decisively past the slack', () => {
+    const startedAt = '2026-08-04T00:00:00.000Z';
+    const registered = Date.parse(startedAt);
+    assert.equal(provenReused(registered + 300_000, startedAt, 300_000), false);
+    assert.equal(provenReused(registered + 300_001, startedAt, 300_000), true);
+    // Earlier is delayed registration, not reuse.
+    assert.equal(
+      provenReused(registered - 3_600_000, startedAt, 300_000),
+      false
+    );
+    // An unreadable registered instant proves nothing.
+    assert.equal(provenReused(registered, 'not-a-date', 300_000), false);
   });
 });
 

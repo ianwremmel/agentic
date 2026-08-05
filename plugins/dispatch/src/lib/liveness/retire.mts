@@ -3,7 +3,7 @@ import {hostname} from 'node:os';
 import type {Database} from '../db/database.mts';
 import type {Session} from '../model/types.mts';
 import {SessionStore} from '../stores/session.mts';
-import {probeProcessStart, sameProcess} from './liveness.mts';
+import {probeProcessStart, provenReused} from './liveness.mts';
 import type {ProbeResult} from './liveness.mts';
 
 /**
@@ -59,12 +59,5 @@ async function provenDead(
   const probed = await opts.probe(row.pid);
   if (probed === 'absent') return true;
   if (probed === 'unknown') return false;
-  // A running pid whose start does not match the registration is a reused
-  // pid: the registered server is gone. An unreadable registered instant
-  // proves nothing either way, and sameProcess already reports it as a
-  // non-match, so require a readable one before treating mismatch as death.
-  return (
-    Number.isFinite(Date.parse(row.startedAt)) &&
-    !sameProcess(probed, row.startedAt)
-  );
+  return provenReused(probed, row.startedAt, opts.staleAfterSeconds * 1_000);
 }

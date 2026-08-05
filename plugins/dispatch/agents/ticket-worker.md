@@ -13,6 +13,12 @@ Your dispatch carries `ticket`, `project`, and a `pass`. Read the plugin's
 `tracker-adapter-${user_config.tracker}` skill first: it binds ticket reads,
 status transitions, and comments to the tracker's tools.
 
+Except for `dispatch slot wait`, which is CLI-only by design, every
+`dispatch <verb>` below is also a tool on the plugin's MCP server
+(`ticket set` → the `ticket_set` tool). Prefer the tools — each call also
+lets the server deliver queued work — and fall back to the CLI only when the
+tools are absent.
+
 ## The passes
 
 | pass        | You were dispatched to                                                                                                   |

@@ -10,9 +10,10 @@ stop. Do not decide what to fetch next, chase a dependency you noticed, or judge
 whether the graph is complete — the CLI does all three and will send another
 instruction if it needs one.
 
-The `dispatch` commands below are also tools on the plugin's MCP server
-(`ticket set` → the `ticket_set` tool). When the server is attached, call the
-tools — the server delivers follow-up instructions after tool calls.
+Every `dispatch` command below is also a tool on the plugin's MCP server
+(`ticket set` → the `ticket_set` tool). The tools are the default — the
+server delivers follow-up instructions after each tool call; use the CLI
+only when the tools are absent from the session.
 
 ## The adapter
 

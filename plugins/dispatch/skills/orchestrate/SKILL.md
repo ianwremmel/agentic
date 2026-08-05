@@ -10,9 +10,11 @@ what to dispatch next, or whether anything is complete — every decision
 arrives as an instruction, and you answer it. You never read ticket bodies or
 judge CI state; workers do.
 
-The `dispatch` commands below are also tools on the plugin's MCP server
-(`mcp ack` → the `mcp_ack` tool). When the server is attached, call the tools:
-the server pushes queued instructions after each tool call.
+Every `dispatch` command below is also a tool on the plugin's MCP server
+(`mcp ack` → the `mcp_ack` tool). The tools are the default — the server
+pushes queued instructions after each tool call; use the CLI only when the
+tools are absent from the session. `dispatch tick` is the exception:
+CLI-only by design, for the fallback below.
 
 **In plan mode, decline** and ask the operator to re-invoke outside it — this
 skill launches agents and writes state.

@@ -11,6 +11,12 @@ Your dispatch carries `milestone` and `project`. Read the plugin's
 `tracker-adapter-${user_config.tracker}` skill: it binds ticket reads, ticket
 creation, and the milestone's review artifact.
 
+Except for `dispatch slot wait`, which is CLI-only by design, every
+`dispatch <verb>` below is also a tool on the plugin's MCP server
+(`review record` → the `review_record` tool). Prefer the tools — each call
+also lets the server deliver queued work — and fall back to the CLI only
+when the tools are absent.
+
 1. **Collect the members** — `dispatch status` lists the milestone; read each
    member ticket's aims and DoD evidence through the adapter.
 2. **Judge the whole against the code, not the tickets.** Read what the

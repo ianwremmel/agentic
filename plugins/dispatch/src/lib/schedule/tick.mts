@@ -13,6 +13,12 @@ import type {Snapshotter} from '../watch/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
 
+/**
+ * Observations pushed per tick. Each costs a `pr-status` read, and the tick
+ * holds this session's heartbeat while it runs.
+ */
+const MAX_PUSHES_PER_TICK = 8;
+
 /** First probe retry delay; doubles per unanswered probe up to the cap. */
 const PROBE_DELAY_MS = 5_000;
 const PROBE_DELAY_CAP_MS = 60_000;
@@ -154,7 +160,15 @@ async function pushObservations(
     const events = new PrEventStore(db);
     const prs = new PrStore(db);
     const script = prStatusScript();
-    for (const event of await events.undelivered(session)) {
+    // Bounded per tick: each event costs a `pr-status` read, and the tick
+    // holds the heartbeat. Draining fifty of them serially would stop this
+    // session heartbeating for long enough to be swept as stale, which
+    // cascades its claims and re-dispatches the very work these events were
+    // about. What does not fit goes out next tick, in seq order.
+    for (const event of await events.undelivered(
+      session,
+      MAX_PUSHES_PER_TICK
+    )) {
       const pr = await prs.getPr(event.node);
       const payload =
         pr?.repo == null || pr.prNumber == null

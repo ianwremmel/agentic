@@ -106,6 +106,7 @@ export class Command extends AbstractCommand {
         at: nowIso(),
         snapshot: githubSnapshot,
         session: caller,
+        releaseClaimFor: caller,
         log: ctx.log,
       });
 

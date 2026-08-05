@@ -240,6 +240,39 @@ describe('diffSnapshots', () => {
     assert.match(String(event.meta.changed), /pr_conflicted/u);
   });
 
+  it('lets the lead event win a colliding meta key', () => {
+    // Both pr_state_change and pr_review carry `state`. The lead event's
+    // meaning must survive, or a routing session reads the wrong one.
+    const event = only(
+      snap({draft: true}),
+      snap({
+        draft: false,
+        reviews: [review({state: 'CHANGES_REQUESTED'})],
+        totals: {reviews: 1, threads: 0, comments: 0},
+      })
+    );
+    assert.equal(event.kind, 'pr_state_change');
+    assert.equal(event.meta.state, 'ready');
+    assert.equal(event.meta.reviewer, 'human');
+  });
+
+  it('reports a comment sharing the newest timestamp in a truncated window', () => {
+    // Timestamps are not unique. Dropping a same-second comment loses it for
+    // good: the snapshot advances and no later tick can rediscover it.
+    const truncated = snap({
+      comments: [comment({id: 'c9', createdAt: '2026-02-01T00:00:00Z'})],
+      totals: {reviews: 0, threads: 0, comments: 30},
+    });
+    const tied = snap({
+      comments: [
+        comment({id: 'c9', createdAt: '2026-02-01T00:00:00Z'}),
+        comment({id: 'c10', createdAt: '2026-02-01T00:00:00Z'}),
+      ],
+      totals: {reviews: 0, threads: 0, comments: 31},
+    });
+    assert.deepEqual(kinds(truncated, tied), ['pr_comment']);
+  });
+
   it('reports leaving draft as a state change', () => {
     const event = only(snap({draft: true}), snap({draft: false}));
     assert.equal(event.kind, 'pr_state_change');

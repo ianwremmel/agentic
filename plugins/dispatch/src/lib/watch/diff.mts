@@ -183,7 +183,10 @@ export function diffSnapshots(
   const known = new Set(previous.comments.map((comment) => comment.id));
   for (const comment of next.comments) {
     if (known.has(comment.id) || comment.mine) continue;
-    if (!windowComplete && comment.createdAt <= newestOf(previous.comments)) {
+    // Strictly older only. Timestamps are not a unique key, so a comment
+    // sharing the newest one's second would otherwise be dropped for good —
+    // the snapshot advances past it and no later tick can rediscover it.
+    if (!windowComplete && comment.createdAt < newestOf(previous.comments)) {
       continue;
     }
     events.push({

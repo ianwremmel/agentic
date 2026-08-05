@@ -21,6 +21,7 @@ export async function armWatch(
     at: string;
     snapshot: Snapshotter;
     session: string | null;
+    releaseClaimFor?: string | null;
     log?: Logger | undefined;
   }
 ): Promise<void> {
@@ -43,5 +44,6 @@ export async function armWatch(
     ).toISOString(),
     snapshot: baseline,
     session: input.session,
+    releaseClaimFor: input.releaseClaimFor ?? null,
   });
 }

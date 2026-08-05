@@ -56,6 +56,14 @@ export class WatchStore {
     snapshot: PrSnapshot | null;
     /** The session whose worker armed this wait; only it can route the events. */
     session: string | null;
+    /**
+     * Release this session's claim in the same transaction. The two must not
+     * be separable: between a released claim and an installed watch the item
+     * is neither claimed nor watching, so another server can claim and
+     * dispatch it — and the late arm then hides that live worker's claim
+     * behind a watching row.
+     */
+    releaseClaimFor?: string | null;
   }): Promise<void> {
     assertInstant(input.at, 'at');
     assertInstant(input.expiresAt, 'expiresAt');
@@ -68,6 +76,12 @@ export class WatchStore {
             hint: 'a watch is set on a PR item the graph already holds.',
           })
       );
+      if (input.releaseClaimFor != null) {
+        this.#db.run('DELETE FROM claim WHERE node_id = ? AND session_id = ?', [
+          node.id,
+          input.releaseClaimFor,
+        ]);
+      }
       // Re-arming starts a new wait, so anything the previous one observed
       // and never delivered describes a wait nobody is in any more.
       this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [node.id]);

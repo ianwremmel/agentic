@@ -95,9 +95,12 @@ The orchestrate session MUST execute orders and derive nothing:
 The session passes a worker only what the order carries plus credential
 context — never ticket content. It MUST NOT block on session input for human
 questions; those route through the tracker (§2.3). Where no channel is
-acknowledged, the session MUST poll the same read-model (`dispatch queue`,
-`dispatch status`, `dispatch refresh status`) and handle each entry
-identically.
+acknowledged, the session MUST poll `dispatch tick` — which runs the same
+scheduler pass and prints the events the channel would have pushed, claimed
+and budget-bounded, delivery proven by the synchronous read — and handle
+each event identically. It MUST NOT launch work from `dispatch queue`
+directly: queue entries are unclaimed, so doing so bypasses the admission
+budget and the cross-session double-dispatch guard.
 
 ## Workers
 

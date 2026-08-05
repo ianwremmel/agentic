@@ -72,9 +72,14 @@ the queue; the next tick dispatches them.
 ## If nothing arrives
 
 Run `dispatch mcp status`. `active <id>` means the channel works — keep
-waiting. Anything else names why it does not; fall back to polling on a
-self-paced loop: `dispatch refresh status --tracker <tracker>` for unanswered
-fetch instructions, then `dispatch queue` and `dispatch status` for
-dispatchable work and open conditions, handling each exactly as the table
-above does. `terminal=true` from `dispatch status` is completion in this
-fallback.
+waiting. Anything else names why it does not; fall back to polling
+`dispatch tick` (CLI only, never faster than once a minute). Each call runs
+one scheduler pass and prints the events the channel would have pushed —
+fetch instructions and work orders, already claimed and budget-bounded —
+each handled exactly as the table above. Never launch work straight from
+`dispatch queue`: its entries are unclaimed, so launching them bypasses the
+admission budget and double-dispatches across sessions. `dispatch queue` and
+`dispatch status` stay read-only diagnostics; `terminal=true` from
+`dispatch status` is completion in this fallback. A refresh that stalls with
+no tick printing its instructions was lost in flight — re-run
+`dispatch refresh`; it re-offers what is still unanswered.

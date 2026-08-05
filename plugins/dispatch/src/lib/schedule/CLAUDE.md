@@ -8,7 +8,9 @@ The server's deterministic scheduling half.
   claim-then-emit over the dispatch queue, plus the once-per-episode condition
   orders (`notice` table). Returns orders; never touches the channel, so it
   tests without one.
-- `tick.mts` — `runServerTick`: opens the DB, runs the scheduler, pushes the
-  orders, and keeps the probe/ack handshake alive on a capped backoff.
+- `tick.mts` — `runServerTick`: opens the DB, runs the scheduler, delivers
+  owed ingest instructions (only once acked), pushes the orders, and keeps
+  the probe/ack handshake alive on a capped backoff.
 - `correlate.mts` — `resolveSession`: an explicit registry id, else the one
-  live server carrying the caller's Claude session id.
+  live server carrying the caller's Claude session id, skipping rows whose
+  registered pid is dead on this host.

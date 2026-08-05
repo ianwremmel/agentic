@@ -42,6 +42,33 @@ the current one instead of stranding its claims. The acknowledgement itself is
 recorded against the registry id, not the session id, so it never transfers to a
 different server (§3.1.2).
 
+### `dispatch tick`
+
+Run one scheduler pass for the caller's session and print the resulting
+events — owed ingest instructions first, then work orders — to stdout in
+delivery order, one `<event kind="…" …>body</event>` line each. This is the
+fallback-mode counterpart of the server's timer tick (§3.1.2): the caller
+reads the output synchronously, so delivery is proven by the call itself and
+the channel acknowledgement is not required. Orders it emits are claimed and
+budget-bounded exactly as the server's are; a session polling `tick` MUST NOT
+also launch work from `dispatch queue`, whose entries are unclaimed.
+
+```shell
+dispatch tick [--session <registry-id>] [--max-parallel <n>]
+```
+
+CLI-only — it is not exposed as an MCP tool, because a session whose channel
+works receives the same events as pushes and a second emitter would race the
+timer tick. Given no `--session`, it correlates to the caller's own live
+server row (§3.1.2) and heartbeats it; no live row is an error, not a silent
+no-op, and the error path runs before any instruction is marked delivered.
+
+Synchronous delivery is proof the caller received the bytes, not that it
+acted on them. Where a tick's output is lost anyway (a killed session, a
+truncated read), recovery is the same as for a lost channel push: claims
+sweep when the session's server dies (§2.6), and re-running
+`dispatch refresh` re-offers unanswered instructions.
+
 ### `dispatch mcp status`
 
 Report whether channel mode is active, plus basic health: the PRs being watched,

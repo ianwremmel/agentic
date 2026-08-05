@@ -60,7 +60,8 @@ export class Command extends AbstractCommand {
         env: ctx.env,
         tick: {
           intervalMs: parsed['tick-seconds'] * 1_000,
-          run: (channel) => runServerTick(channel, ctx.env, state),
+          run: (channel) =>
+            runServerTick(channel, ctx.env, state, {log: ctx.log}),
         },
       });
     } finally {

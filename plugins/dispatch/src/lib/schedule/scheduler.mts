@@ -44,14 +44,27 @@ export class Scheduler {
   readonly #db: Database;
   readonly #session: string;
   readonly #maxParallel: number;
+  readonly #requireAck: boolean;
 
   constructor(
     db: Database,
-    opts: {session: string; maxParallel?: number | undefined}
+    opts: {
+      session: string;
+      maxParallel?: number | undefined;
+      /**
+       * Whether emission waits on the channel acknowledgement. The server's
+       * timer tick requires it — a pushed order an unhearing session never
+       * receives would claim a node forever. The CLI `tick` command turns it
+       * off: its orders are printed to the caller synchronously, so delivery
+       * is proven by the call itself.
+       */
+      requireAck?: boolean | undefined;
+    }
   ) {
     this.#db = db;
     this.#session = opts.session;
     this.#maxParallel = opts.maxParallel ?? DEFAULT_MAX_PARALLEL;
+    this.#requireAck = opts.requireAck ?? true;
   }
 
   async tick(now: string): Promise<TickResult> {
@@ -66,7 +79,7 @@ export class Scheduler {
 
     // No work order before the acknowledgement: a work order claims a node,
     // which a session that never hears the channel would never release.
-    if (own?.ackedAt != null) {
+    if (!this.#requireAck || own?.ackedAt != null) {
       // One admission budget per tick: the cap minus everything in flight — a
       // claim is an obligation to run an agent, so it consumes capacity from
       // the moment it exists, not from when its worker takes a slot. Reviews
@@ -93,13 +106,17 @@ export class Scheduler {
 
     for (const {entry, pass} of await dispatchQueue(this.#db, {now})) {
       if (orders.length >= budget) break;
+      // Only a fresh claim emits. `refreshed` means this session already held
+      // one — the queue excludes live-claimed nodes, so that can only be a
+      // concurrent tick of the same session (the CLI `tick` racing the timer)
+      // that claimed it between this tick's queue read and now. That emitter
+      // owns the order; emitting here too would double-dispatch the node.
       const claim = await coordination.claim({
         node: entry.item.id,
         session: this.#session,
         claimedAt: now,
       });
-      if (claim.outcome !== 'claimed' && claim.outcome !== 'refreshed')
-        continue;
+      if (claim.outcome !== 'claimed') continue;
       const passNote = pass === null ? '' : ` (pass: ${pass})`;
       if (entry.item.kind === 'pr') {
         orders.push({
@@ -137,13 +154,15 @@ export class Scheduler {
       if (orders.length >= budget) break;
       if (!milestone.readyForReview || milestone.reviewRecorded) continue;
       if (milestone.claim?.live === true) continue;
+      // Fresh claims only, for the same reason as in `#fill`: a `refreshed`
+      // outcome here is a concurrent same-session tick that beat this one to
+      // the milestone.
       const claim = await coordination.claim({
         node: milestone.id,
         session: this.#session,
         claimedAt: now,
       });
-      if (claim.outcome !== 'claimed' && claim.outcome !== 'refreshed')
-        continue;
+      if (claim.outcome !== 'claimed') continue;
       orders.push({
         kind: 'perform_milestone_review',
         meta: {project: milestone.project, milestone: milestone.id},

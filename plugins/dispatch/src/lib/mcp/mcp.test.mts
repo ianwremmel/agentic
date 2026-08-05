@@ -6,8 +6,9 @@ import {Readable, Writable} from 'node:stream';
 import {describe, it} from 'node:test';
 
 import {discover} from '../command/index.mts';
-import {withDatabase} from '../db/index.mts';
-import {FetchRequestStore} from '../stores/index.mts';
+import {nowIso, withDatabase} from '../db/index.mts';
+import {createTickState, runServerTick} from '../schedule/index.mts';
+import {FetchRequestStore, SessionStore} from '../stores/index.mts';
 import {runMcpServer} from './mcp.mts';
 
 const FIXTURES = new URL('../command/__fixtures__/commands/', import.meta.url);
@@ -195,13 +196,14 @@ describe('runMcpServer', () => {
     assert.equal(res.length, 0);
   });
 
-  it('answers the tool call even when the drain that follows it cannot open the database', async () => {
+  it('answers the tool call even when the tick that follows it cannot open the database', async () => {
     // A path with a file where a directory must be is what Database.open
     // throws EnvironmentError on — the same failure mode as an unwritable
     // state dir or, after an upgrade, a schema-version mismatch.
     const env = {DISPATCH_DB: '/dev/null/graph.db'};
     const stderrChunks: string[] = [];
     const stdoutChunks: string[] = [];
+    const state = createTickState('srv-1');
     await runMcpServer({
       tree: await discover(FIXTURES),
       stdin: feed([
@@ -226,6 +228,10 @@ describe('runMcpServer', () => {
         },
       }),
       env,
+      tick: {
+        intervalMs: 3_600_000,
+        run: (channel) => runServerTick(channel, env, state),
+      },
     });
 
     const lines = stdoutChunks
@@ -240,13 +246,17 @@ describe('runMcpServer', () => {
     assert.equal(greeted.id, 1);
     assert.equal(listed.id, 2);
     assert.ok(listed.result?.tools);
-    assert.match(stderrChunks.join(''), /channel drain failed/);
+    assert.match(stderrChunks.join(''), /scheduler tick failed/);
   });
 
-  it("drains a queued instruction after a tool call, after that call's own response", async () => {
+  it("delivers a queued instruction after a tool call, after that call's own response, once acked", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-mcp-drain-'));
     const env = {DISPATCH_DB: path.join(dir, 'graph.db')};
     await withDatabase(undefined, env, async (db) => {
+      const at = nowIso();
+      const sessions = new SessionStore(db);
+      await sessions.register({id: 'srv-1', startedAt: at, heartbeatAt: at});
+      await sessions.ack('srv-1', null, at);
       await new FetchRequestStore(db).enqueueTicket({
         source: 'linear',
         ticket: 'ENG-1',
@@ -254,8 +264,11 @@ describe('runMcpServer', () => {
       });
     });
 
-    const res = await serve(
-      feed([
+    const state = createTickState('srv-1');
+    const chunks: string[] = [];
+    await runMcpServer({
+      tree: await discover(FIXTURES),
+      stdin: feed([
         {
           jsonrpc: '2.0',
           id: 1,
@@ -263,21 +276,102 @@ describe('runMcpServer', () => {
           params: {name: 'greet', arguments: {who: 'Ada'}},
         },
       ]),
-      env
-    );
+      stdout: new Writable({
+        write(chunk, _encoding, callback) {
+          chunks.push(String(chunk));
+          callback();
+        },
+      }),
+      stderr: nullStream(),
+      env,
+      tick: {
+        intervalMs: 3_600_000,
+        run: (channel) => runServerTick(channel, env, state),
+      },
+    });
+    const res = chunks
+      .join('')
+      .trim()
+      .split('\n')
+      .filter((l) => l !== '')
+      .map((l) => JSON.parse(l) as RpcLine);
 
     assert.equal(res.length, 2);
     const [reply, notification] = res;
     assert.ok(reply);
     assert.ok(notification);
-    // The response for the call that triggered the drain must be on the wire
-    // before the drain's own notification — a caller waiting on its request id
+    // The response for the call that triggered the tick must be on the wire
+    // before the tick's own notification — a caller waiting on its request id
     // must not have to sift a channel event out of the way first.
     assert.equal(reply.id, 1);
     assert.equal(reply.method, undefined);
     assert.equal(notification.id, undefined);
     assert.equal(notification.method, 'notifications/claude/channel');
     assert.equal(notification.params?.meta?.kind, 'fetch_ticket');
+  });
+
+  it('holds a queued instruction back until the channel is acked', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-mcp-unacked-'));
+    const env = {DISPATCH_DB: path.join(dir, 'graph.db')};
+    await withDatabase(undefined, env, async (db) => {
+      const at = nowIso();
+      await new SessionStore(db).register({
+        id: 'srv-1',
+        startedAt: at,
+        heartbeatAt: at,
+      });
+      await new FetchRequestStore(db).enqueueTicket({
+        source: 'linear',
+        ticket: 'ENG-1',
+        at: '2026-08-01T00:00:00Z',
+      });
+    });
+
+    const state = createTickState('srv-1');
+    const chunks: string[] = [];
+    await runMcpServer({
+      tree: await discover(FIXTURES),
+      stdin: feed([
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {name: 'greet', arguments: {who: 'Ada'}},
+        },
+      ]),
+      stdout: new Writable({
+        write(chunk, _encoding, callback) {
+          chunks.push(String(chunk));
+          callback();
+        },
+      }),
+      stderr: nullStream(),
+      env,
+      tick: {
+        intervalMs: 3_600_000,
+        run: (channel) => runServerTick(channel, env, state),
+      },
+    });
+    const res = chunks
+      .join('')
+      .trim()
+      .split('\n')
+      .filter((l) => l !== '')
+      .map((l) => JSON.parse(l) as RpcLine);
+
+    // The tool reply and the probe reach the wire; the instruction must not —
+    // an unacked channel may be silently refused, and a marked-delivered
+    // instruction nobody heard strands the refresh. It stays undelivered for
+    // `dispatch tick` to print.
+    const kinds = res
+      .filter((line) => line.method === 'notifications/claude/channel')
+      .map((line) => line.params?.meta?.kind);
+    assert.ok(kinds.includes('probe'));
+    assert.ok(!kinds.includes('fetch_ticket'));
+    await withDatabase(undefined, env, async (db) => {
+      const [request] = await new FetchRequestStore(db).undelivered();
+      assert.ok(request);
+    });
   });
 
   it('advertises the channel capability in initialize', async () => {

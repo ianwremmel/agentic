@@ -1,12 +1,25 @@
 /** The runner drops any meta key outside this shape. */
-const META_KEY = /^[a-zA-Z_][a-zA-Z0-9_]*$/u;
+export const META_KEY = /^[a-zA-Z_][a-zA-Z0-9_]*$/u;
+
+/**
+ * Anything that can carry a framed event: the channel itself, or the CLI
+ * `tick` command printing the same events to stdout for a session whose
+ * channel was refused.
+ */
+export interface ChannelSink {
+  push(
+    kind: string,
+    meta: Readonly<Record<string, string | null>>,
+    content: string
+  ): void;
+}
 
 /**
  * Pushes channel events into the session that spawned the server. `source` is
  * the runner's own attribute — a second one on the tag would not override it,
  * so this never sets one.
  */
-export class ChannelWriter {
+export class ChannelWriter implements ChannelSink {
   readonly #emit: (payload: unknown) => void;
   #seq = 0;
 

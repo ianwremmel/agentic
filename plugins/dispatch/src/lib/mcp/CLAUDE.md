@@ -12,9 +12,12 @@ to stderr. `index.mts` is the barrel.
   is the result text); a `DispatchError` becomes an `isError` result.
 - `channel.mts` — `ChannelWriter` frames `notifications/claude/channel` events:
   monotonic `seq`, meta keys filtered to `^[a-zA-Z_][a-zA-Z0-9_]*$`, never a
-  `source` key (the runner sets that one).
+  `source` key (the runner sets that one). `ChannelSink` is the push interface
+  it implements; the `tick` command's stdout printer is the other implementor.
 - `drain.mts` — `drainInstructions` turns undelivered `fetch_request` rows and
-  owed completions into events, and records delivery in the database.
+  owed completions into events, and records delivery in the database. It runs
+  from the server tick (only once the channel is acked — a refused push would
+  mark rows delivered into the void) and from the CLI `tick` command.
 
 The loop throws `JsonRpcError` (in `lib/errors`) for protocol failures (unknown
 method, malformed request, unknown tool) and renders it into a JSON-RPC `error`.

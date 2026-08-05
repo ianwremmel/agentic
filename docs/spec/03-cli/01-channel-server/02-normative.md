@@ -87,7 +87,11 @@ The server MUST begin watching without waiting for the acknowledgement, so a
 session that ends up in `polling` costs nothing but the probes. It MUST NOT emit
 a work order before the acknowledgement lands: a work order claims a ticket and a
 slot, which a refused session would never release while its live server keeps the
-claim fresh.
+claim fresh. Ingest instructions wait on the acknowledgement for the same
+reason: a push into a silently refused channel records the instruction
+delivered while nobody heard it, stranding the refresh. Until the
+acknowledgement lands, the rows stay undelivered for `dispatch tick` (§3.2.2)
+to print.
 
 ### Correlating a caller to its server
 
@@ -329,7 +333,10 @@ server, the mode is decided by the acknowledgement handshake in
 caller that cannot correlate itself to a live server
 ([Correlating a caller to its server](#correlating-a-caller-to-its-server)). Mode
 selection MUST NOT change a skill's judgment content — only whether it waits by
-yielding for events or by looping itself.
+yielding for events or by looping itself. In `polling` mode the orchestrate
+session polls `dispatch tick` (§3.2.2), which runs the same scheduler pass and
+prints the same claimed, budget-bounded events to the caller synchronously —
+the deterministic half stays in the CLI in both modes.
 
 ## Lifecycle
 

@@ -10,7 +10,6 @@ import type {BuiltTools} from './tools.mts';
 import {callTool} from './dispatch.mts';
 import {JsonRpcError} from '../errors/index.mts';
 import {ChannelWriter} from './channel.mts';
-import {drainInstructions} from './drain.mts';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -59,7 +58,8 @@ interface Handled {
 /**
  * Serve MCP over newline-delimited JSON-RPC 2.0 on stdin/stdout until stdin
  * closes. When `tick` is given, its `run` fires on the interval and after
- * every tool call — the scheduling heartbeat riding the same channel.
+ * every tool call — the scheduling heartbeat riding the same channel. Ingest
+ * delivery rides the tick too, so it runs on both entrypoints as well.
  */
 export async function runMcpServer(opts: {
   tree: CommandNode;
@@ -128,33 +128,10 @@ export async function runMcpServer(opts: {
       const {response, ranTool} = await handleLine(line, ctx);
       if (response !== undefined)
         opts.stdout.write(`${JSON.stringify(response)}\n`);
-      if (ranTool) {
-        await drainQuietly(channel, ctx);
-        await tickQuietly();
-      }
+      if (ranTool) await tickQuietly();
     }
   } finally {
     if (timer !== undefined) clearInterval(timer);
-  }
-}
-
-/**
- * A drain failure (an unwritable state dir, a locked file, a schema-version
- * mismatch after an upgrade) must not take the read loop down with it — the
- * graph is a rebuildable cache, and stdout is the JSON-RPC channel, so the
- * failure goes to stderr and the undelivered rows stay undelivered for the
- * next tool call to retry.
- */
-async function drainQuietly(
-  channel: ChannelWriter,
-  ctx: RequestContext
-): Promise<void> {
-  try {
-    await drainInstructions(channel, ctx.env);
-  } catch (error) {
-    ctx.log.error('channel drain failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
   }
 }
 

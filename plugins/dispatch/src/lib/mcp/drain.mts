@@ -2,7 +2,7 @@ import {nowIso} from '../db/time.mts';
 import {withDatabase} from '../db/index.mts';
 import {FetchRequestStore, RefreshStore} from '../stores/index.mts';
 import type {ScanPayload, TicketPayload} from '../stores/index.mts';
-import type {ChannelWriter} from './channel.mts';
+import type {ChannelSink} from './channel.mts';
 
 /**
  * Push every instruction the graph owes the session, then every completion.
@@ -10,11 +10,12 @@ import type {ChannelWriter} from './channel.mts';
  * restart re-derives what is still owed rather than assuming a push landed.
  */
 export async function drainInstructions(
-  channel: ChannelWriter,
+  channel: ChannelSink,
   env: NodeJS.ProcessEnv,
-  now: () => string = nowIso
+  opts: {now?: () => string; dbPath?: string | undefined} = {}
 ): Promise<number> {
-  return withDatabase(undefined, env, async (db) => {
+  const now = opts.now ?? nowIso;
+  return withDatabase(opts.dbPath, env, async (db) => {
     const requests = new FetchRequestStore(db);
     const refreshes = new RefreshStore(db);
     const at = now();

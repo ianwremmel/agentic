@@ -1,6 +1,7 @@
 import type {AbstractCommand, Io} from '../command/index.mts';
 import {parseOptions, assertEnv} from '../command/index.mts';
 import type {Logger} from '../logger/index.mts';
+import type {ChannelSink} from '../command/index.mts';
 import {DispatchError} from '../errors/index.mts';
 
 export interface ToolResult {
@@ -11,6 +12,7 @@ export interface ToolResult {
 export interface CallToolContext {
   readonly env: NodeJS.ProcessEnv;
   readonly log: Logger;
+  readonly channel?: ChannelSink | undefined;
 }
 
 /**
@@ -43,7 +45,12 @@ export async function callTool(
     }
     const parsed = parseOptions(command.options, raw);
     assertEnv(command.env, ctx.env);
-    await command.run(parsed, {log: ctx.log, env: ctx.env, io});
+    await command.run(parsed, {
+      log: ctx.log,
+      env: ctx.env,
+      io,
+      channel: ctx.channel,
+    });
     return {content: [{type: 'text', text: captured}]};
   } catch (error) {
     const text =

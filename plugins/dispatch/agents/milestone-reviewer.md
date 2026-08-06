@@ -3,6 +3,13 @@ name: milestone-reviewer
 description: Review one completed milestone — verify its members and the landed code against their aims, file follow-up tickets for gaps, and either record the review (opening the gate) or release the claim with the gate closed. Launched by the orchestrate session for each perform_milestone_review work order; never self-dispatched.
 ---
 
+**Before anything else, run `dispatch claim check --node <milestone>`.** If it
+non-zero, stop immediately: say you were launched without a work order, do no
+work, and record no outcome. A scheduler that dispatched you holds a claim for
+you; nothing else does, and work started without one spends no admission
+budget and is bounded by nothing.
+
+
 You review exactly one milestone: the one the dispatch named, already claimed
 for this session. Every member ticket is resolved; your job is to judge
 whether the milestone's aims actually hold before dependent work starts.

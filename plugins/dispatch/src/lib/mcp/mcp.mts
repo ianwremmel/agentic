@@ -49,6 +49,7 @@ interface RequestContext {
   readonly env: NodeJS.ProcessEnv;
   readonly log: Logger;
   readonly serverInfo: {name: string; version: string};
+  readonly channel: ChannelWriter;
 }
 
 interface Handled {
@@ -72,16 +73,17 @@ export async function runMcpServer(opts: {
     run: (channel: ChannelWriter) => Promise<void>;
   };
 }): Promise<void> {
+  const channel = new ChannelWriter((payload) => {
+    opts.stdout.write(`${JSON.stringify(payload)}\n`);
+  });
+
   const ctx: RequestContext = {
     tools: buildTools(opts.tree),
     env: opts.env,
     log: createLogger(streamSink(opts.stderr)),
     serverInfo: await serverInfo(),
+    channel,
   };
-
-  const channel = new ChannelWriter((payload) => {
-    opts.stdout.write(`${JSON.stringify(payload)}\n`);
-  });
 
   // Every tick entrypoint — the timer and the post-tool-call run — shares one
   // non-reentrancy guard: a tick requested while one runs coalesces into a
@@ -236,7 +238,11 @@ async function dispatch(
       }
       const args =
         (params.arguments as Record<string, unknown> | undefined) ?? {};
-      return callTool(command, args, {env: ctx.env, log: ctx.log});
+      return callTool(command, args, {
+        env: ctx.env,
+        log: ctx.log,
+        channel: ctx.channel,
+      });
     }
     default:
       throw new JsonRpcError(-32601, `method not found: ${method}`);

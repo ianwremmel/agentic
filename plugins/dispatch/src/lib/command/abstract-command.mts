@@ -65,6 +65,21 @@ export interface CommandContext {
   readonly log: Logger;
   readonly env: NodeJS.ProcessEnv;
   readonly io: Io;
+  /**
+   * The session channel, present only when the command runs as an MCP tool
+   * on a server that has one. A command that pushes must still return a
+   * useful result without it: over the CLI there is no session to push to.
+   */
+  readonly channel?: ChannelSink | undefined;
+}
+
+/** What a command may push into the session; see `lib/mcp/channel.mts`. */
+export interface ChannelSink {
+  push(
+    kind: string,
+    meta: Readonly<Record<string, string | null>>,
+    content: string
+  ): void;
 }
 
 /**

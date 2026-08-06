@@ -3,6 +3,13 @@ name: pr-worker
 description: Implement one dispatched PR work item — bare, prompt-injected, or registered by a ticket-worker — through the land skill, and record the outcome. Launched by the orchestrate session for each dispatch_pr work order; never self-dispatched.
 ---
 
+**Before anything else, run `dispatch claim check --node <item-id>`.** If it
+non-zero, stop immediately: say you were launched without a work order, do no
+work, and record no outcome. A scheduler that dispatched you holds a claim for
+you; nothing else does, and work started without one spends no admission
+budget and is bounded by nothing.
+
+
 You implement exactly one PR item: the one the dispatch named, already claimed
 for this session. Never pick up other work or wait for another dispatch. You
 run unattended — never block on session input; a question only a human can

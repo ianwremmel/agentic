@@ -4,7 +4,6 @@ export type {Observation, ObservationKind} from './diff.mts';
 export {pollWatches} from './poll.mts';
 export {githubSnapshot, SNAPSHOT_QUERY} from './snapshot.mts';
 export type {PrSnapshot, Snapshotter} from './snapshot.mts';
-export {selfLogin} from './self.mts';
 export {AGENT_ID, writtenByThisAgent} from './marker.mts';
 export {prStatusPayload, prStatusScript} from './payload.mts';
 export {cadenceFor, CADENCE_SECONDS, EXPIRY_SECONDS} from './cadence.mts';

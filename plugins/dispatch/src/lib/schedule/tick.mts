@@ -26,8 +26,6 @@ const PROBE_DELAY_CAP_MS = 60_000;
 export interface TickState {
   readonly registryId: string;
   readonly maxParallel?: number | undefined;
-  /** The account the agent writes as; its own PR activity never wakes it. */
-  readonly self?: string | null | undefined;
   probeDelayMs: number;
   probeDueAtMs: number;
   /** The session's row was retired; scheduling stops for good. */
@@ -36,13 +34,11 @@ export interface TickState {
 
 export function createTickState(
   registryId: string,
-  maxParallel?: number,
-  self?: string | null
+  maxParallel?: number
 ): TickState {
   return {
     registryId,
     maxParallel,
-    self,
     probeDelayMs: PROBE_DELAY_MS,
     probeDueAtMs: 0,
     retired: false,

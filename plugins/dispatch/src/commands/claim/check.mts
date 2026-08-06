@@ -31,7 +31,7 @@ const options = {
  * A worker's authority to run comes from a claim: the scheduler takes one
  * before it emits a work order, and the claim is also the admission that
  * bounds how many agents run at once. An agent launched any other way holds
- * no claim, so it spends no budget and nothing caps how many of it there are.
+ * no claim, so it spends no budget and nothing caps how many of them there are.
  *
  * That is not hypothetical. A session whose channel went unacknowledged
  * received no work orders, decided on its own what to run, and launched

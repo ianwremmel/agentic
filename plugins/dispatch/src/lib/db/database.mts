@@ -1,4 +1,4 @@
-import {mkdir} from 'node:fs/promises';
+import {mkdir, rm} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 
@@ -41,12 +41,31 @@ export class Database {
       }
     }
     try {
-      const raw = new DatabaseSync(path);
-      raw.exec('PRAGMA journal_mode = WAL');
-      raw.exec('PRAGMA busy_timeout = 5000');
-      raw.exec('PRAGMA foreign_keys = ON');
-      const db = new Database(raw);
-      db.#bootstrap(path);
+      const open = (): Database => {
+        const raw = new DatabaseSync(path);
+        raw.exec('PRAGMA journal_mode = WAL');
+        raw.exec('PRAGMA busy_timeout = 5000');
+        raw.exec('PRAGMA foreign_keys = ON');
+        return new Database(raw);
+      };
+      let db = open();
+      const stale = db.#staleVersion();
+      if (stale === null) {
+        db.#bootstrap();
+        return db;
+      }
+      // The database is a rebuildable cache — the graph re-derives from a
+      // full sync, and sessions and claims are runtime state — so a version
+      // it cannot read is not an error to report, it is a file to replace.
+      //
+      // Refusing instead was worse than useless in practice: an MCP server
+      // that exits on startup is not restarted by the runner, so the session
+      // loses its channel permanently and silently, and only a human
+      // deleting the file brings it back. Rebuilding costs one re-sync.
+      await db.close();
+      await Database.#discard(path, stale);
+      db = open();
+      db.#bootstrap();
       return db;
     } catch (cause) {
       if (cause instanceof DispatchError) throw cause;
@@ -57,40 +76,39 @@ export class Database {
     }
   }
 
-  #bootstrap(path: string): void {
+  /** The version this file records, when it is one this build cannot read. */
+  #staleVersion(): string | null {
     this.#db.exec(
       'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT'
     );
     const row = this.#db
       .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
       .get() as Row | undefined;
-    Database.assertVersion(this, path, row?.value as string | undefined);
-    this.#db.exec(SCHEMA);
-    if (row === undefined) {
-      this.#db
-        .prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
-        .run('schema_version', String(SCHEMA_VERSION));
-    }
+    const recorded = row?.value as string | undefined;
+    return recorded !== undefined && recorded !== String(SCHEMA_VERSION)
+      ? recorded
+      : null;
   }
 
-  /**
-   * Refuse a file another schema version wrote. Exposed static so a test can
-   * exercise the guard without a second connection. `found` defaults to the
-   * value recorded in `meta`.
-   */
-  static assertVersion(db: Database, path: string, found?: string): void {
-    const recorded =
-      found ??
-      (db.get("SELECT value FROM meta WHERE key = 'schema_version'")?.value as
-        string | undefined);
-    if (recorded !== undefined && recorded !== String(SCHEMA_VERSION)) {
-      throw new EnvironmentError(
-        `the dispatch database at ${path} was written by schema version ${recorded}, not ${String(SCHEMA_VERSION)}`,
-        {
-          hint: `delete ${path} and re-run a full sync. Claims and recorded reviews go with it — release or re-record what still matters first.`,
-        }
-      );
+  /** Remove a database this build cannot read, and its WAL sidecars. */
+  static async #discard(path: string, was: string): Promise<void> {
+    if (path === ':memory:') return;
+    for (const suffix of ['', '-wal', '-shm']) {
+      await rm(`${path}${suffix}`, {force: true}).catch(() => undefined);
     }
+    process.stderr.write(
+      `dispatch: replaced the database at ${path}, written by schema version ${was}, with an empty one for version ${String(SCHEMA_VERSION)}. The graph rebuilds on the next refresh; any claims and recorded reviews it held are gone.\n`
+    );
+  }
+
+  #bootstrap(): void {
+    this.#db.exec(
+      'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT'
+    );
+    this.#db.exec(SCHEMA);
+    this.#db
+      .prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+      .run('schema_version', String(SCHEMA_VERSION));
   }
 
   async close(): Promise<void> {

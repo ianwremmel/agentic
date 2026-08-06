@@ -10,7 +10,7 @@ import {
   SessionStore,
   WatchStore,
 } from '../../lib/stores/index.mts';
-import {Command} from './watch.mts';
+import {Command} from './yield.mts';
 
 const NOW = '2026-08-05T12:00:00.000Z';
 
@@ -43,7 +43,7 @@ async function fixture(env: NodeJS.ProcessEnv, claimBy: string | null) {
   });
 }
 
-describe('pr watch', () => {
+describe('pr yield', () => {
   it('refuses when the claim belongs to another session', async () => {
     const env = await tempEnv();
     await fixture(env, 'S2');
@@ -52,11 +52,7 @@ describe('pr watch', () => {
     // watching row, and a watching item is never queued — so S2's work would
     // read as waiting while S2 is still running it.
     await assert.rejects(
-      runCommand(
-        new Command(),
-        {id: 'owner/repo#1', for: 'ci', session: 'S1'},
-        env
-      ),
+      runCommand(new Command(), {id: 'owner/repo#1', session: 'S1'}, env),
       (err: unknown) => err instanceof DataError
     );
 
@@ -72,11 +68,7 @@ describe('pr watch', () => {
     const env = await tempEnv();
     await fixture(env, 'S1');
 
-    await runCommand(
-      new Command(),
-      {id: 'owner/repo#1', for: 'review', session: 'S1'},
-      env
-    );
+    await runCommand(new Command(), {id: 'owner/repo#1', session: 'S1'}, env);
 
     await withDatabase(undefined, env, async (db) => {
       // Neither half may be visible without the other: between a released

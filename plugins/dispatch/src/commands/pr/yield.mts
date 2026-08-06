@@ -2,7 +2,6 @@ import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, nowIso, withDatabase} from '../../lib/db/index.mts';
 import {DataError, ensure} from '../../lib/errors/index.mts';
-import {WATCH_REASONS} from '../../lib/model/status.mts';
 import {correlateSession} from '../../lib/schedule/index.mts';
 import {CoordinationStore, PrStore} from '../../lib/stores/index.mts';
 import {armWatch, githubSnapshot} from '../../lib/watch/index.mts';
@@ -10,16 +9,9 @@ import {armWatch, githubSnapshot} from '../../lib/watch/index.mts';
 const options = {
   id: {
     type: 'string',
-    description: 'The PR item whose wait the server takes over.',
+    description: 'The PR item this worker is handing back.',
     positional: false,
     required: true,
-  },
-  for: {
-    type: 'string',
-    description: 'What the worker is waiting on; sets the poll cadence.',
-    positional: false,
-    required: true,
-    choices: WATCH_REASONS,
   },
   session: {
     type: 'string',
@@ -32,18 +24,25 @@ const options = {
 } as const;
 
 /**
- * The worker's wait handoff: instead of polling the PR in-band, the worker
- * records what it is waiting on and returns.
+ * Yield an item back to the server: the worker is no longer working on it.
  *
- * The watch is armed with the PR as of now, so a change that already landed
- * still registers, and recording releases the caller's claim — which is also
- * its compute grant, so the wait costs nothing while it lasts. When the PR
- * changes in a way the worker would act on, the server re-queues the item and
- * hands over the named events.
+ * Deliberately says nothing about what the worker is waiting for. A worker
+ * may be waiting on several things at once, and whatever it declared would go
+ * stale the moment the PR moved; the server reads the PR's own state and
+ * derives both what changed and how often to look.
+ *
+ * What the server cannot infer is this call itself. A worker that finished
+ * its turn and one that was killed leave the same row — a claim that goes
+ * stale — so without an explicit yield the server cannot tell a graceful
+ * handoff from a crash, and would have to choose between never resuming a
+ * crashed run and re-dispatching a healthy one forever.
+ *
+ * Releasing the claim gives back the compute grant, so the wait costs nothing
+ * while it lasts.
  */
 export class Command extends AbstractCommand {
-  readonly name = 'watch';
-  readonly summary = 'Hand a PR wait to the server, releasing the claim.';
+  readonly name = 'yield';
+  readonly summary = 'Hand a PR item back to the server, releasing the claim.';
   readonly env = [];
   readonly options = options;
 
@@ -100,7 +99,6 @@ export class Command extends AbstractCommand {
 
       await armWatch(db, {
         node: parsed.id,
-        reason: parsed.for,
         repo: pr.repo,
         prNumber: pr.prNumber,
         at: nowIso(),
@@ -110,7 +108,7 @@ export class Command extends AbstractCommand {
         log: ctx.log,
       });
 
-      ctx.io.write(`watch ${parsed.id} ${parsed.for}\n`);
+      ctx.io.write(`yield ${parsed.id}\n`);
     });
   }
 }

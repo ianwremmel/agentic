@@ -1,29 +1,10 @@
 import {nowIso} from '../db/time.mts';
 import {withDatabase} from '../db/index.mts';
 import type {Logger} from '../logger/index.mts';
-import type {WatchReason} from '../model/status.mts';
 import {WatchStore} from '../stores/index.mts';
-import {satisfied} from './condition.mts';
+import {cadenceFor, EXPIRY_SECONDS} from './cadence.mts';
 import {diffSnapshots} from './diff.mts';
 import type {Snapshotter} from './snapshot.mts';
-
-/** Poll cadence per wait kind, from the channel server's interval table. */
-export const INTERVAL_SECONDS: Readonly<Record<WatchReason, number>> = {
-  ci: 60,
-  review: 300,
-  merge: 300,
-};
-
-/**
- * How long a watch runs before firing regardless. The snapshot sees only the
- * forge, so an approval on the ticket or a reaction never reaches it; expiry
- * is the safety net that sends the worker to look for itself.
- */
-export const EXPIRY_SECONDS: Readonly<Record<WatchReason, number>> = {
-  ci: 3_600,
-  review: 21_600,
-  merge: 21_600,
-};
 
 /** Snapshot calls one pass will make; keeps a tick short. */
 const MAX_POLLS_PER_PASS = 10;
@@ -53,6 +34,10 @@ export async function pollWatches(
   const now = opts.now ?? nowIso;
   return withDatabase(opts.dbPath, env, async (db) => {
     const watches = new WatchStore(db);
+    // Every unconcluded PR item is watched, whether or not a worker ever
+    // asked. A PR moves whether anyone is waiting on it, and an item nobody
+    // armed is exactly the one whose change would otherwise be missed.
+    await watches.ensureForLiveItems(now(), EXPIRY_SECONDS);
     const fired: string[] = [];
 
     for (const due of await watches.due(now(), MAX_POLLS_PER_PASS)) {
@@ -65,11 +50,11 @@ export async function pollWatches(
       try {
         const taken = await opts.snapshot(due.repo, due.prNumber);
         const observed = diffSnapshots(due.snapshot, taken);
-        // Two independent reasons to wake the worker: something changed that
-        // it would act on, or the thing it is waiting for already holds. The
-        // second is what covers a change that landed before the baseline was
-        // taken, which no diff can see.
-        const done = satisfied(due.reason, taken);
+        // Changed or not changed is the only question. There is no predicate
+        // for "has the thing you were waiting for happened", because a worker
+        // cannot say what it is waiting for and any such predicate tests a
+        // persistent state — which fires again the moment the worker returns.
+        //
         // One transaction: recording events and firing the watch must not be
         // separable, or a crash between them re-emits the same events on the
         // next tick against the same unchanged snapshot.
@@ -78,7 +63,11 @@ export async function pollWatches(
           snapshot: taken,
           at: now(),
           createdAt: due.createdAt,
-          fire: observed.length > 0 || done,
+          fire: observed.length > 0,
+          intervalSeconds: cadenceFor(taken),
+          expiresAt: new Date(
+            Date.parse(now()) + EXPIRY_SECONDS * 1_000
+          ).toISOString(),
           events: observed,
         });
         if (outcome === 'fired') fired.push(due.node);

@@ -93,7 +93,6 @@ CREATE TABLE IF NOT EXISTS claim (
    "something changed" into named events. */
 CREATE TABLE IF NOT EXISTS watch (
   node_id    INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
-  reason     TEXT NOT NULL CHECK (reason IN ('ci','review','merge')),
   state      TEXT NOT NULL CHECK (state IN ('watching','fired')),
   snapshot   TEXT,
   interval_s INTEGER NOT NULL,

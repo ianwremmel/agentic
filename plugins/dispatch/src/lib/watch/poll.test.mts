@@ -3,7 +3,12 @@ import {describe, it} from 'node:test';
 
 import {tempEnv} from '../command/test-support.mts';
 import {withDatabase} from '../db/index.mts';
-import {PrEventStore, PrStore, WatchStore} from '../stores/index.mts';
+import {
+  CoordinationStore,
+  PrEventStore,
+  PrStore,
+  WatchStore,
+} from '../stores/index.mts';
 import {pollWatches} from './poll.mts';
 import type {PrSnapshot, Snapshotter} from './snapshot.mts';
 
@@ -46,7 +51,6 @@ async function fixture(
     });
     await new WatchStore(db).set({
       node: 'owner/repo#1',
-      reason: 'ci',
       intervalSeconds: 60,
       at: NOW,
       expiresAt: '2026-08-05T13:00:00.000Z',
@@ -151,7 +155,7 @@ describe('pollWatches', () => {
       snapshot: () => {
         throw new Error('must not be called for an expired watch');
       },
-      // Past the fixture's one-hour expiry.
+      // Past the fixture's expiry.
       now: () => '2026-08-05T14:00:00.000Z',
     });
 
@@ -181,6 +185,71 @@ describe('pollWatches', () => {
         (await new WatchStore(db).get('owner/repo#1'))?.state,
         'watching'
       );
+    });
+  });
+
+  it('watches a PR item nobody yielded', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new PrStore(db).upsertPr({
+        id: 'owner/repo#2',
+        ticket: null,
+        origin: 'prompt',
+        repo: 'owner/repo',
+        prNumber: 2,
+        url: null,
+        branch: null,
+        title: 'unwatched',
+        injected: false,
+        priority: null,
+        updatedAt: NOW,
+      });
+    });
+
+    // A PR moves whether or not a worker asked anyone to look. The item
+    // nobody armed is exactly the one whose change would go unnoticed.
+    await pollWatches(env, {snapshot: snapshotter(BASE), now: () => LATER});
+
+    await withDatabase(undefined, env, async (db) => {
+      assert.equal(
+        (await new WatchStore(db).get('owner/repo#2'))?.state,
+        'watching'
+      );
+    });
+  });
+
+  it('does not watch an item that already concluded', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new PrStore(db).upsertPr({
+        id: 'owner/repo#3',
+        ticket: null,
+        origin: 'prompt',
+        repo: 'owner/repo',
+        prNumber: 3,
+        url: null,
+        branch: null,
+        title: 'done',
+        injected: false,
+        priority: null,
+        updatedAt: NOW,
+      });
+      await new CoordinationStore(db).recordOutcome(
+        {
+          node: 'owner/repo#3',
+          outcome: 'delivered',
+          retryable: null,
+          detail: null,
+          recordedAt: NOW,
+        },
+        {session: ''}
+      );
+    });
+
+    await pollWatches(env, {snapshot: snapshotter(BASE), now: () => LATER});
+
+    await withDatabase(undefined, env, async (db) => {
+      assert.equal(await new WatchStore(db).get('owner/repo#3'), null);
     });
   });
 });

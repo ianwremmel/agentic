@@ -1,21 +1,21 @@
 import type {Database} from '../db/database.mts';
 import {WatchStore} from '../stores/index.mts';
-import type {WatchReason} from '../model/status.mts';
 import type {Logger} from '../logger/index.mts';
-import {EXPIRY_SECONDS, INTERVAL_SECONDS} from './poll.mts';
+import {cadenceFor, EXPIRY_SECONDS} from './cadence.mts';
 import type {PrSnapshot, Snapshotter} from './snapshot.mts';
 
 /**
- * Arm a watch with the PR as it stands right now, so a change that lands
- * between the worker's last look and the first server poll still registers.
- * A failed baseline degrades to priming on the first successful poll — a
- * narrow re-opening of that gap, taken over failing the handoff.
+ * Hand an item back to the server: record the PR as it stands now and release
+ * the worker's claim, in one transaction.
+ *
+ * The baseline is what the next poll diffs against. A failed read degrades to
+ * priming on the first successful poll, which widens the window in which a
+ * change goes unreported — taken over failing the handoff.
  */
 export async function armWatch(
   db: Database,
   input: {
     node: string;
-    reason: WatchReason;
     repo: string;
     prNumber: number;
     at: string;
@@ -36,11 +36,10 @@ export async function armWatch(
   }
   await new WatchStore(db).set({
     node: input.node,
-    reason: input.reason,
-    intervalSeconds: INTERVAL_SECONDS[input.reason],
+    intervalSeconds: cadenceFor(baseline),
     at: input.at,
     expiresAt: new Date(
-      Date.parse(input.at) + EXPIRY_SECONDS[input.reason] * 1_000
+      Date.parse(input.at) + EXPIRY_SECONDS * 1_000
     ).toISOString(),
     snapshot: baseline,
     session: input.session,

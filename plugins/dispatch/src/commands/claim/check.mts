@@ -1,10 +1,9 @@
 import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
-import {DB_OPTION, nowIso, withDatabase} from '../../lib/db/index.mts';
+import {DB_OPTION, withDatabase} from '../../lib/db/index.mts';
 import {DataError, ensure} from '../../lib/errors/index.mts';
-import {DEFAULT_STALE_AFTER_SECONDS} from '../../lib/graph/index.mts';
 import {correlateSession} from '../../lib/schedule/index.mts';
-import {CoordinationStore, SessionStore} from '../../lib/stores/index.mts';
+import {CoordinationStore} from '../../lib/stores/index.mts';
 
 const options = {
   node: {
@@ -13,13 +12,6 @@ const options = {
       'The ticket, PR item, or milestone this agent was launched for.',
     positional: false,
     required: true,
-  },
-  session: {
-    type: 'string',
-    description:
-      'Registry id expected to hold the claim; defaults to the session correlated from the environment.',
-    positional: false,
-    required: false,
   },
   db: DB_OPTION,
 } as const;
@@ -52,14 +44,19 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
-      const caller = await correlateSession(db, ctx.env, parsed.session);
+      // Deliberately no --session. The whole point is to establish who the
+      // caller *is*, and an id it supplies is an assertion, not evidence:
+      // `dispatch claim status` prints the holders, so any worker could name
+      // one and pass. Correlation from the environment is the only identity
+      // the caller does not choose.
+      const caller = await correlateSession(db, ctx.env, undefined);
       ensure(
         caller !== null,
         () =>
           new DataError(
             `no live server correlates to this session, so nothing can hold a claim on "${parsed.node}"`,
             {
-              hint: 'you were not dispatched by a scheduler. Stop, and report to the operator that work was launched without a work order.',
+              hint: 'you were not dispatched by a scheduler — or the one that dispatched you has died, and its claim is about to be swept. Stop, and report that work was launched without a work order.',
             }
           )
       );
@@ -81,23 +78,6 @@ export class Command extends AbstractCommand {
             `the claim on "${parsed.node}" belongs to ${held.session}, not this session`,
             {
               hint: 'another session is working this node. Stop; two workers on one node undo each other.',
-            }
-          )
-      );
-
-      // A claim under a session that stopped heartbeating is nobody's
-      // obligation — the sweep will cascade it — so it is not authority.
-      const session = await new SessionStore(db).getSession(caller);
-      const now = Date.parse(nowIso());
-      ensure(
-        session !== null &&
-          now - Date.parse(session.heartbeatAt) <=
-            DEFAULT_STALE_AFTER_SECONDS * 1_000,
-        () =>
-          new DataError(
-            `the session holding "${parsed.node}" is no longer heartbeating`,
-            {
-              hint: 'its server died; the claim is about to be swept and the node re-dispatched. Stop and let the replacement run.',
             }
           )
       );

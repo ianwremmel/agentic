@@ -28,12 +28,20 @@ export class Command extends AbstractCommand {
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
       const coordination = new CoordinationStore(db);
+      const now = nowIso();
       const held = await coordination.inFlightCount({
-        now: nowIso(),
+        now,
         staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
       });
       ctx.io.write(`claims held=${String(held)}\n`);
-      for (const claim of await coordination.claims()) {
+      // Only the claims the count includes. Listing every row while counting
+      // the live ones reports two different truths in one output — a stale
+      // claim would print as if held and contradict the header a consumer
+      // parses.
+      for (const claim of await coordination.liveClaims({
+        now,
+        staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+      })) {
         ctx.io.write(`claim ${claim.node} session=${claim.session}\n`);
       }
     });

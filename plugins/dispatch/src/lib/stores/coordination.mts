@@ -140,6 +140,27 @@ export class CoordinationStore {
         actor: row.actor === null ? null : String(row.actor),
       }));
   }
+  /**
+   * The claims `inFlightCount` counts: those whose session still heartbeats.
+   * Reporting these alongside that count keeps the two from disagreeing.
+   */
+  async liveClaims(input: {
+    now: string;
+    staleAfterSeconds: number;
+  }): Promise<{node: string; session: string}[]> {
+    assertInstant(input.now, 'now');
+    return this.#db
+      .all(
+        `SELECT n.external_id AS node, c.session_id AS session
+         FROM claim c
+         JOIN node n ON n.id = c.node_id
+         JOIN session s ON s.id = c.session_id
+         WHERE unixepoch(?) - unixepoch(s.heartbeat_at) <= ?
+         ORDER BY n.external_id`,
+        [input.now, input.staleAfterSeconds]
+      )
+      .map((row) => ({node: String(row.node), session: String(row.session)}));
+  }
   /* eslint-enable @typescript-eslint/no-base-to-string */
 
   /**

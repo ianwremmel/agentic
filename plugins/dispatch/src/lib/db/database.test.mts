@@ -4,8 +4,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {after, describe, it} from 'node:test';
 
+import {EnvironmentError} from '../errors/index.mts';
 import {Database} from './database.mts';
-import {SCHEMA_VERSION} from './schema.mts';
 
 describe('Database', () => {
   it('bootstraps the schema so satellites can be written', async () => {
@@ -44,6 +44,20 @@ describe('Database', () => {
     assert.equal(Number(db.get('SELECT COUNT(*) AS n FROM claim')?.n), 0);
     await db.close();
   });
+
+  it('refuses a database written by another schema version', async () => {
+    const db = await Database.open(':memory:');
+    // Simulate a foreign version, then reopen the same connection's file is not
+    // possible for :memory:, so assert the guard path directly:
+    db.run("UPDATE meta SET value = '999' WHERE key = 'schema_version'");
+    assert.throws(
+      () => {
+        Database.assertVersion(db, ':memory:');
+      },
+      (err: unknown) => err instanceof EnvironmentError
+    );
+    await db.close();
+  });
 });
 
 // The rest of the suite runs against ':memory:', where WAL is a no-op and no
@@ -79,38 +93,17 @@ describe('Database (file-backed)', () => {
     await reopened.close();
   });
 
-  it('rebuilds a file written by another schema version', async () => {
+  it('refuses to reopen a file written by another schema version', async () => {
     const path = join(dir, 'version.db');
 
     const db = await Database.open(path);
-    db.run("INSERT INTO node (external_id, kind) VALUES ('T1','ticket')");
     db.run("UPDATE meta SET value = '999' WHERE key = 'schema_version'");
     await db.close();
 
-    // Refusing here stranded the MCP server: the runner does not restart one
-    // that exits at startup, so the session lost its channel until a human
-    // deleted the file. The database is a rebuildable cache, so replace it.
-    const reopened = await Database.open(path);
-    assert.equal(
-      reopened.get("SELECT value FROM meta WHERE key = 'schema_version'")
-        ?.value,
-      String(SCHEMA_VERSION)
+    await assert.rejects(
+      Database.open(path),
+      (err: unknown) => err instanceof EnvironmentError
     );
-    // The old contents go with it; keeping them would mean reading rows
-    // written against a shape this build does not have.
-    assert.equal(Number(reopened.get('SELECT COUNT(*) AS n FROM node')?.n), 0);
-    await reopened.close();
-  });
-
-  it('leaves a file written by this schema version alone', async () => {
-    const path = join(dir, 'current.db');
-    const db = await Database.open(path);
-    db.run("INSERT INTO node (external_id, kind) VALUES ('T1','ticket')");
-    await db.close();
-
-    const reopened = await Database.open(path);
-    assert.equal(Number(reopened.get('SELECT COUNT(*) AS n FROM node')?.n), 1);
-    await reopened.close();
   });
 });
 

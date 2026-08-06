@@ -46,6 +46,9 @@ describe('claim status', () => {
     const out = await runCommand(new Command(), {}, env);
     assert.match(out, /^claims held=1$/mu);
     assert.match(out, /claim A session=LIVE/u);
+    // The listing must agree with the count: printing the dead session's
+    // claim would contradict the header a supervisor parses.
+    assert.doesNotMatch(out, /DEAD/u);
   });
 
   it('reports zero on an empty graph', async () => {

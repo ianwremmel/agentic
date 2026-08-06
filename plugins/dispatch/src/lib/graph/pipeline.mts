@@ -48,6 +48,10 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   (backlog) → blocked → human-blocked → available. A PR item whose outcome
  *   is `human-blocked` classifies human-blocked directly: it has no status to
  *   park, and the outcome is its worker saying "waiting on an operator".
+ * - A `watch` row is a worker's PR wait handed to the server: the item reads
+ *   as in-flight while it exists, is never queued while `watching`, and once
+ *   the server fires it (the PR changed in a way the worker would act on)
+ *   falls through to the `resume` rule.
  * - `queued` — what the scheduler may hand out, and as which pass. An
  *   `available` item with no outcome row is dispatchable as-is; a started item
  *   with no live claim and no outcome is a crashed run — its claim is stale or
@@ -264,6 +268,7 @@ classified AS (
        FROM membership mb JOIN node nm ON nm.id = mb.milestone_id
       WHERE mb.member_id = i.node_id) AS milestones,
     COALESCE(f.n, 0) AS fanout,
+    w.state AS watch_state,
     CASE
       WHEN i.kind = 'pr' AND o.outcome IN ('delivered', 'verified') THEN 'verified'
       WHEN i.kind = 'pr' AND o.outcome = 'canceled' THEN 'canceled'
@@ -272,6 +277,7 @@ classified AS (
       WHEN i.status = 'canceled' THEN 'canceled'
       WHEN i.status IN ('in-progress','in-review','finished','delivered') THEN 'in-flight'
       WHEN lc.node_id IS NOT NULL THEN 'in-flight'
+      WHEN w.node_id IS NOT NULL THEN 'in-flight'
       WHEN i.status = 'backlog' THEN 'dormant'
       WHEN EXISTS (SELECT 1 FROM blocker_view bv WHERE bv.target = i.node_id)
         OR EXISTS (SELECT 1 FROM gate g WHERE g.item_id = i.node_id) THEN 'blocked'
@@ -286,10 +292,12 @@ classified AS (
   LEFT JOIN live_claim lc ON lc.node_id = i.node_id
   LEFT JOIN fanout f ON f.id = i.node_id
   LEFT JOIN outcome o ON o.node_id = i.node_id
+  LEFT JOIN watch w ON w.node_id = i.node_id
 ),
 queued AS (
   SELECT *,
     CASE
+      WHEN watch_state = 'watching' THEN NULL
       WHEN requires_human = 1
         OR classification IN ('verified', 'canceled', 'human-blocked', 'dormant')
         THEN NULL

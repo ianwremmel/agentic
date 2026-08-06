@@ -14,7 +14,7 @@ const options = {
   'max-parallel': {
     type: 'number',
     description:
-      'How many agents may run at once across every session sharing this graph database. The bound is the host\u2019s compute, not this server\u2019s share of it: the claim count it admits against spans all sessions. Servers that disagree on the value each enforce their own.',
+      'Cap on agents running at once, across every session sharing this database.',
     positional: false,
     required: false,
   },

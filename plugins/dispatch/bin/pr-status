@@ -18,8 +18,37 @@
 
 set -euo pipefail
 
-PR="${1:-}"
-[[ -n "$PR" ]] || { echo "usage: pr-status <pr>" >&2; exit 2; }
+PR=""
+REPO_ARG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) REPO_ARG="${2:-}"; shift 2 ;;
+    --repo=*) REPO_ARG="${1#--repo=}"; shift ;;
+    *) PR="$1"; shift ;;
+  esac
+done
+[[ -n "$PR" ]] || { echo "usage: pr-status [--repo <owner>/<name>] <pr>" >&2; exit 2; }
+
+# The repository the PR belongs to. Without this the script can only read a PR
+# in the repo it is standing in, so a server watching PRs across repos — or
+# running outside a worktree at all — cannot produce a payload. `gh` reads
+# GH_REPO, so resolving it once here reaches every call below.
+#
+# A URL is always decomposed, whether or not --repo was also given: leaving PR
+# as a URL puts the URL in the emitted pr="" attribute, and a --repo that
+# disagrees with it would label the output with one repo while reporting
+# another's data. Disagreement is a caller error, not something to resolve by
+# precedence.
+if [[ "$PR" =~ ^https?://[^/]+/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+  _url_repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+  PR="${BASH_REMATCH[3]}"
+  if [[ -n "$REPO_ARG" && "$REPO_ARG" != "$_url_repo" ]]; then
+    echo "pr-status: --repo $REPO_ARG contradicts the URL, which names $_url_repo" >&2
+    exit 2
+  fi
+  REPO_ARG="$_url_repo"
+fi
+[[ -n "$REPO_ARG" ]] && export GH_REPO="$REPO_ARG"
 
 # Required tools: the script cannot emit valid XML without gh + jq. Fail loudly
 # up front rather than partway through with a cryptic error. (git and claude
@@ -88,7 +117,7 @@ OPERATOR_LOGIN="$(resolve_operator_login)" || {
 
 OPERATOR_LC="$(printf '%s' "$OPERATOR_LOGIN" | tr '[:upper:]' '[:lower:]')"
 
-REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+REPO="${REPO_ARG:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 SLUG="${REPO/\//__}"
 BASE="${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}"
 DIR="$BASE/deliver/$SLUG/$PR"

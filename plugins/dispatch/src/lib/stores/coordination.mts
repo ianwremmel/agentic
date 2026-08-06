@@ -221,6 +221,11 @@ export class CoordinationStore {
         node.id,
         holder.session,
       ]);
+      // A final report ends any server-side wait. The watch would otherwise
+      // re-serve work that just concluded, and its undelivered observations
+      // describe a wait nobody is in any more.
+      this.#db.run('DELETE FROM watch WHERE node_id = ?', [node.id]);
+      this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [node.id]);
     });
   }
 

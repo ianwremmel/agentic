@@ -20,6 +20,11 @@ async function fixture(): Promise<Database> {
 describe('WorkerStore', () => {
   it('records where a node’s worker can be reached, per session', async () => {
     const db = await fixture();
+    await new CoordinationStore(db).claim({
+      node: 'T1',
+      session: 'S1',
+      claimedAt: NOW,
+    });
     const store = new WorkerStore(db);
     await store.set({
       node: 'T1',
@@ -63,6 +68,11 @@ describe('WorkerStore', () => {
 
   it('cascades with its session', async () => {
     const db = await fixture();
+    await new CoordinationStore(db).claim({
+      node: 'T1',
+      session: 'S1',
+      claimedAt: NOW,
+    });
     const store = new WorkerStore(db);
     await store.set({
       node: 'T1',
@@ -77,6 +87,11 @@ describe('WorkerStore', () => {
 
   it('a relaunch replaces the address', async () => {
     const db = await fixture();
+    await new CoordinationStore(db).claim({
+      node: 'T1',
+      session: 'S1',
+      claimedAt: NOW,
+    });
     const store = new WorkerStore(db);
     await store.set({
       node: 'T1',
@@ -91,6 +106,73 @@ describe('WorkerStore', () => {
       at: NOW,
     });
     assert.equal(await store.refFor('T1', 'S1'), 'agent-new');
+    await db.close();
+  });
+});
+
+describe('worker rows arbitrate warm relay vs cold resume', () => {
+  it('worker set refuses once the outcome already landed', async () => {
+    const db = await fixture();
+    const coordination = new CoordinationStore(db);
+    await coordination.claim({node: 'T1', session: 'S1', claimedAt: NOW});
+    await coordination.recordOutcome(
+      {
+        node: 'T1',
+        outcome: 'delivered',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+    // The fast-worker race: outcome recorded before the launcher got to
+    // `worker set`. Recreating the row would address an agent that finished.
+    await assert.rejects(
+      new WorkerStore(db).set({
+        node: 'T1',
+        session: 'S1',
+        agentRef: 'a',
+        at: NOW,
+      }),
+      (err: unknown) => err instanceof Error && err.message.includes('no claim')
+    );
+    await db.close();
+  });
+
+  it('remove is scoped to the owner and hands the node to cold recovery', async () => {
+    const db = await fixture();
+    const coordination = new CoordinationStore(db);
+    await coordination.claim({node: 'T1', session: 'S1', claimedAt: NOW});
+    const store = new WorkerStore(db);
+    await store.set({node: 'T1', session: 'S1', agentRef: 'a', at: NOW});
+
+    // Another session cannot revoke S1's address out from under it.
+    assert.equal(await store.remove('T1', 'S2'), false);
+    assert.equal(await store.refFor('T1', 'S1'), 'a');
+
+    // The owner's removal releases the claim too: with both gone the
+    // scheduler may re-serve the node as a resume pass.
+    assert.equal(await store.remove('T1', 'S1'), true);
+    assert.deepEqual(await coordination.claims(), []);
+    await db.close();
+  });
+
+  it('rejects an empty address', async () => {
+    const db = await fixture();
+    await new CoordinationStore(db).claim({
+      node: 'T1',
+      session: 'S1',
+      claimedAt: NOW,
+    });
+    await assert.rejects(
+      new WorkerStore(db).set({
+        node: 'T1',
+        session: 'S1',
+        agentRef: '  ',
+        at: NOW,
+      }),
+      (err: unknown) => err instanceof Error && err.message.includes('empty')
+    );
     await db.close();
   });
 });

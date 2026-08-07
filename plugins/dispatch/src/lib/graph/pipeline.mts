@@ -48,6 +48,11 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   (backlog) → blocked → human-blocked → available. A PR item whose outcome
  *   is `human-blocked` classifies human-blocked directly: it has no status to
  *   park, and the outcome is its worker saying "waiting on an operator".
+ * - A live `worker` row is an address: the launching session can still wake
+ *   that agent by relaying the event. While one exists the item never queues
+ *   as `resume` — warm relay and cold re-dispatch are competing recoveries,
+ *   and racing them puts two agents on one node. `dispatch worker rm` is the
+ *   explicit handover from the first to the second.
  * - A `watch` row is a worker's PR wait handed to the server: the item reads
  *   as in-flight while it exists, is never queued while `watching`, and once
  *   the server fires it (the PR changed in a way the worker would act on)
@@ -269,6 +274,7 @@ classified AS (
       WHERE mb.member_id = i.node_id) AS milestones,
     COALESCE(f.n, 0) AS fanout,
     w.state AS watch_state,
+    lw.node_id IS NOT NULL AS worker_live,
     CASE
       WHEN i.kind = 'pr' AND o.outcome IN ('delivered', 'verified') THEN 'verified'
       WHEN i.kind = 'pr' AND o.outcome = 'canceled' THEN 'canceled'
@@ -293,6 +299,10 @@ classified AS (
   LEFT JOIN fanout f ON f.id = i.node_id
   LEFT JOIN outcome o ON o.node_id = i.node_id
   LEFT JOIN watch w ON w.node_id = i.node_id
+  LEFT JOIN (
+    SELECT wk.node_id FROM worker wk
+    JOIN live_session ls ON ls.id = wk.session_id
+  ) lw ON lw.node_id = i.node_id
 ),
 queued AS (
   SELECT *,
@@ -303,7 +313,8 @@ queued AS (
         THEN NULL
       WHEN outcome IS NULL AND classification = 'available' THEN 'available'
       WHEN outcome IS NULL AND (claim_live IS NULL OR claim_live = 0)
-        AND classification = 'in-flight' THEN 'resume'
+        AND classification = 'in-flight'
+        AND worker_live = 0 THEN 'resume'
       WHEN outcome = 'human-blocked' AND (claim_live IS NULL OR claim_live = 0)
         AND classification = 'available'
         AND updated_at IS NOT NULL

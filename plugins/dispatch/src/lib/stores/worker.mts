@@ -31,6 +31,13 @@ export class WorkerStore {
     at: string;
   }): Promise<void> {
     assertInstant(input.at, 'at');
+    ensure(
+      input.agentRef.trim() !== '',
+      () =>
+        new DataError('an empty agent ref is not an address', {
+          hint: 'pass the ref the launch returned.',
+        })
+    );
     await this.#db.transaction(() => {
       const node = findNode(this.#db, input.node);
       ensure(
@@ -39,6 +46,25 @@ export class WorkerStore {
           new DataError(`no node "${input.node}" to register a worker on`, {
             hint: 'a worker is recorded for a node the graph already holds.',
           })
+      );
+      // The address belongs to a dispatched worker, so the recorder must
+      // still hold the claim its launch took. This is also what closes the
+      // fast-worker race: an outcome recorded before the address deletes the
+      // claim, and the late `worker set` is then refused instead of
+      // recreating a row for an agent that already finished.
+      const claim = this.#db.get(
+        'SELECT session_id FROM claim WHERE node_id = ?',
+        [node.id]
+      );
+      ensure(
+        claim?.session_id === input.session,
+        () =>
+          new DataError(
+            `this session holds no claim on "${input.node}", so there is no dispatched worker to address`,
+            {
+              hint: 'record the address right after the launch, before anything else; if the worker already reported, there is nothing to route to.',
+            }
+          )
       );
       this.#db.run(
         `INSERT INTO worker (node_id, session_id, agent_ref, launched_at)
@@ -64,14 +90,30 @@ export class WorkerStore {
     return typeof row?.agent_ref === 'string' ? row.agent_ref : null;
   }
 
-  async remove(node: string): Promise<boolean> {
-    return (
-      this.#db.run(
+  /**
+   * Hand a node from warm relay to cold recovery: drop the caller's own
+   * address and release its claim in one transaction. While either existed
+   * the item could not queue; with both gone the scheduler re-serves it as a
+   * `resume` pass. Scoped to the owning session — another session's address
+   * is not this caller's to revoke.
+   */
+  async remove(node: string, session: string): Promise<boolean> {
+    return this.#db.transaction(() => {
+      const removed = this.#db.run(
         `DELETE FROM worker
-         WHERE node_id = (SELECT id FROM node WHERE external_id = ?)`,
-        [node]
-      ) > 0
-    );
+         WHERE node_id = (SELECT id FROM node WHERE external_id = ?)
+           AND session_id = ?`,
+        [node, session]
+      );
+      if (removed === 0) return false;
+      this.#db.run(
+        `DELETE FROM claim
+         WHERE node_id = (SELECT id FROM node WHERE external_id = ?)
+           AND session_id = ?`,
+        [node, session]
+      );
+      return true;
+    });
   }
 }
 

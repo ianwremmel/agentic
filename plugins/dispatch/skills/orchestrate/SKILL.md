@@ -38,12 +38,27 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `scan_project`             | Run [`build-graph`](../build-graph/SKILL.md) for the projects and cursor named.                  |
 | `fetch_ticket`             | Run [`build-graph`](../build-graph/SKILL.md) for the single ticket named.                        |
 | `refresh_complete`         | Report the graph is built. Stay resident — dispatch begins.                                      |
-| `dispatch_ticket`          | Launch a background `ticket-worker` agent, passing the event's ticket, project, and pass.        |
-| `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, pass, and (when the item is ticket-backed) its ticket. |
+| `dispatch_ticket`          | Launch a background `ticket-worker` agent, passing the event's ticket, project, and pass. Then record its address: `dispatch worker set --node <ticket> --agent <ref>` with the ref the launch returned. |
+| `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, pass, and (when the item is ticket-backed) its ticket. Then record its address with `dispatch worker set` as above. |
 | `perform_milestone_review` | Launch a background `milestone-reviewer` agent, passing the milestone and project.               |
 | `park_human_blocked`       | Park the ticket yourself via the adapter (awaiting-external, else paused) and post the handoff.  |
 | `alert_failure`            | Alert the operator where the order body says — the PR when one exists, else the ticket.          |
 | `project_complete`         | Announce it. Stop once every project the operator named is complete.                             |
+
+**Routing.** An event that carries an `agent` meta key names a live worker
+that already holds the node's context: relay the event to that worker
+verbatim (SendMessage to the ref) and do nothing else with it — never act on
+it yourself, never launch a second worker for it. If the relay fails because
+the agent is gone, run `dispatch worker rm --node <id>` — that hands the node
+from warm relay to cold recovery (it also releases the claim), and the
+scheduler re-serves the item as a `resume` pass. While the address exists the
+scheduler will never re-dispatch the node, so a dead address you never revoke
+strands the item until the session dies. An event with no `agent` key needs
+nothing from you beyond what its row in the table above says — for the PR/CI
+and ticket event kinds (`ci_finished`, `pr_review`, `pr_comment`,
+`pr_state_change`, `pr_conflicted`, `pr_head_changed`, `ticket_changed`) that
+is: nothing. The scheduler already turned the change into a queue pass if one
+was warranted.
 
 Return to waiting after each launch. Give each worker only what the event
 carries; never ticket content. Launch every order you receive; the CLI claims

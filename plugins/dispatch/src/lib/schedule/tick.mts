@@ -2,7 +2,12 @@ import {nowIso} from '../db/time.mts';
 import {withDatabase} from '../db/index.mts';
 import type {Logger} from '../logger/index.mts';
 import type {ChannelWriter} from '../mcp/channel.mts';
-import {PrEventStore, PrStore, SessionStore} from '../stores/index.mts';
+import {
+  PrEventStore,
+  PrStore,
+  SessionStore,
+  WorkerStore,
+} from '../stores/index.mts';
 import {
   githubSnapshot,
   pollWatches,
@@ -155,6 +160,7 @@ async function pushObservations(
   await withDatabase(undefined, env, async (db) => {
     const events = new PrEventStore(db);
     const prs = new PrStore(db);
+    const workers = new WorkerStore(db);
     const script = prStatusScript();
     // Bounded per tick: each event costs a `pr-status` read, and the tick
     // holds the heartbeat. Draining fifty of them serially would stop this
@@ -166,6 +172,9 @@ async function pushObservations(
       MAX_PUSHES_PER_TICK
     )) {
       const pr = await prs.getPr(event.node);
+      // When a live worker holds this node, its address rides the event and
+      // the session relays instead of letting the item cold-start.
+      const agent = await workers.refFor(event.node, session);
       // A ticket event has no PR payload to carry; the session re-reads the
       // ticket through the tracker adapter instead.
       const payload =
@@ -177,7 +186,10 @@ async function pushObservations(
       channel.push(
         event.kind,
         {
+          // `agent` is the router's reserved key: it is stamped after the
+          // spread so no event producer can smuggle an address in.
           ...event.meta,
+          ...(agent === null ? {} : {agent}),
           item: event.node,
           ...(pr?.repo == null ? {} : {repo: pr.repo}),
           ...(pr?.prNumber == null ? {} : {pr: String(pr.prNumber)}),

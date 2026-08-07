@@ -176,3 +176,21 @@ describe('refresh asks for tickets the tracker lost', () => {
     await db.close();
   });
 });
+
+describe('a refresh ask lost in flight', () => {
+  it('is re-offered after ten minutes instead of wedging', async () => {
+    const {db, scheduler} = await fixture('in-progress');
+    await scheduler.tick(NOW);
+    // Simulate the drain pushing it into a channel nobody heard.
+    db.run(
+      "UPDATE fetch_request SET delivered_at = ? WHERE kind='refresh_ticket'",
+      [NOW]
+    );
+    await scheduler.tick(MUCH_LATER);
+    const undelivered = db.get(
+      "SELECT COUNT(*) n FROM fetch_request WHERE kind='refresh_ticket' AND delivered_at IS NULL"
+    );
+    assert.equal(Number(undelivered?.n), 1);
+    await db.close();
+  });
+});

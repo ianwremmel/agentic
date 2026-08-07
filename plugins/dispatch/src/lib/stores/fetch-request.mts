@@ -146,6 +146,26 @@ export class FetchRequestStore {
   }
 
   /**
+   * Re-offer refresh asks that were pushed but never answered. Scan-resume
+   * redelivery deliberately does not own these, so without this a push the
+   * session never heard (channel down, session gone) would leave the ask
+   * open forever — and an open ask suppresses every future one.
+   */
+  async redeliverStaleTicketRefreshes(
+    now: string,
+    olderThanSeconds: number
+  ): Promise<number> {
+    assertInstant(now, 'now');
+    return this.#db.run(
+      `UPDATE fetch_request SET delivered_at = NULL
+       WHERE kind = 'refresh_ticket' AND resolution IS NULL
+         AND delivered_at IS NOT NULL
+         AND unixepoch(?) - unixepoch(delivered_at) >= ?`,
+      [now, olderThanSeconds]
+    );
+  }
+
+  /**
    * When a ticket was last asked about via `refresh_ticket`, or null if
    * never. Drives the cadence: due = no open ask and the last one is older
    * than the interval.

@@ -103,6 +103,9 @@ export class Scheduler {
    */
   async #refreshTickets(now: string): Promise<void> {
     const requests = new FetchRequestStore(this.#db);
+    // An ask pushed ten minutes ago and never answered was lost in flight;
+    // clearing its mark lets the drain offer it again.
+    await requests.redeliverStaleTicketRefreshes(now, 600);
     const rows = this.#db.all(
       `SELECT n.external_id AS id, t.status, p.source
        FROM ticket t

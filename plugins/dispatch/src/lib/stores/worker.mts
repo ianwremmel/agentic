@@ -31,8 +31,9 @@ export class WorkerStore {
     at: string;
   }): Promise<void> {
     assertInstant(input.at, 'at');
+    const agentRef = input.agentRef.trim();
     ensure(
-      input.agentRef.trim() !== '',
+      agentRef !== '',
       () =>
         new DataError('an empty agent ref is not an address', {
           hint: 'pass the ref the launch returned.',
@@ -73,7 +74,7 @@ export class WorkerStore {
            session_id = excluded.session_id,
            agent_ref = excluded.agent_ref,
            launched_at = excluded.launched_at`,
-        [node.id, input.session, input.agentRef, input.at]
+        [node.id, input.session, agentRef, input.at]
       );
     });
   }

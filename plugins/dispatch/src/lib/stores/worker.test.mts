@@ -176,3 +176,19 @@ describe('worker rows arbitrate warm relay vs cold resume', () => {
     await db.close();
   });
 });
+
+describe('event meta routing key', () => {
+  it('stores the trimmed address', async () => {
+    const db = await fixture();
+    await new CoordinationStore(db).claim({
+      node: 'T1',
+      session: 'S1',
+      claimedAt: NOW,
+    });
+    const store = new WorkerStore(db);
+    // A padded ref would pass validation and then be unreachable verbatim.
+    await store.set({node: 'T1', session: 'S1', agentRef: ' a-1 ', at: NOW});
+    assert.equal(await store.refFor('T1', 'S1'), 'a-1');
+    await db.close();
+  });
+});

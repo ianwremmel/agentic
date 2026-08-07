@@ -3,6 +3,7 @@ import {describe, it} from 'node:test';
 
 import {runCommand, tempEnv, ticket} from '../../lib/command/test-support.mts';
 import {withDatabase} from '../../lib/db/index.mts';
+import {DataError} from '../../lib/errors/index.mts';
 import {
   CoordinationStore,
   ProjectStore,
@@ -91,7 +92,7 @@ describe('outcome set', () => {
     });
   });
 
-  it('leaves a live claim alone when a swept worker reports late', async () => {
+  it("refuses a swept worker's late report while another session works the node", async () => {
     const env = await tempEnv();
     await withDatabase(undefined, env, async (db) => {
       await new ProjectStore(db).upsertProject({
@@ -111,21 +112,57 @@ describe('outcome set', () => {
       });
     });
 
-    // S1 reports late. The outcome lands, but S2's grant must survive —
-    // deleting it would leave a running agent with no claim, and the node
-    // would be handed to a third worker.
-    await runCommand(
-      new Command(),
-      {id: 'A', outcome: 'failed', session: 'S1'},
-      env
+    // Recording S1's late report would mark the node terminal while S2 is
+    // still working on it.
+    await assert.rejects(
+      runCommand(
+        new Command(),
+        {id: 'A', outcome: 'failed', session: 'S1'},
+        env
+      ),
+      (err: unknown) =>
+        err instanceof DataError && err.message.includes('holds no claim')
     );
 
     await withDatabase(undefined, env, async (db) => {
       const coordination = new CoordinationStore(db);
-      assert.equal((await coordination.getOutcome('A'))?.outcome, 'failed');
+      assert.equal(await coordination.getOutcome('A'), null);
       assert.deepEqual(await coordination.claims(), [
         {node: 'A', session: 'S2', actor: null},
       ]);
+    });
+  });
+
+  it('refuses a report from a worker that holds no claim at all', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new ProjectStore(db).upsertProject({
+        id: 'P',
+        name: 'P',
+        source: 'linear',
+      });
+      await new TicketStore(db).upsertTicket(ticket('A', 'P'));
+      await new SessionStore(db).register({
+        id: 'S1',
+        startedAt: NOW,
+        heartbeatAt: NOW,
+      });
+    });
+
+    // The CLC-1049 case: a self-directed worker the claim guard turned away
+    // recorded `failed`, which is non-retryable, so the ticket left the queue
+    // permanently and nothing re-served it.
+    await assert.rejects(
+      runCommand(
+        new Command(),
+        {id: 'A', outcome: 'failed', session: 'S1'},
+        env
+      ),
+      (err: unknown) => err instanceof DataError
+    );
+
+    await withDatabase(undefined, env, async (db) => {
+      assert.equal(await new CoordinationStore(db).getOutcome('A'), null);
     });
   });
 });

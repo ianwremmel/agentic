@@ -1,6 +1,7 @@
 import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, nowIso, withDatabase} from '../../lib/db/index.mts';
+import {DataError, ensure} from '../../lib/errors/index.mts';
 import {OUTCOMES} from '../../lib/model/status.mts';
 import {correlateSession} from '../../lib/schedule/index.mts';
 import {CoordinationStore} from '../../lib/stores/index.mts';
@@ -56,12 +57,41 @@ export class Command extends AbstractCommand {
       // now. A worker whose session was swept mid-run can report late, by
       // which time the node may have been re-dispatched to a live worker;
       // releasing that claim would revoke a running agent's compute grant.
-      // A caller with no server (an operator at a terminal) still records the
-      // outcome — that is what re-admits the node — and releases nothing.
-      // Ambiguous correlation is not that case and refuses: silently
-      // releasing nothing there would strand the claim and its capacity.
+      // Ambiguous correlation refuses: silently releasing nothing there would
+      // strand the claim and its capacity.
       const session = await correlateSession(db, ctx.env, parsed.session);
-      await new CoordinationStore(db).recordOutcome(
+      const coordination = new CoordinationStore(db);
+
+      // An outcome is a report from work that was dispatched. A worker
+      // holding no claim was not dispatched, and letting it report is how a
+      // ticket disappears: a self-directed worker that the claim guard turned
+      // away recorded `failed`, which is non-retryable, so the ticket left
+      // the queue for good and nothing re-served it.
+      //
+      // Refusing costs nothing by comparison. The node keeps whatever state
+      // it had and is dispatched again; that is recoverable, and a wrongly
+      // recorded terminal outcome is not.
+      //
+      // A caller with no live server at all is an operator at a terminal,
+      // who has no claim by construction and is the one party entitled to
+      // record an outcome by hand.
+      if (session !== null) {
+        const held = (await coordination.claims()).find(
+          (claim) => claim.node === parsed.id
+        );
+        ensure(
+          held?.session === session,
+          () =>
+            new DataError(
+              `this session holds no claim on "${parsed.id}", so it cannot report an outcome for it`,
+              {
+                hint: 'you were not dispatched for this node, or your claim was already released. Stop without reporting; the node stays dispatchable and the scheduler will serve it again.',
+              }
+            )
+        );
+      }
+
+      await coordination.recordOutcome(
         {
           node: parsed.id,
           outcome: parsed.outcome,

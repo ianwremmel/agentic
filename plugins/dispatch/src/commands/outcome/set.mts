@@ -1,7 +1,6 @@
 import {AbstractCommand} from '../../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../../lib/command/index.mts';
 import {DB_OPTION, nowIso, withDatabase} from '../../lib/db/index.mts';
-import {DataError, ensure} from '../../lib/errors/index.mts';
 import {OUTCOMES} from '../../lib/model/status.mts';
 import {correlateSession} from '../../lib/schedule/index.mts';
 import {CoordinationStore} from '../../lib/stores/index.mts';
@@ -32,10 +31,10 @@ const options = {
     positional: false,
     required: false,
   },
-  session: {
-    type: 'string',
+  force: {
+    type: 'boolean',
     description:
-      'Registry id whose claim this report releases; defaults to the session correlated from the environment.',
+      'Record even though no claim is held. For an operator resolving a node by hand; a dispatched worker always holds its claim and never needs this.',
     positional: false,
     required: false,
   },
@@ -53,45 +52,23 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
-      // The reporter releases its *own* claim, never whoever holds the node
-      // now. A worker whose session was swept mid-run can report late, by
-      // which time the node may have been re-dispatched to a live worker;
-      // releasing that claim would revoke a running agent's compute grant.
-      // Ambiguous correlation refuses: silently releasing nothing there would
-      // strand the claim and its capacity.
-      const session = await correlateSession(db, ctx.env, parsed.session);
-      const coordination = new CoordinationStore(db);
-
-      // An outcome is a report from work that was dispatched. A worker
-      // holding no claim was not dispatched, and letting it report is how a
-      // ticket disappears: a self-directed worker that the claim guard turned
-      // away recorded `failed`, which is non-retryable, so the ticket left
-      // the queue for good and nothing re-served it.
+      // Identity comes from the environment, never from a flag. An id a
+      // caller supplies is an assertion, not evidence, and the holders are
+      // printed by `dispatch claim status` — so an unclaimed worker could
+      // name one and pass.
       //
-      // Refusing costs nothing by comparison. The node keeps whatever state
-      // it had and is dispatched again; that is recoverable, and a wrongly
-      // recorded terminal outcome is not.
+      // Holding the claim is what authorizes a report: an outcome is a report
+      // from work that was dispatched. The check runs inside the write's own
+      // transaction, because a claim read out here can be swept, released, or
+      // taken by another session before the write lands.
       //
-      // A caller with no live server at all is an operator at a terminal,
-      // who has no claim by construction and is the one party entitled to
-      // record an outcome by hand.
-      if (session !== null) {
-        const held = (await coordination.claims()).find(
-          (claim) => claim.node === parsed.id
-        );
-        ensure(
-          held?.session === session,
-          () =>
-            new DataError(
-              `this session holds no claim on "${parsed.id}", so it cannot report an outcome for it`,
-              {
-                hint: 'you were not dispatched for this node, or your claim was already released. Stop without reporting; the node stays dispatchable and the scheduler will serve it again.',
-              }
-            )
-        );
-      }
-
-      await coordination.recordOutcome(
+      // `correlateSession` returning null cannot tell an operator at a
+      // terminal from a worker whose server just died, so it is not treated
+      // as authority — that would leave the guard bypassable exactly when the
+      // system is unhealthy, which is when it matters. An operator resolving
+      // a node by hand passes --force and says so.
+      const session = await correlateSession(db, ctx.env, undefined);
+      await new CoordinationStore(db).recordOutcome(
         {
           node: parsed.id,
           outcome: parsed.outcome,
@@ -101,7 +78,7 @@ export class Command extends AbstractCommand {
           detail: parsed.detail ?? null,
           recordedAt: nowIso(),
         },
-        {session: session ?? ''}
+        {session: session ?? '', requireClaim: !parsed.force}
       );
       ctx.io.write(`outcome ${parsed.id} ${parsed.outcome}\n`);
     });

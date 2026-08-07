@@ -189,6 +189,17 @@ export class CoordinationStore {
    * Record a unit's final report on a node, releasing its claim in the same
    * transaction — the artifact proves its writer exited. One row per node; a
    * later pass's report replaces it.
+   *
+   * `requireClaim` makes the report conditional on the reporter still holding
+   * the node, checked inside this transaction rather than by the caller: a
+   * claim read outside it can be swept, released, or taken by another session
+   * before the write lands, and two concurrent reports can both pass a prior
+   * read and then overwrite each other.
+   *
+   * An unheld report is refused because an outcome is a report from work that
+   * was dispatched. The worst case for refusing is that the node is served
+   * again; the worst case for accepting is a terminal outcome recorded over a
+   * live worker, or a ticket that leaves the queue for good.
    */
   async recordOutcome(
     report: {
@@ -198,7 +209,7 @@ export class CoordinationStore {
       detail: string | null;
       recordedAt: string;
     },
-    holder: {session: string}
+    holder: {session: string; requireClaim?: boolean}
   ): Promise<void> {
     ensure(
       isOutcome(report.outcome),
@@ -238,6 +249,22 @@ export class CoordinationStore {
           report.recordedAt,
         ]
       );
+      if (holder.requireClaim === true) {
+        const held = this.#db.get(
+          'SELECT session_id FROM claim WHERE node_id = ?',
+          [node.id]
+        );
+        ensure(
+          held?.session_id === holder.session,
+          () =>
+            new DataError(
+              `this session holds no claim on "${report.node}", so it cannot report an outcome for it`,
+              {
+                hint: 'you were not dispatched for this node, or your claim was already released. Stop without reporting; the node stays dispatchable and the scheduler will serve it again.',
+              }
+            )
+        );
+      }
       this.#db.run('DELETE FROM claim WHERE node_id = ? AND session_id = ?', [
         node.id,
         holder.session,

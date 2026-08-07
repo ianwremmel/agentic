@@ -118,6 +118,17 @@ CREATE TABLE IF NOT EXISTS pr_event (
   delivered_at TEXT
 ) STRICT;
 
+/* A live worker's address: the agent ref its launcher got back, recorded so
+   an event for the node can be relayed to the worker that already holds its
+   context. Cleared with the outcome — not the yield — so a yielded worker
+   stays resumable until it reports. */
+CREATE TABLE IF NOT EXISTS worker (
+  node_id    INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  agent_ref  TEXT NOT NULL,
+  launched_at TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS outcome (
   node_id     INTEGER PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
   outcome     TEXT NOT NULL CHECK (outcome IN

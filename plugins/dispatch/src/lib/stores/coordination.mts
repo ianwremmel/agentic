@@ -269,6 +269,9 @@ export class CoordinationStore {
         node.id,
         holder.session,
       ]);
+      // The report ends the worker's addressability along with its claim: an
+      // event for a concluded node has no one to wake.
+      this.#db.run('DELETE FROM worker WHERE node_id = ?', [node.id]);
       // A final report ends any server-side wait. The watch would otherwise
       // re-serve work that just concluded, and its undelivered observations
       // describe a wait nobody is in any more.

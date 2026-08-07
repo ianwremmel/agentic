@@ -32,12 +32,19 @@ export async function drainInstructions(
           },
           scanBody(request.source, payload)
         );
-      } else {
+      } else if (request.kind === 'fetch_ticket') {
         const {ticket} = request.payload as TicketPayload;
         channel.push(
           'fetch_ticket',
           {tracker: request.source, ticket},
           ticketBody(request.source, ticket)
+        );
+      } else {
+        const {ticket} = request.payload as TicketPayload;
+        channel.push(
+          'refresh_ticket',
+          {tracker: request.source, ticket},
+          `Re-fetch ticket ${ticket} from ${request.source} and record it with dispatch ticket set — the graph's copy may be stale. If ${request.source} no longer has it, run: dispatch ticket missing --id ${ticket}`
         );
       }
       await requests.markDelivered(request.id, at);

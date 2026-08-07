@@ -5,7 +5,7 @@
  * runtime state), so a bump's recovery is "delete the file and re-sync" — there
  * is no migration machinery.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS notice (
 CREATE TABLE IF NOT EXISTS fetch_request (
   id           INTEGER PRIMARY KEY,
   source       TEXT NOT NULL,
-  kind         TEXT NOT NULL CHECK (kind IN ('scan_project','fetch_ticket')),
+  kind         TEXT NOT NULL CHECK (kind IN ('scan_project','fetch_ticket','refresh_ticket')),
   payload      TEXT NOT NULL,
   created_at   TEXT NOT NULL,
   delivered_at TEXT,

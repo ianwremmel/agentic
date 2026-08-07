@@ -40,6 +40,10 @@ export class TicketStore {
     await this.#db.transaction(() => {
       const projectId = nodeRef(this.#db, ticket.project);
       const nodeId = materialize(this.#db, ticket.id, 'ticket');
+      const previous = this.#db.get(
+        'SELECT status FROM ticket WHERE node_id = ?',
+        [nodeId]
+      );
       this.#db.run(
         `INSERT INTO ticket (
            node_id, project_id, url, title, status, target_kind,
@@ -68,6 +72,31 @@ export class TicketStore {
           ticket.updatedAt,
         ]
       );
+      // The write is the answer to any outstanding re-read ask, whoever made
+      // it — the graph is current for this ticket as of this transaction.
+      this.#db.run(
+        `UPDATE fetch_request SET resolution = 'materialized'
+         WHERE kind = 'refresh_ticket' AND resolution IS NULL AND payload = ?`,
+        [JSON.stringify({ticket: ticket.id})]
+      );
+      // A status transition is the tracker speaking — an operator reply
+      // unparking a wait, a human moving the ticket — and is what a session
+      // must hear about without polling. Same event queue as the PR
+      // observations; a rewrite that changes nothing says nothing.
+      const from =
+        typeof previous?.status === 'string' ? previous.status : null;
+      if (from !== null && from !== ticket.status) {
+        this.#db.run(
+          `INSERT INTO pr_event (node_id, kind, summary, meta, session_id, observed_at)
+           VALUES (?, 'ticket_changed', ?, ?, NULL, ?)`,
+          [
+            nodeId,
+            `Ticket ${ticket.id} moved ${from} -> ${ticket.status} on the tracker.`,
+            JSON.stringify({ticket: ticket.id, from, to: ticket.status}),
+            new Date().toISOString(),
+          ]
+        );
+      }
     });
   }
 

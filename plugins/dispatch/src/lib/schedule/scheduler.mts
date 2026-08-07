@@ -8,6 +8,7 @@ import {classifiedItems} from '../graph/index.mts';
 import {derive} from '../graph/index.mts';
 import {
   CoordinationStore,
+  FetchRequestStore,
   NoticeStore,
   SessionStore,
 } from '../stores/index.mts';
@@ -61,6 +62,8 @@ export class Scheduler {
     }
     await sessions.sweepStale(now, DEFAULT_STALE_AFTER_SECONDS);
 
+    await this.#refreshTickets(now);
+
     const own = await sessions.getSession(this.#session);
     const orders: WorkOrder[] = [];
 
@@ -84,6 +87,47 @@ export class Scheduler {
       orders.push(...(await this.#conditions(now)));
     }
     return {orders, retired: false};
+  }
+
+  /**
+   * Ask the session to re-read tickets whose tracker state can change under
+   * us, on a cadence derived from where each ticket is. The server cannot
+   * read the tracker itself, so it owns the *when*: the ask is a durable
+   * `refresh_ticket` instruction the drain delivers once the channel is
+   * acked, `ticket set` is the answer, and a status change the write reveals
+   * is pushed as an event. Backlog and terminal tickets are not asked about —
+   * the scan covers them — and one ask per ticket stays open at a time.
+   *
+   * In-flight tickets move on a person's timescale (a reply, a review), so
+   * five minutes; parked ones on an operator's (fifteen).
+   */
+  async #refreshTickets(now: string): Promise<void> {
+    const requests = new FetchRequestStore(this.#db);
+    const rows = this.#db.all(
+      `SELECT n.external_id AS id, t.status, p.source
+       FROM ticket t
+       JOIN node n ON n.id = t.node_id
+       JOIN project p ON p.node_id = t.project_id
+       WHERE p.source IS NOT NULL
+         AND t.status IN ('in-progress','in-review','finished','delivered',
+                          'paused','awaiting-external')`
+    );
+    const nowMs = Date.parse(now);
+    for (const row of rows) {
+      const status = String(row.status);
+      const cadenceMs =
+        status === 'paused' || status === 'awaiting-external'
+          ? 900_000
+          : 300_000;
+      const ticket = String(row.id);
+      const last = await requests.lastTicketRefreshAt(ticket);
+      if (last !== null && nowMs - Date.parse(last) < cadenceMs) continue;
+      await requests.enqueueTicketRefresh({
+        source: String(row.source),
+        ticket,
+        at: now,
+      });
+    }
   }
 
   /**

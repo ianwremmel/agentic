@@ -5,7 +5,11 @@ import {assertInstant} from '../db/time.mts';
 /* eslint-disable @typescript-eslint/require-await --
  * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
 
-export const FETCH_KINDS = ['scan_project', 'fetch_ticket'] as const;
+export const FETCH_KINDS = [
+  'scan_project',
+  'fetch_ticket',
+  'refresh_ticket',
+] as const;
 export type FetchKind = (typeof FETCH_KINDS)[number];
 export type FetchResolution = 'materialized' | 'missing';
 
@@ -89,6 +93,92 @@ export class FetchRequestStore {
     });
   }
 
+  /**
+   * Enqueue a recurring re-read of a ticket the graph already holds.
+   *
+   * A distinct kind from `fetch_ticket`, because their lifecycles differ in
+   * both directions: reconcile resolves a `fetch_ticket` the moment the node
+   * exists (for a re-read it always does, which would resolve it before any
+   * fetch happened), and `enqueueTicket` dedupes against resolved rows for
+   * the life of a refresh (which would allow exactly one re-read ever).
+   * A `refresh_ticket` is resolved by `ticket set` writing the ticket, and
+   * dedupes only against its own open rows — one outstanding ask per ticket.
+   */
+  async enqueueTicketRefresh(input: {
+    source: string;
+    ticket: string;
+    at: string;
+  }): Promise<number | null> {
+    assertInstant(input.at, 'at');
+    const payload = JSON.stringify({
+      ticket: input.ticket,
+    } satisfies TicketPayload);
+    return this.#db.transaction(() => {
+      const open = this.#db.get(
+        `SELECT id FROM fetch_request
+         WHERE source = ? AND kind = 'refresh_ticket' AND payload = ?
+           AND resolution IS NULL`,
+        [input.source, payload]
+      );
+      if (open !== undefined) return null;
+      // The history's only job is carrying the newest ask time for the
+      // cadence; without this, every answered ask is a permanent row and a
+      // long-lived ticket accretes one per cadence forever.
+      this.#db.run(
+        `DELETE FROM fetch_request
+         WHERE kind = 'refresh_ticket' AND payload = ? AND resolution IS NOT NULL`,
+        [payload]
+      );
+      return this.#insert(input.source, 'refresh_ticket', payload, input.at);
+    });
+  }
+
+  /**
+   * Resolve every open re-read ask for a ticket, any source. Called by
+   * `ticket set`: the write is the answer, whoever asked.
+   */
+  async resolveTicketRefresh(ticket: string): Promise<number> {
+    return this.#db.run(
+      `UPDATE fetch_request SET resolution = 'materialized'
+       WHERE kind = 'refresh_ticket' AND resolution IS NULL AND payload = ?`,
+      [JSON.stringify({ticket} satisfies TicketPayload)]
+    );
+  }
+
+  /**
+   * Re-offer refresh asks that were pushed but never answered. Scan-resume
+   * redelivery deliberately does not own these, so without this a push the
+   * session never heard (channel down, session gone) would leave the ask
+   * open forever — and an open ask suppresses every future one.
+   */
+  async redeliverStaleTicketRefreshes(
+    now: string,
+    olderThanSeconds: number
+  ): Promise<number> {
+    assertInstant(now, 'now');
+    return this.#db.run(
+      `UPDATE fetch_request SET delivered_at = NULL
+       WHERE kind = 'refresh_ticket' AND resolution IS NULL
+         AND delivered_at IS NOT NULL
+         AND unixepoch(?) - unixepoch(delivered_at) >= ?`,
+      [now, olderThanSeconds]
+    );
+  }
+
+  /**
+   * When a ticket was last asked about via `refresh_ticket`, or null if
+   * never. Drives the cadence: due = no open ask and the last one is older
+   * than the interval.
+   */
+  async lastTicketRefreshAt(ticket: string): Promise<string | null> {
+    const row = this.#db.get(
+      `SELECT MAX(created_at) AS at FROM fetch_request
+       WHERE kind = 'refresh_ticket' AND payload = ?`,
+      [JSON.stringify({ticket} satisfies TicketPayload)]
+    );
+    return typeof row?.at === 'string' ? row.at : null;
+  }
+
   async undelivered(): Promise<FetchRequest[]> {
     return this.#db
       .all(
@@ -125,7 +215,8 @@ export class FetchRequestStore {
   async redeliver(source: string): Promise<number> {
     return this.#db.run(
       `UPDATE fetch_request SET delivered_at = NULL
-       WHERE source = ? AND resolution IS NULL`,
+       WHERE source = ? AND resolution IS NULL
+         AND kind IN ('scan_project','fetch_ticket')`,
       [source]
     );
   }
@@ -164,7 +255,8 @@ export class FetchRequestStore {
   ): Promise<{id: number; source: string} | null> {
     const row = this.#db.get(
       `SELECT id, source FROM fetch_request
-       WHERE kind = 'fetch_ticket' AND resolution IS NULL AND payload = ?`,
+       WHERE kind IN ('fetch_ticket','refresh_ticket')
+         AND resolution IS NULL AND payload = ?`,
       [JSON.stringify({ticket} satisfies TicketPayload)]
     );
     return row === undefined

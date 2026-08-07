@@ -166,8 +166,12 @@ async function pushObservations(
       MAX_PUSHES_PER_TICK
     )) {
       const pr = await prs.getPr(event.node);
+      // A ticket event has no PR payload to carry; the session re-reads the
+      // ticket through the tracker adapter instead.
       const payload =
-        pr?.repo == null || pr.prNumber == null
+        event.kind === 'ticket_changed' ||
+        pr?.repo == null ||
+        pr.prNumber == null
           ? null
           : await prStatusPayload(pr.repo, pr.prNumber, {script, log});
       channel.push(
@@ -179,9 +183,10 @@ async function pushObservations(
           ...(pr?.prNumber == null ? {} : {pr: String(pr.prNumber)}),
         },
         payload ??
-          `${event.summary} The pr-status payload could not be read; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`
+          (event.kind === 'ticket_changed'
+            ? `${event.summary} Re-read the ticket through the tracker adapter before acting.`
+            : `${event.summary} The pr-status payload could not be read; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`)
       );
-      await events.markDelivered(event.id, at);
     }
   });
 }

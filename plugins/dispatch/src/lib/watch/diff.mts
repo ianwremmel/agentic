@@ -15,6 +15,9 @@ export const OBSERVATION_KINDS = [
   'pr_state_change',
   'pr_conflicted',
   'pr_head_changed',
+  // Not a PR observation: written by `ticket set` when a tracker write
+  // reveals a status transition. Same queue, same delivery.
+  'ticket_changed',
 ] as const;
 export type ObservationKind = (typeof OBSERVATION_KINDS)[number];
 

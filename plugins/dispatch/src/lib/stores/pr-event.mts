@@ -60,9 +60,20 @@ export class PrEventStore {
       }));
   }
 
-  async markDelivered(id: number, at: string): Promise<void> {
+  /**
+   * Claim an event for delivery. True from exactly one caller: a session-NULL
+   * event is drainable by any server, and select-then-mark would let two of
+   * them push the same tracker transition — which a session then acts on
+   * twice. The claim is the conditional write, so push only after it.
+   */
+  async markDelivered(id: number, at: string): Promise<boolean> {
     assertInstant(at, 'at');
-    this.#db.run('UPDATE pr_event SET delivered_at = ? WHERE id = ?', [at, id]);
+    return (
+      this.#db.run(
+        'UPDATE pr_event SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL',
+        [at, id]
+      ) > 0
+    );
   }
 
   /**

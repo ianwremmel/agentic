@@ -7,3 +7,4 @@ export type {PrSnapshot, Snapshotter} from './snapshot.mts';
 export {AGENT_ID, writtenByThisAgent} from './marker.mts';
 export {prStatusPayload, prStatusScript} from './payload.mts';
 export {cadenceFor, CADENCE_SECONDS, EXPIRY_SECONDS} from './cadence.mts';
+export {renderSnapshot} from './render.mts';

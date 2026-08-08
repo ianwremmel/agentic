@@ -6,23 +6,13 @@ import {
   PrEventStore,
   PrStore,
   SessionStore,
+  WatchStore,
   WorkerStore,
 } from '../stores/index.mts';
-import {
-  githubSnapshot,
-  pollWatches,
-  prStatusPayload,
-  prStatusScript,
-} from '../watch/index.mts';
+import {githubSnapshot, pollWatches, renderSnapshot} from '../watch/index.mts';
 import type {Snapshotter} from '../watch/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
-
-/**
- * Observations pushed per tick. Each costs a `pr-status` read, and the tick
- * holds this session's heartbeat while it runs.
- */
-const MAX_PUSHES_PER_TICK = 8;
 
 /** First probe retry delay; doubles per unanswered probe up to the cap. */
 const PROBE_DELAY_MS = 5_000;
@@ -150,7 +140,7 @@ export async function runServerTick(
  * it belongs to, which is what lets the session route it to the worker
  * holding that PR rather than acting on it itself.
  */
-async function pushObservations(
+export async function pushObservations(
   channel: ChannelWriter,
   env: NodeJS.ProcessEnv,
   session: string,
@@ -160,45 +150,57 @@ async function pushObservations(
   await withDatabase(undefined, env, async (db) => {
     const events = new PrEventStore(db);
     const prs = new PrStore(db);
+    const watches = new WatchStore(db);
     const workers = new WorkerStore(db);
-    const script = prStatusScript();
-    // Bounded per tick: each event costs a `pr-status` read, and the tick
-    // holds the heartbeat. Draining fifty of them serially would stop this
-    // session heartbeating for long enough to be swept as stale, which
-    // cascades its claims and re-dispatches the very work these events were
-    // about. What does not fit goes out next tick, in seq order.
-    for (const event of await events.undelivered(
-      session,
-      MAX_PUSHES_PER_TICK
-    )) {
-      const pr = await prs.getPr(event.node);
-      // When a live worker holds this node, its address rides the event and
-      // the session relays instead of letting the item cold-start.
-      const agent = await workers.refFor(event.node, session);
-      // A ticket event has no PR payload to carry; the session re-reads the
-      // ticket through the tracker adapter instead.
-      const payload =
-        event.kind === 'ticket_changed' ||
-        pr?.repo == null ||
-        pr.prNumber == null
-          ? null
-          : await prStatusPayload(pr.repo, pr.prNumber, {script, log});
-      channel.push(
-        event.kind,
-        {
-          // `agent` is the router's reserved key: it is stamped after the
-          // spread so no event producer can smuggle an address in.
+    for (const event of await events.undelivered(session)) {
+      try {
+        // Every fallible step — the snapshot's JSON parse, the render, the
+        // lookups — runs before the event is claimed. A malformed snapshot
+        // then leaves the row undelivered to retry next tick instead of being
+        // marked delivered and lost, and the per-event catch keeps one bad
+        // event from aborting the whole drain.
+        const pr = await prs.getPr(event.node);
+        // When a live worker holds this node, its address rides the event and
+        // the session relays instead of letting the item cold-start.
+        const agent = await workers.refFor(event.node, session);
+        // A ticket event has no PR payload; the session re-reads the ticket
+        // through the tracker adapter. A PR event renders from the snapshot
+        // the poll already stored — no subprocess, so no per-tick push cap.
+        const snapshot =
+          event.kind === 'ticket_changed' ||
+          pr?.repo == null ||
+          pr.prNumber == null
+            ? null
+            : await watches.latestSnapshot(event.node);
+        const body =
+          snapshot !== null && pr?.repo != null && pr.prNumber != null
+            ? renderSnapshot(pr.repo, pr.prNumber, snapshot)
+            : event.kind === 'ticket_changed'
+              ? `${event.summary} Re-read the ticket through the tracker adapter before acting.`
+              : `${event.summary} No snapshot was stored; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`;
+        const meta = {
+          // `agent` is the router's reserved key: stamped after the spread so
+          // no event producer can smuggle an address in.
           ...event.meta,
           ...(agent === null ? {} : {agent}),
           item: event.node,
           ...(pr?.repo == null ? {} : {repo: pr.repo}),
           ...(pr?.prNumber == null ? {} : {pr: String(pr.prNumber)}),
-        },
-        payload ??
-          (event.kind === 'ticket_changed'
-            ? `${event.summary} Re-read the ticket through the tracker adapter before acting.`
-            : `${event.summary} The pr-status payload could not be read; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`)
-      );
+        };
+
+        // The claim is the last DB write before the push, and conditional:
+        // with session-NULL events drainable by any server, only the one that
+        // wins the claim pushes. It has to precede the push, so the single
+        // residual is a push that throws after the claim — a failed stdout
+        // write, i.e. a dying server, which a retry could not have helped.
+        if (!(await events.markDelivered(event.id, at))) continue;
+        channel.push(event.kind, meta, body);
+      } catch (error) {
+        log?.error('event delivery failed', {
+          node: event.node,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   });
 }

@@ -78,3 +78,17 @@ Human input routes through the tracker — a comment on the ticket — never by
 blocking on session input. If the ticket demands judgment only a human has,
 park it: transition to awaiting-external, post the handoff, and report
 `human-blocked`.
+
+## Relayed events
+
+A relayed `ticket_changed` for your own ticket means the tracker moved under
+you — an operator reply, a status change you did not make. Re-read the ticket
+through the adapter before continuing; if the change ends your pass (the
+ticket was canceled, or a human took it), record the matching outcome and
+return.
+
+When the ticket is canceled, also settle the PR items you registered for it:
+remove any that no worker has concluded (`dispatch pr rm --id <item>`), so
+the scheduler never dispatches work for a dead ticket. A pr-worker already
+live on one of them hears the same `ticket_changed` relay and closes out its
+PR itself.

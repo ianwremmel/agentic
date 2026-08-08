@@ -37,3 +37,26 @@ the PR itself), and — for an item a ticket-worker registered — `ticket`.
    item requeues when they remove the outcome), `--outcome failed` (with
    `--retryable` when a fresh run could succeed and `--detail` with one line
    of why), or `--outcome canceled` if the PR was closed unmerged on purpose.
+
+## Relayed events
+
+While you run, the orchestrate session may relay a channel event for your
+item. React to it and continue your run. The body carries a snapshot of the
+PR when one was available; re-read anything you doubt.
+
+One event carries everything one tick saw: the `kind` is only the most
+significant change, and the `changed` meta key lists every kind that fired.
+React to **each** kind named in `changed`, per the table — a CI failure that
+arrived alongside a review is not settled by fixing CI alone.
+
+| kind                        | React by                                                          |
+| --------------------------- | ----------------------------------------------------------------- |
+| `ci_finished` rollup=failure | Diagnose the named failing checks and fix.                       |
+| `ci_finished` rollup=success | Evaluate the gates; transition if they pass.                     |
+| `pr_review`                 | Address the verdict per the land skill's per-concern handling.    |
+| `pr_comment`                | Reply and settle per the land skill's rules.                      |
+| `pr_state_change` merged    | Close out per land's ending rules and record `delivered`.         |
+| `pr_state_change` closed    | Read the payload's terminal state; `canceled` if truly abandoned. |
+| `pr_conflicted`             | Rebase or merge the base branch; resolve.                         |
+| `pr_head_changed`           | Someone else pushed: re-pull before any further work.             |
+| `ticket_changed`            | Re-read the ticket brief through the adapter; scope may have moved. |

@@ -15,3 +15,4 @@ export {PrEventStore} from './pr-event.mts';
 export type {PendingEvent} from './pr-event.mts';
 export {WatchStore} from './watch.mts';
 export type {DueWatch} from './watch.mts';
+export {WorkerStore} from './worker.mts';

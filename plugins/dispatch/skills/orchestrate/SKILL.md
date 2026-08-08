@@ -38,12 +38,17 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `scan_project`             | Run [`build-graph`](../build-graph/SKILL.md) for the projects and cursor named.                  |
 | `fetch_ticket`             | Run [`build-graph`](../build-graph/SKILL.md) for the single ticket named.                        |
 | `refresh_complete`         | Report the graph is built. Stay resident — dispatch begins.                                      |
-| `dispatch_ticket`          | Launch a background `ticket-worker` agent, passing the event's ticket, project, and pass.        |
-| `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, pass, and (when the item is ticket-backed) its ticket. |
+| `dispatch_ticket`          | Launch a background `ticket-worker` agent, passing the event's ticket, project, and pass. Then record its address: `dispatch worker set --node <ticket> --agent <ref>` with the ref the launch returned. |
+| `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, pass, and (when the item is ticket-backed) its ticket. Then record its address: `dispatch worker set --node <item-id> --agent <ref>`. |
 | `perform_milestone_review` | Launch a background `milestone-reviewer` agent, passing the milestone and project.               |
 | `park_human_blocked`       | Park the ticket yourself via the adapter (awaiting-external, else paused) and post the handoff.  |
 | `alert_failure`            | Alert the operator where the order body says — the PR when one exists, else the ticket.          |
 | `project_complete`         | Announce it. Stop once every project the operator named is complete.                             |
+
+**Routing.** An event carrying an `agent` meta key: relay it verbatim to
+that worker (SendMessage to the ref) and do nothing else with it. If the
+relay fails, run `dispatch worker rm --node <id>` and move on. An event with
+no `agent` key needs nothing from you.
 
 Return to waiting after each launch. Give each worker only what the event
 carries; never ticket content. Launch every order you receive; the CLI claims

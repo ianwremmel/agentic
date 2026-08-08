@@ -120,7 +120,7 @@ export async function runServerTick(
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure assigns `acked`; the analyzer cannot see the write
   if (acked) {
     try {
-      await pushObservations(channel, env, state.registryId, now);
+      await pushObservations(channel, env, state.registryId, now, opts.log);
     } catch (error) {
       // A push failure must not cost this tick's already-claimed orders; the
       // rows stay undelivered and the next tick retries.
@@ -140,11 +140,12 @@ export async function runServerTick(
  * it belongs to, which is what lets the session route it to the worker
  * holding that PR rather than acting on it itself.
  */
-async function pushObservations(
+export async function pushObservations(
   channel: ChannelWriter,
   env: NodeJS.ProcessEnv,
   session: string,
-  at: string
+  at: string,
+  log?: Logger
 ): Promise<void> {
   await withDatabase(undefined, env, async (db) => {
     const events = new PrEventStore(db);
@@ -152,44 +153,54 @@ async function pushObservations(
     const watches = new WatchStore(db);
     const workers = new WorkerStore(db);
     for (const event of await events.undelivered(session)) {
-      // Claim before pushing: another server may be draining the same
-      // session-NULL rows, and the conditional mark is what guarantees one
-      // delivery.
-      if (!(await events.markDelivered(event.id, at))) continue;
-      const pr = await prs.getPr(event.node);
-      // When a live worker holds this node, its address rides the event and
-      // the session relays instead of letting the item cold-start.
-      const agent = await workers.refFor(event.node, session);
-      // A ticket event has no PR payload to carry; the session re-reads the
-      // ticket through the tracker adapter instead. For PR events the body
-      // renders from the snapshot the poll already stored — no subprocess,
-      // so there is no per-tick push cap to protect the heartbeat with.
-      const snapshot =
-        event.kind === 'ticket_changed' ||
-        pr?.repo == null ||
-        pr.prNumber == null
-          ? null
-          : await watches.latestSnapshot(event.node);
-      const payload =
-        snapshot === null || pr?.repo == null || pr.prNumber == null
-          ? null
-          : renderSnapshot(pr.repo, pr.prNumber, snapshot);
-      channel.push(
-        event.kind,
-        {
-          // `agent` is the router's reserved key: it is stamped after the
-          // spread so no event producer can smuggle an address in.
+      try {
+        // Every fallible step — the snapshot's JSON parse, the render, the
+        // lookups — runs before the event is claimed. A malformed snapshot
+        // then leaves the row undelivered to retry next tick instead of being
+        // marked delivered and lost, and the per-event catch keeps one bad
+        // event from aborting the whole drain.
+        const pr = await prs.getPr(event.node);
+        // When a live worker holds this node, its address rides the event and
+        // the session relays instead of letting the item cold-start.
+        const agent = await workers.refFor(event.node, session);
+        // A ticket event has no PR payload; the session re-reads the ticket
+        // through the tracker adapter. A PR event renders from the snapshot
+        // the poll already stored — no subprocess, so no per-tick push cap.
+        const snapshot =
+          event.kind === 'ticket_changed' ||
+          pr?.repo == null ||
+          pr.prNumber == null
+            ? null
+            : await watches.latestSnapshot(event.node);
+        const body =
+          snapshot !== null && pr?.repo != null && pr.prNumber != null
+            ? renderSnapshot(pr.repo, pr.prNumber, snapshot)
+            : event.kind === 'ticket_changed'
+              ? `${event.summary} Re-read the ticket through the tracker adapter before acting.`
+              : `${event.summary} No snapshot was stored; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`;
+        const meta = {
+          // `agent` is the router's reserved key: stamped after the spread so
+          // no event producer can smuggle an address in.
           ...event.meta,
           ...(agent === null ? {} : {agent}),
           item: event.node,
           ...(pr?.repo == null ? {} : {repo: pr.repo}),
           ...(pr?.prNumber == null ? {} : {pr: String(pr.prNumber)}),
-        },
-        payload ??
-          (event.kind === 'ticket_changed'
-            ? `${event.summary} Re-read the ticket through the tracker adapter before acting.`
-            : `${event.summary} No snapshot was stored; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`)
-      );
+        };
+
+        // The claim is the last DB write before the push, and conditional:
+        // with session-NULL events drainable by any server, only the one that
+        // wins the claim pushes. It has to precede the push, so the single
+        // residual is a push that throws after the claim — a failed stdout
+        // write, i.e. a dying server, which a retry could not have helped.
+        if (!(await events.markDelivered(event.id, at))) continue;
+        channel.push(event.kind, meta, body);
+      } catch (error) {
+        log?.error('event delivery failed', {
+          node: event.node,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   });
 }

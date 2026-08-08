@@ -9,7 +9,12 @@ import {
   WatchStore,
   WorkerStore,
 } from '../stores/index.mts';
-import {githubSnapshot, pollWatches, renderSnapshot} from '../watch/index.mts';
+import {
+  adoptOrphans,
+  githubSnapshot,
+  pollWatches,
+  renderSnapshot,
+} from '../watch/index.mts';
 import type {Snapshotter} from '../watch/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
@@ -21,6 +26,8 @@ const PROBE_DELAY_CAP_MS = 60_000;
 export interface TickState {
   readonly registryId: string;
   readonly maxParallel?: number | undefined;
+  /** Last adoption sweep; a slow cadence, since orphans are rare. */
+  adoptDueAtMs: number;
   probeDelayMs: number;
   probeDueAtMs: number;
   /** The session's row was retired; scheduling stops for good. */
@@ -34,6 +41,7 @@ export function createTickState(
   return {
     registryId,
     maxParallel,
+    adoptDueAtMs: 0,
     probeDelayMs: PROBE_DELAY_MS,
     probeDueAtMs: 0,
     retired: false,
@@ -100,6 +108,18 @@ export async function runServerTick(
   await schedule();
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure sets `state.retired`; the analyzer cannot see the write
   if (state.retired) return;
+
+  if (nowMs >= state.adoptDueAtMs) {
+    state.adoptDueAtMs = nowMs + 900_000;
+    try {
+      const adopted = await adoptOrphans(env, {log: opts.log});
+      if (adopted > 0) opts.log?.info('adopted orphaned PRs', {adopted});
+    } catch (error) {
+      opts.log?.error('adoption sweep failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   try {
     const {fired} = await pollWatches(env, {

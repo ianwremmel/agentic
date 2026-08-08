@@ -235,6 +235,19 @@ export class WatchStore {
     );
   }
 
+  /** The last snapshot a poll stored for a node, or null. */
+  async latestSnapshot(node: string): Promise<PrSnapshot | null> {
+    const row = this.#db.get(
+      `SELECT w.snapshot FROM watch w
+       JOIN node n ON n.id = w.node_id
+       WHERE n.external_id = ?`,
+      [node]
+    );
+    return typeof row?.snapshot === 'string'
+      ? (JSON.parse(row.snapshot) as PrSnapshot)
+      : null;
+  }
+
   async clear(node: string): Promise<boolean> {
     return (
       this.#db.run(

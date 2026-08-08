@@ -6,23 +6,12 @@ import {
   PrEventStore,
   PrStore,
   SessionStore,
-  WorkerStore,
+  WatchStore,
 } from '../stores/index.mts';
-import {
-  githubSnapshot,
-  pollWatches,
-  prStatusPayload,
-  prStatusScript,
-} from '../watch/index.mts';
+import {githubSnapshot, pollWatches, renderSnapshot} from '../watch/index.mts';
 import type {Snapshotter} from '../watch/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
-
-/**
- * Observations pushed per tick. Each costs a `pr-status` read, and the tick
- * holds this session's heartbeat while it runs.
- */
-const MAX_PUSHES_PER_TICK = 8;
 
 /** First probe retry delay; doubles per unanswered probe up to the cap. */
 const PROBE_DELAY_MS = 5_000;
@@ -130,7 +119,7 @@ export async function runServerTick(
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure assigns `acked`; the analyzer cannot see the write
   if (acked) {
     try {
-      await pushObservations(channel, env, state.registryId, now, opts.log);
+      await pushObservations(channel, env, state.registryId, now);
     } catch (error) {
       // A push failure must not cost this tick's already-claimed orders; the
       // rows stay undelivered and the next tick retries.
@@ -154,35 +143,35 @@ async function pushObservations(
   channel: ChannelWriter,
   env: NodeJS.ProcessEnv,
   session: string,
-  at: string,
-  log?: Logger
+  at: string
 ): Promise<void> {
   await withDatabase(undefined, env, async (db) => {
     const events = new PrEventStore(db);
     const prs = new PrStore(db);
-    const workers = new WorkerStore(db);
-    const script = prStatusScript();
-    // Bounded per tick: each event costs a `pr-status` read, and the tick
-    // holds the heartbeat. Draining fifty of them serially would stop this
-    // session heartbeating for long enough to be swept as stale, which
-    // cascades its claims and re-dispatches the very work these events were
-    // about. What does not fit goes out next tick, in seq order.
-    for (const event of await events.undelivered(
-      session,
-      MAX_PUSHES_PER_TICK
-    )) {
+    const watches = new WatchStore(db);
+    for (const event of await events.undelivered(session)) {
+      // Claim before pushing: another server may be draining the same
+      // session-NULL rows, and the conditional mark is what guarantees one
+      // delivery.
+      if (!(await events.markDelivered(event.id, at))) continue;
       const pr = await prs.getPr(event.node);
       // When a live worker holds this node, its address rides the event and
       // the session relays instead of letting the item cold-start.
       const agent = await workers.refFor(event.node, session);
       // A ticket event has no PR payload to carry; the session re-reads the
-      // ticket through the tracker adapter instead.
-      const payload =
+      // ticket through the tracker adapter instead. For PR events the body
+      // renders from the snapshot the poll already stored — no subprocess,
+      // so there is no per-tick push cap to protect the heartbeat with.
+      const snapshot =
         event.kind === 'ticket_changed' ||
         pr?.repo == null ||
         pr.prNumber == null
           ? null
-          : await prStatusPayload(pr.repo, pr.prNumber, {script, log});
+          : await watches.latestSnapshot(event.node);
+      const payload =
+        snapshot === null || pr?.repo == null || pr.prNumber == null
+          ? null
+          : renderSnapshot(pr.repo, pr.prNumber, snapshot);
       channel.push(
         event.kind,
         {
@@ -197,7 +186,7 @@ async function pushObservations(
         payload ??
           (event.kind === 'ticket_changed'
             ? `${event.summary} Re-read the ticket through the tracker adapter before acting.`
-            : `${event.summary} The pr-status payload could not be read; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`)
+            : `${event.summary} No snapshot was stored; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`)
       );
     }
   });

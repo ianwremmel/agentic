@@ -109,18 +109,6 @@ export async function runServerTick(
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure sets `state.retired`; the analyzer cannot see the write
   if (state.retired) return;
 
-  if (nowMs >= state.adoptDueAtMs) {
-    state.adoptDueAtMs = nowMs + 900_000;
-    try {
-      const adopted = await adoptOrphans(env, {log: opts.log});
-      if (adopted > 0) opts.log?.info('adopted orphaned PRs', {adopted});
-    } catch (error) {
-      opts.log?.error('adoption sweep failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
   try {
     const {fired} = await pollWatches(env, {
       snapshot: opts.snapshot ?? githubSnapshot,
@@ -139,6 +127,17 @@ export async function runServerTick(
 
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure assigns `acked`; the analyzer cannot see the write
   if (acked) {
+    if (nowMs >= state.adoptDueAtMs) {
+      state.adoptDueAtMs = nowMs + 900_000;
+      try {
+        const adopted = await adoptOrphans(env, {log: opts.log});
+        if (adopted > 0) opts.log?.info('adopted orphaned PRs', {adopted});
+      } catch (error) {
+        opts.log?.error('adoption sweep failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     try {
       await pushObservations(channel, env, state.registryId, now, opts.log);
     } catch (error) {

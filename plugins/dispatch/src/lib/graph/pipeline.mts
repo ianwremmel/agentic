@@ -62,7 +62,9 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   with no live claim and no outcome is a crashed run — its claim is stale or
  *   was already swept away with its session — re-served as `resume`; a
  *   recorded outcome re-admits the item for exactly one follow-up
- *   pass — `verify` for a delivered ticket (a bare PR is done at delivered),
+ *   pass — an `adopted` PR is an existing PR, so `resume` (re-derive from the
+ *   forge), never `available` (implement from a title); `verify` for a
+ *   delivered ticket (a bare PR is done at delivered),
  *   `finalize` for a decomposed parent whose subtasks all resolved, `retry`
  *   for a retryable failure, and `resume` for a ticket whose `human-blocked`
  *   outcome a later tracker update contradicts — the ticket was updated after
@@ -219,7 +221,8 @@ item AS (
     t.priority,
     t.branch_hint,
     t.labels,
-    t.updated_at
+    t.updated_at,
+    NULL AS origin
   FROM ticket t
   JOIN node n ON n.id = t.node_id
   JOIN node np ON np.id = t.project_id
@@ -239,7 +242,8 @@ item AS (
     pr.priority,
     pr.branch,
     '[]',
-    pr.updated_at
+    pr.updated_at,
+    pr.origin
   FROM pr
   JOIN node n ON n.id = pr.node_id
   LEFT JOIN node nt ON nt.id = pr.ticket_id
@@ -311,6 +315,8 @@ queued AS (
       WHEN requires_human = 1
         OR classification IN ('verified', 'canceled', 'human-blocked', 'dormant')
         THEN NULL
+      WHEN outcome IS NULL AND classification = 'available'
+        AND origin = 'adopted' THEN 'resume'
       WHEN outcome IS NULL AND classification = 'available' THEN 'available'
       WHEN outcome IS NULL AND (claim_live IS NULL OR claim_live = 0)
         AND classification = 'in-flight'

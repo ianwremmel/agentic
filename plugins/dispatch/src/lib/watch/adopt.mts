@@ -78,18 +78,32 @@ export async function adoptOrphans(
         });
         continue;
       }
-      const known = new Set(
-        db
-          .all('SELECT branch, pr_number FROM pr WHERE repo = ?', [repo])
-          .flatMap((row) => [
-            typeof row.branch === 'string' ? row.branch : '',
-            `#${typeof row.pr_number === 'number' ? String(row.pr_number) : ''}`,
-          ])
-      );
+      // A PR's identity is its number: two open PRs can share a head name
+      // (same-named branches across forks), and the branch alone would let the
+      // second overwrite the first's row. The set carries both keys so an
+      // item registered under either scheme — a ticket-worker's branch id, an
+      // earlier adoption's number — is recognized.
+      const known = new Set<string>();
+      for (const row of db.all(
+        'SELECT branch, pr_number FROM pr WHERE repo = ?',
+        [repo]
+      )) {
+        if (typeof row.branch === 'string' && row.branch !== '')
+          known.add(row.branch);
+        if (typeof row.pr_number === 'number')
+          known.add(`#${String(row.pr_number)}`);
+      }
       for (const pr of open) {
-        if (known.has(pr.headRefName) || known.has(`#${String(pr.number)}`)) {
+        // A listing with no number or head ref is malformed; skip it rather
+        // than register a nameless item.
+        if (!Number.isInteger(pr.number) || pr.headRefName === '') continue;
+        if (known.has(`#${String(pr.number)}`) || known.has(pr.headRefName)) {
           continue;
         }
+        // Remember the number so the same PR is not re-adopted; not the head
+        // name, since a different fork PR can share it and still deserves a
+        // row of its own.
+        known.add(`#${String(pr.number)}`);
         // A branch led by a ticket id the graph holds is that ticket's work.
         const match = /^([a-z]+-\d+)/iu.exec(pr.headRefName);
         const ticketId = match?.[1]?.toUpperCase();
@@ -98,7 +112,7 @@ export async function adoptOrphans(
             ? ticketId
             : null;
         await prs.upsertPr({
-          id: `${repo}#${pr.headRefName}`,
+          id: `${repo}#${String(pr.number)}`,
           ticket,
           origin: 'adopted',
           repo,

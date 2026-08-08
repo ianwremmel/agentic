@@ -45,7 +45,7 @@ describe('adoptOrphans', () => {
     });
     assert.equal(adopted, 1);
     await withDatabase(undefined, env, async (db) => {
-      const pr = await new PrStore(db).getPr('o/r#clc-9-do-the-thing');
+      const pr = await new PrStore(db).getPr('o/r#7');
       assert.ok(pr !== null);
       assert.equal(pr.origin, 'adopted');
       assert.equal(pr.ticket, 'CLC-9');
@@ -60,10 +60,7 @@ describe('adoptOrphans', () => {
       list: () => Promise.resolve([{number: 8, headRefName: 'fix/oneoff'}]),
     });
     await withDatabase(undefined, env, async (db) => {
-      assert.equal(
-        (await new PrStore(db).getPr('o/r#fix/oneoff'))?.ticket,
-        null
-      );
+      assert.equal((await new PrStore(db).getPr('o/r#8'))?.ticket, null);
     });
   });
 
@@ -81,5 +78,52 @@ describe('adoptOrphans', () => {
       }),
       0
     );
+  });
+});
+
+describe('adoptOrphans identity and dispatch', () => {
+  it('keys on the PR number so a shared head name does not collide', async () => {
+    const env = await tempEnv();
+    await fixture(env);
+    // Two open PRs with the same head ref (forks): both must register, under
+    // distinct number-keyed ids, not overwrite each other.
+    const adopted = await adoptOrphans(env, {
+      list: () =>
+        Promise.resolve([
+          {number: 10, headRefName: 'shared'},
+          {number: 11, headRefName: 'shared'},
+        ]),
+    });
+    assert.equal(adopted, 2);
+    await withDatabase(undefined, env, async (db) => {
+      assert.ok((await new PrStore(db).getPr('o/r#10')) !== null);
+      assert.ok((await new PrStore(db).getPr('o/r#11')) !== null);
+    });
+  });
+
+  it('skips a malformed listing entry', async () => {
+    const env = await tempEnv();
+    await fixture(env);
+    const adopted = await adoptOrphans(env, {
+      list: () => Promise.resolve([{number: 0, headRefName: ''}]),
+    });
+    assert.equal(adopted, 0);
+  });
+
+  it('an adopted PR dispatches as resume, not available', async () => {
+    const env = await tempEnv();
+    await fixture(env);
+    await adoptOrphans(env, {
+      list: () => Promise.resolve([{number: 12, headRefName: 'x'}]),
+    });
+    await withDatabase(undefined, env, async (db) => {
+      const {dispatchQueue} = await import('../graph/index.mts');
+      const entry = (await dispatchQueue(db, {now: nowIso()})).find(
+        (e) => e.entry.item.id === 'o/r#12'
+      );
+      // A resume pass makes the pr-worker re-derive from the existing PR;
+      // available would have it implement from the synthetic title.
+      assert.equal(entry?.pass, 'resume');
+    });
   });
 });

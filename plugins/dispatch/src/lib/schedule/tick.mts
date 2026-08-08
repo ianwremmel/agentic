@@ -149,6 +149,7 @@ async function pushObservations(
     const events = new PrEventStore(db);
     const prs = new PrStore(db);
     const watches = new WatchStore(db);
+    const workers = new WorkerStore(db);
     for (const event of await events.undelivered(session)) {
       // Claim before pushing: another server may be draining the same
       // session-NULL rows, and the conditional mark is what guarantees one

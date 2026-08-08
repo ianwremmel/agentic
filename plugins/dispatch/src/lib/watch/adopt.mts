@@ -78,20 +78,39 @@ export async function adoptOrphans(
         });
         continue;
       }
-      // A PR's identity is its number: two open PRs can share a head name
-      // (same-named branches across forks), and the branch alone would let the
-      // second overwrite the first's row. The set carries both keys so an
-      // item registered under either scheme — a ticket-worker's branch id, an
-      // earlier adoption's number — is recognized.
+      // What "known" means, and why numbers and branches are scoped
+      // differently. A number is a PR's permanent identity: it is never reused
+      // for a different PR, and re-adopting one can never help — upsert only
+      // rewrites the pr row, it does not clear a stale outcome — so every
+      // numbered row contributes its number, concluded or not. Re-adopting a
+      // reopened-but-still-concluded PR would just churn a phantom adoption
+      // each tick without ever making it live again.
+      //
+      // A branch is not an identity key. Two open PRs can share a head name
+      // (same-named branches across forks), so a numbered row's branch must
+      // not suppress a distinct fork PR that reuses it — the number already
+      // guards that row. Only a row with no number yet contributes its branch:
+      // a ticket-worker's registration made before its PR opens, which
+      // adoption must not race. And only while that row is live — once it
+      // concludes, its branch is free for later work to reuse, and a stale row
+      // must not block adopting the new PR that inherits the name.
       const known = new Set<string>();
       for (const row of db.all(
-        'SELECT branch, pr_number FROM pr WHERE repo = ?',
+        `SELECT p.branch AS branch, p.pr_number AS pr_number,
+                o.node_id AS outcome_node
+         FROM pr p
+         LEFT JOIN outcome o ON o.node_id = p.node_id
+         WHERE p.repo = ?`,
         [repo]
       )) {
-        if (typeof row.branch === 'string' && row.branch !== '')
-          known.add(row.branch);
         if (typeof row.pr_number === 'number')
           known.add(`#${String(row.pr_number)}`);
+        else if (
+          row.outcome_node === null &&
+          typeof row.branch === 'string' &&
+          row.branch !== ''
+        )
+          known.add(row.branch);
       }
       for (const pr of open) {
         // A listing with no number or head ref is malformed; skip it rather

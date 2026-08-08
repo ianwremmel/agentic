@@ -7,6 +7,7 @@ import {
   PrStore,
   SessionStore,
   WatchStore,
+  WorkerStore,
 } from '../stores/index.mts';
 import {githubSnapshot, pollWatches, renderSnapshot} from '../watch/index.mts';
 import type {Snapshotter} from '../watch/index.mts';

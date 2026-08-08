@@ -32,7 +32,7 @@ export const githubLister: PrLister = async (repo) => {
       '--json',
       'number,headRefName',
     ],
-    {timeout: 30_000}
+    {timeout: 30_000, maxBuffer: 8 * 1024 * 1024}
   );
   return JSON.parse(stdout) as OpenPr[];
 };

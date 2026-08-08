@@ -41,9 +41,8 @@ the PR itself), and — for an item a ticket-worker registered — `ticket`.
 ## Relayed events
 
 While you run, the orchestrate session may relay a channel event for your
-item. React to it and continue your run — it replaces a `pr-status` poll, not
-your judgment; the body carries the `pr-status` payload when one could be
-read, and you re-read anything you doubt.
+item. React to it and continue your run. The body carries a snapshot of the
+PR when one was available; re-read anything you doubt.
 
 One event carries everything one tick saw: the `kind` is only the most
 significant change, and the `changed` meta key lists every kind that fired.

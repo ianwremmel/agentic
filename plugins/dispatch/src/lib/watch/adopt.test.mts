@@ -4,7 +4,12 @@ import {describe, it} from 'node:test';
 import {tempEnv, ticket} from '../command/test-support.mts';
 import {withDatabase} from '../db/index.mts';
 import {nowIso} from '../db/time.mts';
-import {ProjectStore, PrStore, TicketStore} from '../stores/index.mts';
+import {
+  CoordinationStore,
+  ProjectStore,
+  PrStore,
+  TicketStore,
+} from '../stores/index.mts';
 import {adoptOrphans} from './adopt.mts';
 
 async function fixture(env: NodeJS.ProcessEnv): Promise<void> {
@@ -17,7 +22,7 @@ async function fixture(env: NodeJS.ProcessEnv): Promise<void> {
     await new TicketStore(db).upsertTicket(ticket('CLC-9', 'P'));
     // One known item is what puts the repo in scope for adoption at all.
     await new PrStore(db).upsertPr({
-      id: 'o/r#known-branch',
+      id: 'o/r#1',
       ticket: null,
       origin: 'prompt',
       repo: 'o/r',
@@ -69,7 +74,7 @@ describe('adoptOrphans', () => {
     await fixture(env);
     const lister = () => Promise.resolve([{number: 7, headRefName: 'clc-9-x'}]);
     assert.equal(await adoptOrphans(env, {list: lister}), 1);
-    // Second sweep: the branch is known now; nothing re-adopts.
+    // Second sweep: the number is known now; nothing re-adopts.
     assert.equal(await adoptOrphans(env, {list: lister}), 0);
     // A failing repo listing costs that repo, not the sweep.
     assert.equal(
@@ -99,6 +104,99 @@ describe('adoptOrphans identity and dispatch', () => {
       assert.ok((await new PrStore(db).getPr('o/r#10')) !== null);
       assert.ok((await new PrStore(db).getPr('o/r#11')) !== null);
     });
+  });
+
+  it("adopts a fork PR that reuses a numbered item's head name", async () => {
+    const env = await tempEnv();
+    await fixture(env);
+    // The fixture item o/r#1 is numbered and lives on branch 'known-branch'.
+    // A distinct fork PR on the same head name is its own work: the numbered
+    // row's branch must not suppress it.
+    const adopted = await adoptOrphans(env, {
+      list: () => Promise.resolve([{number: 99, headRefName: 'known-branch'}]),
+    });
+    assert.equal(adopted, 1);
+    await withDatabase(undefined, env, async (db) => {
+      assert.ok((await new PrStore(db).getPr('o/r#99')) !== null);
+    });
+  });
+
+  it("adopts a new PR that reuses a concluded item's branch", async () => {
+    const env = await tempEnv();
+    await fixture(env);
+    // A ticket-worker registered a branch-keyed row (no number yet), which
+    // then concluded. A later open PR reuses that branch name; the stale row
+    // must not block adopting it.
+    await withDatabase(undefined, env, async (db) => {
+      await new PrStore(db).upsertPr({
+        id: 'o/r#legacy',
+        ticket: null,
+        origin: 'prompt',
+        repo: 'o/r',
+        prNumber: null,
+        url: null,
+        branch: 'reused-branch',
+        title: 'legacy',
+        injected: false,
+        priority: null,
+        updatedAt: nowIso(),
+      });
+      await new CoordinationStore(db).recordOutcome(
+        {
+          node: 'o/r#legacy',
+          outcome: 'delivered',
+          retryable: null,
+          detail: null,
+          recordedAt: nowIso(),
+        },
+        {session: 's'}
+      );
+    });
+    const adopted = await adoptOrphans(env, {
+      list: () => Promise.resolve([{number: 5, headRefName: 'reused-branch'}]),
+    });
+    assert.equal(adopted, 1);
+    await withDatabase(undefined, env, async (db) => {
+      assert.ok((await new PrStore(db).getPr('o/r#5')) !== null);
+    });
+  });
+
+  it('never re-adopts a concluded numbered PR that reopens', async () => {
+    const env = await tempEnv();
+    await fixture(env);
+    // o/r#5 concluded, then GitHub reopens PR #5. A number is a permanent
+    // identity: adoption must leave it alone. Re-adopting would only rewrite
+    // the pr row — the stale outcome stays, so the item never goes live — and
+    // the sweep would churn a phantom adoption every tick.
+    await withDatabase(undefined, env, async (db) => {
+      await new PrStore(db).upsertPr({
+        id: 'o/r#5',
+        ticket: null,
+        origin: 'prompt',
+        repo: 'o/r',
+        prNumber: 5,
+        url: null,
+        branch: 'was-shipped',
+        title: 'concluded',
+        injected: false,
+        priority: null,
+        updatedAt: nowIso(),
+      });
+      await new CoordinationStore(db).recordOutcome(
+        {
+          node: 'o/r#5',
+          outcome: 'delivered',
+          retryable: null,
+          detail: null,
+          recordedAt: nowIso(),
+        },
+        {session: 's'}
+      );
+    });
+    const adopted = await adoptOrphans(env, {
+      list: () => Promise.resolve([{number: 5, headRefName: 'was-shipped'}]),
+    });
+    assert.equal(adopted, 0);
   });
 
   it('skips a malformed listing entry', async () => {

@@ -47,25 +47,36 @@ The server reacts to changes in the sources it can reach without an MCP client:
 GitHub (PR comments, reviews, state changes) and the CI provider directly, and
 its own graph DB. For each source it picks the least-expensive strategy that
 works — an SDK/streaming watch, a watch subprocess, or polling with a dynamic
-interval — and coalesces same-kind changes to one PR seen on the same tick into a
-single event (changes differing in kind or PR stay distinct, ordered events).
+interval — and coalesces everything one tick saw about one PR into a single
+event, so a worker wakes once and reacts to all of it (changes on different PRs
+stay distinct, ordered events; a terminal merge or close stands alone, since
+nothing else about a finished PR still matters).
 
-Two kinds of thing reach the session. **PR/CI triggers** report a change on a
-watched PR; their body is the PR-status reader's output — the same bytes the
-session would fetch anyway — and the session applies its own judgment. Deciding
-what a review or a failing check demands is not deterministic, so it stays the
-session's job. **Work orders** are the opposite: the CLI does the deterministic
+Three families of events reach the session. **Triggers** report a change on
+something watched — a PR, or a ticket whose tracker write revealed a status
+move. A PR trigger's body is the server's own rendering of the snapshot it
+already polled — the same vocabulary the session reads through the PR-status
+reader, without a subprocess per event — or, before any snapshot is stored, an
+instruction to fetch the state itself. Either way the session applies its own
+judgment: deciding what a review or a failing check demands is not
+deterministic. **Work orders** are the opposite: the CLI does the deterministic
 graph reasoning itself — ranking the frontier, applying milestone gates,
 accounting for capacity, claiming — and tells the session exactly what to do next
-(coordinate this ticket, review this milestone, refresh the graph). The session
-runs the named skill and never has to read or understand the graph.
+(coordinate this ticket, review this milestone). The session
+runs the named skill and never has to read or understand the graph. **Ingest
+instructions**, the third family, delegate the reads the server cannot make —
+next paragraph.
 
 One source the server **cannot** reach is a tracker exposed only over MCP (Linear
 today). A channel is an MCP server, not a client; it cannot call another MCP
-server. So a tracker refresh is delegated: the server pushes fetch
-instructions (`scan_project`, `fetch_ticket`) and the session — which holds the
-MCP client and the tracker adapter skill — fetches and writes the delta back
-through the flat `dispatch` write commands, which the server observes. The trust boundary the rest of the spec relies on (MCP access
+server. So a tracker refresh is delegated: the server pushes ingest
+instructions (`scan_project`, `fetch_ticket`, and `refresh_ticket` for
+in-flight and parked tickets whose tracker state can move under the graph) and the session
+— which holds the MCP client and the tracker adapter skill — fetches and writes
+the delta back through the flat `dispatch` write commands, which the server
+observes. A status transition one of those writes reveals comes back to the
+session as a `ticket_changed` event, so the server owns the *when* of every
+re-read and the session only ever answers. The trust boundary the rest of the spec relies on (MCP access
 stays in the session) is preserved, and the server drives the refresh instead of
 a skill self-timing it.
 

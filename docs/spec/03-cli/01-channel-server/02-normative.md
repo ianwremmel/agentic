@@ -33,9 +33,9 @@ in context — or short-lived, spawned per event. A resumable subagent holds no 
 between events, so its spawner MUST NOT treat it as live. Either way the graph DB and
 `dispatch pr-status` remain the source of truth: a subagent MUST be able to
 reconstruct its state from them (this is also the recovery path after an orchestrator
-restart), and the waiting MUST stay in the server — a subagent MUST NOT run a
-foreground poll loop. This reconceives §2.6's continuously-running nested actors and
-is subject to reconciliation with §2.6.
+restart), and in channel mode the waiting MUST stay in the server — a subagent
+MUST NOT run a foreground poll loop. ([Fallback mode](#fallback-mode), where no
+channel delivers, is the one place skills loop for themselves.)
 
 ### Channel capability
 
@@ -168,11 +168,11 @@ Each event is a `notifications/claude/channel` notification with `content` (the
 tag body, a string) and `meta` (a string→string map rendered as tag attributes).
 Every event MUST carry:
 
-| Attribute | Source        | Meaning                                                                                        |
-| --------- | ------------- | ---------------------------------------------------------------------------------------------- |
+| Attribute | Source        | Meaning                                                                                               |
+| --------- | ------------- | ----------------------------------------------------------------------------------------------------- |
 | `source`  | set by runner | The runner's name for the server — `plugin:dispatch:mcp`, not `dispatch`. The server MUST NOT set it. |
-| `kind`    | `meta`        | The event kind (tables below).                                                                 |
-| `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.                                  |
+| `kind`    | `meta`        | The event kind (tables below).                                                                        |
+| `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.                                         |
 
 The channel layer does not dedupe attributes: a `source` key in `meta` emits a
 second `source` attribute on the tag rather than overriding the runner's. The
@@ -184,47 +184,123 @@ never `pr-number`). Values MUST be strings — a non-string value fails the
 runner's schema validation and costs the whole event, so the server MUST
 stringify before pushing.
 
-Bodies MUST NOT be assembled from raw external text. A PR/CI event body MUST be
-the `dispatch pr-status` payload for the referenced PR; a work-order or `probe`
-body MUST be a short instruction naming the work. This keeps the injected content
-identical to what the session already reads through the CLI. The runner rewrites a `</channel>`
-in a body so it cannot close the tag early, but it does not strip a `<channel …>`
-opener; the server MUST NOT rely on that rewriting in place of the rule above.
+Observation events (the PR/CI and graph triggers below) additionally carry
+routing keys the pusher stamps at delivery time, after the per-kind meta, so no
+event producer can forge them:
+
+| Attribute    | Meaning                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------- |
+| `item`       | The graph node the event belongs to.                                                               |
+| `repo`, `pr` | The node's registered PR, when it has one.                                                         |
+| `agent`      | The recorded address of the worker on the node (`dispatch worker set`), when this session has one. |
+
+`agent` names a **resumable** worker — one that has returned and holds no
+process, but whose spawner can re-invoke it by that address with its context
+intact. The recording session is the only one that can, so the delivering
+server stamps `agent` only from its own session's worker table; an event
+delivered by another session carries none, and that session treats it as
+informational.
+
+A coalesced event (see [Ordering and coalescing](#ordering-and-coalescing))
+also carries `changed` — every kind that fired on the tick, comma-joined. It is
+written by the server's coalescer, not the delivery stamp, and is present only
+when more than one kind fired; its absence means the `kind` is the whole story.
+
+`agent` is what lets the orchestrator relay the event to the worker already
+holding the item instead of cold-starting a resume pass; an event without one
+names no reachable worker, and the session dispatches accordingly.
+
+Bodies MUST NOT be assembled from raw external text, and MUST NOT cost a
+per-event subprocess: the server renders a PR/CI event body itself from its
+stored snapshot for the PR — the latest state its poll recorded, at least as
+new as the change the event reports. The event is the wake signal and the body
+the freshest stored state, not a transcript of the moment the change was
+observed; a worker that needs canonical current state re-reads it. The
+rendering uses the XML vocabulary the worker already reads from `dispatch
+pr-status`, and names `pr-status` as the deep read to run for actionability
+classification and cached comment bodies. Where no snapshot is stored, the
+body MUST say so and instruct the worker to run `pr-status` itself. A
+`ticket_changed` body MUST instruct the session to re-read the ticket through
+the tracker adapter — the
+graph's copy is what just changed, so no body assembled from it is
+authoritative. A work-order or `probe` body MUST be a short instruction naming
+the work. The runner rewrites a `</channel>` in a body so it cannot close the
+tag early, but it does not strip a `<channel …>` opener; the server MUST NOT
+rely on that rewriting in place of the rules above.
 
 ### Event catalog
 
-**PR / CI triggers** — body is the `dispatch pr-status` payload for `repo`/`pr`.
+**PR / CI triggers** — body is the server's rendering of its stored snapshot
+(see [Notification format](#notification-format)); `repo`/`pr` ride the routing
+keys. A change authored by this agent — judged by its machine marker, never by
+the account, since shared credentials put the operator and the agent on one
+login — MUST NOT fire an event: waking a worker to report its own comment is
+the noise that would make server-side waiting worse than the polling it
+replaces.
 
-| kind              | `meta` (beyond source/kind/seq)                                        | fires when                                          |
-| ----------------- | --------------------------------------------------------------------- | --------------------------------------------------- |
-| `ci_finished`     | `repo`, `pr`, `rollup` = `success` \| `failure` \| `error`            | the check rollup reaches a terminal state           |
-| `pr_review`       | `repo`, `pr`, `state` = `approved` \| `changes` \| `comment`, `reviewer` | a review is submitted                            |
-| `pr_comment`      | `repo`, `pr`, `thread`                                                 | a new top-level comment or inline reply lands       |
-| `pr_state_change` | `repo`, `pr`, `state` = `ready` \| `draft` \| `merged` \| `closed`    | the PR changes lifecycle state                      |
+| kind              | `meta` (beyond source/kind/seq and routing keys)                | fires when                                                             |
+| ----------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `ci_finished`     | `rollup` = `success` \| `failure`; `failing` names the failures | the rollup settles (afresh for a new head), or the failing set changes |
+| `pr_review`       | `state` = `approved` \| `changes` \| `comment`, `reviewer`      | a review is submitted                                                  |
+| `pr_comment`      | `thread`                                                        | a new top-level comment or unresolved inline reply lands               |
+| `pr_state_change` | `state` = `ready` \| `draft` \| `merged` \| `closed`            | the PR changes lifecycle state                                         |
+| `pr_conflicted`   | `mergeState`                                                    | the PR stops merging cleanly against its base                          |
+| `pr_head_changed` | `head`                                                          | the head commit moves under the watch                                  |
+
+**Graph triggers** — observations the server's own database reveals, delivered
+through the same queue as the PR/CI triggers, with the same routing keys.
+
+| kind             | `meta` (beyond source/kind/seq and routing keys) | fires when                                                          |
+| ---------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
+| `ticket_changed` | `ticket`, `from`, `to`                           | a tracker write (`dispatch ticket set`) reveals a status transition |
+
+A `ticket_changed` row is written without a session, so any acked live server
+MAY deliver it. For every observation event the delivery mark MUST be a
+conditional claim taken as the last write before the push, so no event is ever
+delivered twice; the residual is a push that throws after the claim — a dying
+server — which loses that delivery rather than repeating it.
 
 **Ingest instructions** — the server delegates tracker reads it cannot make
 itself (§Work the server cannot do itself). Body is a short instruction naming
 the flat write commands to use.
 
-| kind               | `meta` (beyond source/kind/seq)     | asks the session to                                    |
-| ------------------ | ----------------------------------- | ------------------------------------------------------ |
-| `scan_project`     | `tracker`, `projects`, `cursor`     | scan every ticket in those projects since the cursor   |
-| `fetch_ticket`     | `tracker`, `ticket`                 | fetch that one ticket (or report it `missing`)         |
-| `refresh_complete` | `tracker`                           | stop fetching; the graph is complete                   |
+| kind               | `meta` (beyond source/kind/seq) | asks the session to                                  |
+| ------------------ | ------------------------------- | ---------------------------------------------------- |
+| `scan_project`     | `tracker`, `projects`, `cursor` | scan every ticket in those projects since the cursor |
+| `fetch_ticket`     | `tracker`, `ticket`             | fetch that one ticket (or report it `missing`)       |
+| `refresh_ticket`   | `tracker`, `ticket`             | re-fetch one watched ticket (or report it `missing`) |
+| `refresh_complete` | `tracker`                       | stop fetching; the graph is complete                 |
 
-**Work orders** — body is a short instruction naming the agent to launch. The
-server MUST do the graph reasoning (rank, gate, admit, and — for the dispatch
-kinds — claim) before emitting one; the session executes it and MUST NOT need
-to read the graph.
+`refresh_ticket` is how the server owns the *when* of ticket re-reads it cannot
+make itself: it MUST schedule one for each ticket whose tracker state can move
+under the graph — in-flight and parked statuses, not backlog or terminal ones,
+which the scan covers — on a cadence derived from the ticket's status. At most
+one ask per ticket is open at a time, and an ask that goes unanswered past a
+staleness window MUST be re-delivered rather than assumed to have arrived. The
+answering `dispatch ticket set` is the completion signal; a status transition
+that write reveals is pushed back as a `ticket_changed` event.
 
-| kind                       | `meta` (beyond source/kind/seq) | asks the session to                                                  |
-| -------------------------- | ------------------------------- | -------------------------------------------------------------------- |
-| `dispatch_ticket`          | `project`, `ticket`, `pass`     | launch a ticket-worker to coordinate the ticket (already claimed)    |
+**Work orders** — body is a short instruction naming the work: for the
+dispatch and review kinds, the agent to launch; for the rest, the tracker
+write or operator message to make. The server MUST do the graph reasoning
+(rank, gate, admit, and — for the dispatch kinds — claim) before emitting one;
+the session executes it and MUST NOT need to read the graph.
+
+| kind                       | `meta` (beyond source/kind/seq) | asks the session to                                                                                  |
+| -------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `dispatch_ticket`          | `project`, `ticket`, `pass`     | launch a ticket-worker to coordinate the ticket (already claimed)                                    |
 | `dispatch_pr`              | `pr`, `pass`, `ticket`          | launch a pr-worker to implement the PR item (already claimed); `ticket` only on a ticket-backed item |
-| `perform_milestone_review` | `project`, `milestone`          | launch a milestone-reviewer; the milestone is claimed                |
-| `park_human_blocked`       | `project`, `ticket`             | move a human-blocked ticket to its parked state and post the handoff (a tracker write) |
-| `alert_failure`            | `project`, `ticket`             | alert the operator that a ticket failed unrecoverably                |
-| `project_complete`         | `project`                       | record and announce that the project's work is done                  |
+| `perform_milestone_review` | `project`, `milestone`          | launch a milestone-reviewer; the milestone is claimed                                                |
+| `park_human_blocked`       | `project`, `ticket`             | move a human-blocked ticket to its parked state and post the handoff (a tracker write)               |
+| `alert_failure`            | see below                       | alert the operator about a node that cannot proceed without them                                     |
+| `project_complete`         | `project`                       | record and announce that the project's work is done                                                  |
+
+`alert_failure` covers two node shapes, distinguished by its meta: a ticket
+that failed unrecoverably carries `project` and `ticket`; a PR item carries
+`pr` (the item id) and, when ticket-backed, `ticket`. A PR item fires it for
+an unrecoverable failure and also for a `human-blocked` outcome — a PR item
+has no tracker status to park, so the alert is the only way the operator hears
+the question its worker left. Removing the outcome requeues the item.
 
 The last three carry the scheduler tick's non-scheduling duties in §2.6: the
 server detects the condition deterministically from the graph, fires each once
@@ -241,14 +317,29 @@ New event kinds MAY be added. Renaming an existing kind is a breaking change.
 
 ### Ordering and coalescing
 
-`seq` MUST increase monotonically per server. Changes of the **same kind on the
-same PR** observed on one tick MUST be coalesced into a single event; changes that
-differ in kind or PR MUST remain distinct events, since one event's
-`kind`/`repo`/`pr` are single-valued and merging heterogeneous changes would lose
-information. Events queued while the session is busy are delivered once it is
-free, each as its own turn, in `seq` order — the channel layer never merges two
-events, so all coalescing is the server's. The session MUST handle each event and,
-where an event may be stale by delivery time, re-read canonical state through the
+`seq` MUST increase monotonically per server. Everything one tick observed
+about **one PR** MUST be coalesced into a single event — one event per PR per
+tick. Delivering one event per change would interrupt a worker mid-reaction: it
+is told CI failed, starts fixing, and is then told a reviewer replied, which it
+must handle as a second turn without the first one's context. The worker
+already reads one status payload per wake and reacts to everything in it at
+once; the channel MUST NOT be worse than that. In the coalesced event the
+`kind` is a routing hint — the most significant change that fired, by the fixed
+priority `pr_state_change` > `pr_conflicted` > `ci_finished` > `pr_review` >
+`pr_head_changed` > `pr_comment` — the `changed` key lists every kind that
+fired (when more than one did), the per-kind meta of all of them rides along
+(the lead kind's keys winning a collision), and the body carries the whole
+state. Changes on different PRs MUST remain distinct events.
+
+One exception: a terminal lifecycle transition — the PR merged or closed — is
+reported alone, whatever else the tick saw. Once the PR has left its live
+state, same-tick CI, review, and comment changes are noise a closing-out
+worker would only have to ignore.
+
+Events queued while the session is busy are delivered once it is free, each as
+its own turn, in `seq` order — the channel layer never merges two events, so
+all coalescing is the server's. The session MUST handle each event and, where
+an event may be stale by delivery time, re-read canonical state through the
 corresponding `dispatch` command rather than acting on the body alone.
 
 ### Work the server cannot do itself
@@ -270,22 +361,22 @@ For each event source the server MUST use the least-expensive available strategy
 2. Watch subprocess (e.g. a `--watch`-mode CLI).
 3. Polling (fallback).
 
-| Source              | Default strategy                                                    |
-| ------------------- | ------------------------------------------------------------------- |
-| GitHub PR / issue   | Polling; dynamic cadence per stage                                  |
-| GitHub check rollup | `gh pr checks --watch` subprocess per watched PR with active CI     |
-| Buildkite build     | `bk build wait` subprocess                                          |
-| Graph DB            | SQLite read on the poll tick                                        |
+| Source              | Default strategy                                                |
+| ------------------- | --------------------------------------------------------------- |
+| GitHub PR / issue   | Polling; dynamic cadence per stage                              |
+| GitHub check rollup | `gh pr checks --watch` subprocess per watched PR with active CI |
+| Buildkite build     | `bk build wait` subprocess                                      |
+| Graph DB            | SQLite read on the poll tick                                    |
 
 Dynamic polling intervals:
 
-| Stage                              | Default interval                           |
-| ---------------------------------- | ------------------------------------------ |
-| Awaiting Copilot review            | 30 s                                       |
-| Awaiting CI on an active head      | 60 s once, then 5 min                      |
-| Awaiting human reviewer            | 5 min                                      |
-| Awaiting ticket transition         | 5 min                                      |
-| Idle (monitoring only)             | 15 min                                     |
+| Stage                         | Default interval      |
+| ----------------------------- | --------------------- |
+| Awaiting Copilot review       | 30 s                  |
+| Awaiting CI on an active head | 60 s once, then 5 min |
+| Awaiting human reviewer       | 5 min                 |
+| Awaiting ticket transition    | 5 min                 |
+| Idle (monitoring only)        | 15 min                |
 
 The server SHOULD tighten the interval near known high-likelihood transition
 points. Intervals MUST be data-driven, not constant. A watch subprocess or SDK
@@ -382,3 +473,17 @@ reach the session either through `--channels <entry>` or, for local development,
 `--dangerously-load-development-channels <entry>`. The declaration alone connects
 the server but registers no channel, and a named entry that clears no allowlist
 route registers none either.
+
+Registration is necessary, not sufficient: delivery is gated by three
+runner-side opt-ins — the channel-list entry above plus two others — and every
+one of them fails silently, the server seeing an ordinary MCP handshake while
+its pushes are dropped:
+
+1. The channel-list entry (`--channels` or, for an un-allowlisted plugin,
+   `--dangerously-load-development-channels plugin:<name>@<marketplace>`).
+2. `channelsEnabled: true` in the runner's managed settings.
+3. The operator answering the runner's full-screen channel confirmation dialog.
+
+No API reports which of the three is missing. This silence is why the mode
+marker is a positive acknowledgement handshake rather than any inspection of
+the runner: the only proof a channel delivers is an event that came back.

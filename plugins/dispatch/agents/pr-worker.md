@@ -30,9 +30,9 @@ number) as they come to exist — the server can only watch a PR it can name.
 
 ## Delivering the PR
 
-Work in a worktree at `<worktree_base>/<owner>/<repo>/<branch>` (the base is
-plugin config). Locate it with `git worktree list` — never guess; reuse it if
-present, create it with `git worktree add` if not.
+Work in a worktree at `${user_config.worktree_base}/<owner>/<repo>/<branch>`.
+Locate it with `git worktree list` — never guess; reuse it if present, create
+it with `git worktree add` if not.
 
 **Open the PR** — skip when one exists for the branch; a killed run may
 already have opened one, so look before opening:
@@ -48,12 +48,15 @@ already have opened one, so look before opening:
   rewrite the body. `<agent-id>` is this installation's stable marker id —
   `dispatch` unless configured otherwise.
 
-**Read PR state only through `pr-status`** (the plugin's script) and the cache
-files it writes — never `gh pr view`, `gh pr checks`, or raw API reads. `gh`
-is for writes: reply, react, request review, mark ready. Every actionability
-decision comes from the XML: an item marked `actionable="true"` is your task
-list; one marked `actionable="false"` is settled — its `<summary>` recaps what
-it said, not whether it is resolved, so never reopen one on the summary alone.
+**PR state comes to you.** The server watches the PR and wakes you with a
+message carrying its current state; act on that payload. When you need more
+than it carries — full comment text, actionability classification — run the
+plugin's `pr-status` script and read the cache files it writes; never
+`gh pr view`, `gh pr checks`, or raw API reads. `gh` is for writes: reply,
+react, request review, mark ready. An item marked `actionable="true"` is your
+task list; one marked `actionable="false"` is settled — its `<summary>` recaps
+what it said, not whether it is resolved, so never reopen one on the summary
+alone.
 
 **Coding happens in draft.** In every later stage, change code only as the
 fix to a gate failure below — that is addressing a concern in place, not
@@ -67,8 +70,9 @@ authored): one spec-aware (brief/docs + diff — find every drift), one
 spec-blind (diff alone — find every bug or claim-vs-implementation gap).
 Triage every finding: act on it, or dismiss it with one line naming it.
 
-**Gates.** Gates 1–5 gate every lifecycle transition and are re-checked from
-a fresh `pr-status` each time; gates 6–7 gate the merge:
+**Gates.** Evaluate them when a wake-up or your own finished work suggests
+the lifecycle can advance — from the pushed payload, with `pr-status` as the
+deep read. Gates 1–5 gate every transition; gates 6–7 gate the merge:
 
 1. CI passing on the current head commit — an earlier green does not count.
 2. No merge conflicts.
@@ -115,24 +119,18 @@ finished and what remains, leave the PR and the worktree in place for a
 resumed run, and record `human-blocked` with `detail` saying the operator
 stopped the run — removing the outcome is how they resume it.
 
-**Never wait in the foreground.** Wherever the lifecycle would wait — CI
-running, a reviewer pending, merge pending — hand the wait to the server:
-make sure the item's record carries its repo and PR number (`pr_set`), then
-call the `pr_yield` tool with `id: <item-id>` and return. The yield releases
-your claim, so the wait costs no compute, and the server's watch takes over.
-A refused yield names its own remedy in the error's hint — record the missing
-field, pass `session: <registry-id>` from the probe event when correlation is
-ambiguous, or investigate why the item already has an outcome. The one
-refusal that means stop is a claim held by another session: you were
-superseded, so return without arming anything. Never return with your own
-claim still held.
-
-Returning after a yield ends your turn, not your run: the orchestrate session
-recorded your address at launch, and when the PR moves it re-invokes you with
-the event as a new prompt, your earlier turns still in context (see below).
-If you cannot be reached, the scheduler dispatches a fresh worker with a
-`resume` pass instead — which is why every pass must leave the item's record
-and the PR itself able to tell the whole story.
+**Act, then yield.** Each wake-up — the dispatch pass, or a relayed event —
+carries work; do all of it, and when the next step belongs to someone else
+(CI running, a reviewer thinking, a merge pending), make sure the item's
+record carries its repo and PR number (`pr_set`), call the `pr_yield` tool
+with `id: <item-id>`, and return. The yield releases your claim, and the
+server polls the PR and wakes you again when something changes — a failed
+check, a requested change, the merge. A refused yield names its remedy in its
+error hint; the one refusal that means stop is a claim held by another
+session — you were superseded, so return without arming anything. Never
+return with your own claim still held, and leave the item's record and the PR
+able to tell the whole story: a later pass may be a fresh worker rather than
+you.
 
 ## Reporting
 

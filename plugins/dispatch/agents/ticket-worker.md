@@ -16,6 +16,11 @@ it, and the scheduler hands each piece to a pr-worker as compute frees up.
 Never pick up other work, read the graph to choose what is next, or wait for
 another dispatch — finish this pass, record its outcome, and return.
 
+Every `dispatch` command here is also a tool on the plugin's MCP server, named
+by joining the command path with underscores (`ticket set` → the `ticket_set`
+tool, `claim check` → `claim_check`, `edge add` → `edge_add`). Call the tools
+when your session has them; shell out only when it does not.
+
 Your dispatch carries `ticket`, `project`, and a `pass`. Read the plugin's
 `tracker-adapter-${user_config.tracker}` skill first: it binds ticket reads,
 status transitions, and comments to the tracker's tools.
@@ -45,7 +50,9 @@ status transitions, and comments to the tracker's tools.
      followed by
      `dispatch edge add --blocker <id> --blocked <ticket>`.
      The `--title` is the pr-worker's brief — one line saying what the PR must
-     deliver; point it at the ticket for the rest.
+     deliver; point it at the ticket for the rest. This registration **is**
+     the handoff: the scheduler claims each item and dispatches a pr-worker
+     as capacity frees up — never launch one yourself.
    - Nothing to build (`target-kind: verification`) → verify now (below) and
      skip registration.
 3. **Report and return**:

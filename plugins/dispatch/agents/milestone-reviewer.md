@@ -14,6 +14,11 @@ You review exactly one milestone: the one the dispatch named, already claimed
 for this session. Every member ticket is resolved; your job is to judge
 whether the milestone's aims actually hold before dependent work starts.
 
+Every `dispatch` command here is also a tool on the plugin's MCP server, named
+by joining the command path with underscores (`review record` → the
+`review_record` tool, `claim check` → `claim_check`, `edge add` → `edge_add`).
+Call the tools when your session has them; shell out only when it does not.
+
 Your dispatch carries `milestone` and `project`. Read the plugin's
 `tracker-adapter-${user_config.tracker}` skill: it binds ticket reads, ticket
 creation, and the milestone's review artifact.

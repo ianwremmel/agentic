@@ -29,15 +29,16 @@ Plugins currently published:
 
 - `plugins/dispatch/` — dispatch engineering work across pull requests and
   tracked work items. The CLI (`src/`) owns everything deterministic: the
-  graph store, the derived read-model, scheduling, claims, and slots; its MCP
-  server (`dispatch mcp`) pushes fetch instructions and work orders into the
-  session over a Claude Code channel. The `/orchestrate` skill is the resident
-  relay that answers them by launching the plugin's agents (`ticket-worker`,
-  `pr-worker`, `milestone-reviewer`). Trackers are pluggable: the workers
-  and `build-graph` load a per-tracker adapter skill (`tracker-adapter-<id>`);
-  `tracker-adapter-linear` ships bundled. The `land` skill is the standalone
-  single-PR path — stateless, started from a PR URL, a ticket URL, or a
-  prompt — and also the delivery engine the workers invoke per PR.
+  graph store, the derived read-model, scheduling, and claims; its MCP
+  server (`dispatch mcp`) watches PRs and pushes events, fetch instructions,
+  and work orders into the session over a Claude Code channel. The
+  `/orchestrate` skill is the resident relay that answers them by launching
+  the plugin's agents (`ticket-worker`, `pr-worker`, `milestone-reviewer`).
+  Trackers are pluggable: the workers and `build-graph` load a per-tracker
+  adapter skill (`tracker-adapter-<id>`); `tracker-adapter-linear` ships
+  bundled. The `land` skill is the standalone single-PR path — stateless,
+  started from a PR URL, a ticket URL, or a prompt; the pr-worker follows
+  its delivery process but yields waits to the server.
 
 ## Repo conventions
 
@@ -45,7 +46,7 @@ Plugins currently published:
   inside `.claude-plugin/`. Only `plugin.json` lives there. All other
   directories go at the plugin root.
 - **Determinism lives in the CLI.** If a step has one correct output for a
-  given input (e.g. slot and ledger bookkeeping, gate evaluation, parsing,
+  given input (e.g. claim and ledger bookkeeping, gate evaluation, parsing,
   formatting), implement it in the plugin's CLI and have the skill call it.
   Skill markdown is for judgment and orchestration. The exception is a hard
   runtime constraint: MCP tools exist only in the skill's agent session, so

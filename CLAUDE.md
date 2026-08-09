@@ -37,8 +37,9 @@ Plugins currently published:
   Trackers are pluggable: the workers and `build-graph` load a per-tracker
   adapter skill (`tracker-adapter-<id>`); `tracker-adapter-linear` ships
   bundled. The `land` skill is the standalone single-PR path — stateless,
-  started from a PR URL, a ticket URL, or a prompt; the pr-worker follows
-  its delivery process but yields waits to the server.
+  started from a PR URL, a ticket URL, or a prompt. The pr-worker's agent
+  definition describes the same delivery lifecycle itself, with waits
+  yielded to the server.
 
 ## Repo conventions
 

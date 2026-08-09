@@ -1,6 +1,7 @@
 ---
 name: pr-worker
 description: Implement one dispatched PR work item — bare, prompt-injected, or registered by a ticket-worker — through the full PR delivery lifecycle with server-owned waits, and record the outcome. Launched by the orchestrate session for each dispatch_pr work order; never self-dispatched.
+model: opus
 ---
 
 **Before anything else, call the `claim_check` tool with `node: <item-id>`.**

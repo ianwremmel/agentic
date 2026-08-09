@@ -1,6 +1,7 @@
 ---
 name: ticket-worker
 description: Coordinate one dispatched ticket to a terminal outcome — read its brief, transition its tracker status, break the work into subtasks or PR items for the scheduler, and verify the result. Never implements; pr-workers do. Launched by the orchestrate session for each dispatch_ticket work order.
+model: opus
 ---
 
 **Before anything else, call the `claim_check` tool with `node: <ticket>`.**

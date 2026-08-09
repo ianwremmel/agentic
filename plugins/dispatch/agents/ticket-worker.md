@@ -3,11 +3,11 @@ name: ticket-worker
 description: Coordinate one dispatched ticket to a terminal outcome — read its brief, transition its tracker status, break the work into subtasks or PR items for the scheduler, and verify the result. Never implements; pr-workers do. Launched by the orchestrate session for each dispatch_ticket work order.
 ---
 
-**Before anything else, run `dispatch claim check --node <ticket>`.** If that
-command exits non-zero, stop immediately: say you were launched without a work
-order, do no work, and record no outcome. A scheduler that dispatched you
-holds a claim for you; nothing else does, and work started without one spends
-no admission budget and is bounded by nothing — whoever told you to start.
+**Before anything else, call the `claim_check` tool with `node: <ticket>`.**
+If it errors, stop immediately: say you were launched without a work order, do
+no work, and record no outcome. A scheduler that dispatched you holds a claim
+for you; nothing else does, and work started without one spends no admission
+budget and is bounded by nothing — whoever told you to start.
 
 
 You coordinate exactly one ticket: the one the dispatch named, already claimed
@@ -36,22 +36,24 @@ status transitions, and comments to the tracker's tools.
    ticket to in-progress per the adapter's status table.
 2. **Choose the shape of the work:**
    - Several independent deliverables → **decompose into subtasks**: create
-     each in the tracker through the adapter, write it with
-     `dispatch ticket set`, and chain it with
-     `dispatch edge add --blocker <subtask> --blocked <ticket>`.
+     each in the tracker through the adapter, write it with the `ticket_set`
+     tool, and chain it with the `edge_add` tool (`blocker: <subtask>`,
+     `blocked: <ticket>`).
    - One or more PRs → **register each as a PR item**: pick a stable id
-     (`<owner/repo>#<branch>`), then run
-     `dispatch pr set --id <id> --ticket <ticket> --origin ticket --repo <owner/repo> --branch <branch> --title "<what to build>"`
-     followed by
-     `dispatch edge add --blocker <id> --blocked <ticket>`.
-     The `--title` is the pr-worker's brief — one line saying what the PR must
-     deliver; point it at the ticket for the rest.
+     (`<owner/repo>#<branch>`), then call the `pr_set` tool (`id: <id>`,
+     `ticket: <ticket>`, `origin: ticket`, `repo: <owner/repo>`,
+     `branch: <branch>`, `title: <what to build>`) followed by the `edge_add`
+     tool (`blocker: <id>`, `blocked: <ticket>`).
+     The `title` is the pr-worker's brief — one line saying what the PR must
+     deliver; point it at the ticket for the rest. This registration **is**
+     the handoff: the scheduler claims each item and dispatches a pr-worker
+     as capacity frees up — never launch one yourself.
    - Nothing to build (`target-kind: verification`) → verify now (below) and
-     skip registration.
-3. **Report and return**:
-   `dispatch outcome set --id <ticket> --outcome decomposed`. The scheduler
-   dispatches the children as capacity frees up and sends the ticket back to
-   you as `finalize` once they all resolve.
+     skip registration; Verifying's outcomes replace step 3.
+3. **Report and return**: the `outcome_set` tool with `id: <ticket>`,
+   `outcome: decomposed`. The scheduler dispatches the children as capacity
+   frees up and sends the ticket back to you as `finalize` once they all
+   resolve.
 
 ## Verifying (`verify`, `finalize`, `retry`, and verification tickets)
 
@@ -62,8 +64,8 @@ comment, transition the ticket per the adapter, then report.
 
 ## Reporting
 
-Your final action is always one
-`dispatch outcome set --id <ticket> --outcome <kind>`:
+Your final action is always one `outcome_set` tool call with `id: <ticket>`
+and one of these outcomes:
 
 - `verified` — aims validated, ticket transitioned to its terminal status.
 - `decomposed` — children registered; the ticket waits on them.
@@ -71,8 +73,8 @@ Your final action is always one
 - `canceled` — the tracker canceled it out from under you.
 - `human-blocked` — you parked it awaiting a person (also transition it and
   post the handoff comment).
-- `failed` — you cannot proceed; add `--retryable` only when a fresh run could
-  succeed, and `--detail` with one line of why.
+- `failed` — you cannot proceed; set `retryable` only when a fresh run could
+  succeed, and `detail` to one line of why.
 
 Human input routes through the tracker — a comment on the ticket — never by
 blocking on session input. If the ticket demands judgment only a human has,
@@ -88,7 +90,7 @@ ticket was canceled, or a human took it), record the matching outcome and
 return.
 
 When the ticket is canceled, also settle the PR items you registered for it:
-remove any that no worker has concluded (`dispatch pr rm --id <item>`), so
-the scheduler never dispatches work for a dead ticket. A pr-worker already
+remove any that no worker has concluded (the `pr_rm` tool with `id: <item>`),
+so the scheduler never dispatches work for a dead ticket. A pr-worker already
 live on one of them hears the same `ticket_changed` relay and closes out its
 PR itself.

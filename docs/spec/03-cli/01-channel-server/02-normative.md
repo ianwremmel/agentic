@@ -168,11 +168,11 @@ Each event is a `notifications/claude/channel` notification with `content` (the
 tag body, a string) and `meta` (a string→string map rendered as tag attributes).
 Every event MUST carry:
 
-| Attribute | Source        | Meaning                                                                                        |
-| --------- | ------------- | ---------------------------------------------------------------------------------------------- |
+| Attribute | Source        | Meaning                                                                                               |
+| --------- | ------------- | ----------------------------------------------------------------------------------------------------- |
 | `source`  | set by runner | The runner's name for the server — `plugin:dispatch:mcp`, not `dispatch`. The server MUST NOT set it. |
-| `kind`    | `meta`        | The event kind (tables below).                                                                 |
-| `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.                                  |
+| `kind`    | `meta`        | The event kind (tables below).                                                                        |
+| `seq`     | `meta`        | Monotonic per-server sequence number for ordering/coalescing.                                         |
 
 The channel layer does not dedupe attributes: a `source` key in `meta` emits a
 second `source` attribute on the tag rather than overriding the runner's. The
@@ -188,11 +188,11 @@ Observation events (the PR/CI and graph triggers below) additionally carry
 routing keys the pusher stamps at delivery time, after the per-kind meta, so no
 event producer can forge them:
 
-| Attribute    | Meaning                                                                                             |
-| ------------ | --------------------------------------------------------------------------------------------------- |
-| `item`       | The graph node the event belongs to.                                                                 |
-| `repo`, `pr` | The node's registered PR, when it has one.                                                           |
-| `agent`      | The recorded address of the worker on the node (`dispatch worker set`), when this session has one.   |
+| Attribute    | Meaning                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------- |
+| `item`       | The graph node the event belongs to.                                                               |
+| `repo`, `pr` | The node's registered PR, when it has one.                                                         |
+| `agent`      | The recorded address of the worker on the node (`dispatch worker set`), when this session has one. |
 
 `agent` names a **resumable** worker — one that has returned and holds no
 process, but whose spawner can re-invoke it by that address with its context
@@ -218,9 +218,10 @@ the freshest stored state, not a transcript of the moment the change was
 observed; a worker that needs canonical current state re-reads it. The
 rendering uses the XML vocabulary the worker already reads from `dispatch
 pr-status`, and names `pr-status` as the deep read to run for actionability
-classification and cached comment bodies. Where no snapshot is stored the body MUST say so
-and instruct the worker to run `pr-status` itself. A `ticket_changed` body MUST
-instruct the session to re-read the ticket through the tracker adapter — the
+classification and cached comment bodies. Where no snapshot is stored, the
+body MUST say so and instruct the worker to run `pr-status` itself. A
+`ticket_changed` body MUST instruct the session to re-read the ticket through
+the tracker adapter — the
 graph's copy is what just changed, so no body assembled from it is
 authoritative. A work-order or `probe` body MUST be a short instruction naming
 the work. The runner rewrites a `</channel>` in a body so it cannot close the
@@ -237,14 +238,14 @@ login — MUST NOT fire an event: waking a worker to report its own comment is
 the noise that would make server-side waiting worse than the polling it
 replaces.
 
-| kind              | `meta` (beyond source/kind/seq and routing keys)               | fires when                                               |
-| ----------------- | -------------------------------------------------------------- | -------------------------------------------------------- |
+| kind              | `meta` (beyond source/kind/seq and routing keys)                | fires when                                                             |
+| ----------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `ci_finished`     | `rollup` = `success` \| `failure`; `failing` names the failures | the rollup settles (afresh for a new head), or the failing set changes |
-| `pr_review`       | `state` = `approved` \| `changes` \| `comment`, `reviewer`     | a review is submitted                                    |
-| `pr_comment`      | `thread`                                                       | a new top-level comment or unresolved inline reply lands |
-| `pr_state_change` | `state` = `ready` \| `draft` \| `merged` \| `closed`           | the PR changes lifecycle state                           |
-| `pr_conflicted`   | `mergeState`                                                   | the PR stops merging cleanly against its base            |
-| `pr_head_changed` | `head`                                                         | the head commit moves under the watch                    |
+| `pr_review`       | `state` = `approved` \| `changes` \| `comment`, `reviewer`      | a review is submitted                                                  |
+| `pr_comment`      | `thread`                                                        | a new top-level comment or unresolved inline reply lands               |
+| `pr_state_change` | `state` = `ready` \| `draft` \| `merged` \| `closed`            | the PR changes lifecycle state                                         |
+| `pr_conflicted`   | `mergeState`                                                    | the PR stops merging cleanly against its base                          |
+| `pr_head_changed` | `head`                                                          | the head commit moves under the watch                                  |
 
 **Graph triggers** — observations the server's own database reveals, delivered
 through the same queue as the PR/CI triggers, with the same routing keys.
@@ -263,12 +264,12 @@ server — which loses that delivery rather than repeating it.
 itself (§Work the server cannot do itself). Body is a short instruction naming
 the flat write commands to use.
 
-| kind               | `meta` (beyond source/kind/seq) | asks the session to                                             |
-| ------------------ | ------------------------------- | --------------------------------------------------------------- |
-| `scan_project`     | `tracker`, `projects`, `cursor` | scan every ticket in those projects since the cursor            |
-| `fetch_ticket`     | `tracker`, `ticket`             | fetch that one ticket (or report it `missing`)                  |
-| `refresh_ticket`   | `tracker`, `ticket`             | re-fetch one watched ticket (or report it `missing`)            |
-| `refresh_complete` | `tracker`                       | stop fetching; the graph is complete                            |
+| kind               | `meta` (beyond source/kind/seq) | asks the session to                                  |
+| ------------------ | ------------------------------- | ---------------------------------------------------- |
+| `scan_project`     | `tracker`, `projects`, `cursor` | scan every ticket in those projects since the cursor |
+| `fetch_ticket`     | `tracker`, `ticket`             | fetch that one ticket (or report it `missing`)       |
+| `refresh_ticket`   | `tracker`, `ticket`             | re-fetch one watched ticket (or report it `missing`) |
+| `refresh_complete` | `tracker`                       | stop fetching; the graph is complete                 |
 
 `refresh_ticket` is how the server owns the *when* of ticket re-reads it cannot
 make itself: it MUST schedule one for each ticket whose tracker state can move
@@ -285,14 +286,14 @@ write or operator message to make. The server MUST do the graph reasoning
 (rank, gate, admit, and — for the dispatch kinds — claim) before emitting one;
 the session executes it and MUST NOT need to read the graph.
 
-| kind                       | `meta` (beyond source/kind/seq) | asks the session to                                                  |
-| -------------------------- | ------------------------------- | -------------------------------------------------------------------- |
-| `dispatch_ticket`          | `project`, `ticket`, `pass`     | launch a ticket-worker to coordinate the ticket (already claimed)    |
+| kind                       | `meta` (beyond source/kind/seq) | asks the session to                                                                                  |
+| -------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `dispatch_ticket`          | `project`, `ticket`, `pass`     | launch a ticket-worker to coordinate the ticket (already claimed)                                    |
 | `dispatch_pr`              | `pr`, `pass`, `ticket`          | launch a pr-worker to implement the PR item (already claimed); `ticket` only on a ticket-backed item |
-| `perform_milestone_review` | `project`, `milestone`          | launch a milestone-reviewer; the milestone is claimed                |
-| `park_human_blocked`       | `project`, `ticket`             | move a human-blocked ticket to its parked state and post the handoff (a tracker write) |
-| `alert_failure`            | see below                       | alert the operator about a node that cannot proceed without them     |
-| `project_complete`         | `project`                       | record and announce that the project's work is done                  |
+| `perform_milestone_review` | `project`, `milestone`          | launch a milestone-reviewer; the milestone is claimed                                                |
+| `park_human_blocked`       | `project`, `ticket`             | move a human-blocked ticket to its parked state and post the handoff (a tracker write)               |
+| `alert_failure`            | see below                       | alert the operator about a node that cannot proceed without them                                     |
+| `project_complete`         | `project`                       | record and announce that the project's work is done                                                  |
 
 `alert_failure` covers two node shapes, distinguished by its meta: a ticket
 that failed unrecoverably carries `project` and `ticket`; a PR item carries
@@ -360,22 +361,22 @@ For each event source the server MUST use the least-expensive available strategy
 2. Watch subprocess (e.g. a `--watch`-mode CLI).
 3. Polling (fallback).
 
-| Source              | Default strategy                                                    |
-| ------------------- | ------------------------------------------------------------------- |
-| GitHub PR / issue   | Polling; dynamic cadence per stage                                  |
-| GitHub check rollup | `gh pr checks --watch` subprocess per watched PR with active CI     |
-| Buildkite build     | `bk build wait` subprocess                                          |
-| Graph DB            | SQLite read on the poll tick                                        |
+| Source              | Default strategy                                                |
+| ------------------- | --------------------------------------------------------------- |
+| GitHub PR / issue   | Polling; dynamic cadence per stage                              |
+| GitHub check rollup | `gh pr checks --watch` subprocess per watched PR with active CI |
+| Buildkite build     | `bk build wait` subprocess                                      |
+| Graph DB            | SQLite read on the poll tick                                    |
 
 Dynamic polling intervals:
 
-| Stage                              | Default interval                           |
-| ---------------------------------- | ------------------------------------------ |
-| Awaiting Copilot review            | 30 s                                       |
-| Awaiting CI on an active head      | 60 s once, then 5 min                      |
-| Awaiting human reviewer            | 5 min                                      |
-| Awaiting ticket transition         | 5 min                                      |
-| Idle (monitoring only)             | 15 min                                     |
+| Stage                         | Default interval      |
+| ----------------------------- | --------------------- |
+| Awaiting Copilot review       | 30 s                  |
+| Awaiting CI on an active head | 60 s once, then 5 min |
+| Awaiting human reviewer       | 5 min                 |
+| Awaiting ticket transition    | 5 min                 |
+| Idle (monitoring only)        | 15 min                |
 
 The server SHOULD tighten the interval near known high-likelihood transition
 points. Intervals MUST be data-driven, not constant. A watch subprocess or SDK

@@ -52,7 +52,7 @@ event, so a worker wakes once and reacts to all of it (changes on different PRs
 stay distinct, ordered events; a terminal merge or close stands alone, since
 nothing else about a finished PR still matters).
 
-Three families of event reach the session. **Triggers** report a change on
+Three families of events reach the session. **Triggers** report a change on
 something watched — a PR, or a ticket whose tracker write revealed a status
 move. A PR trigger's body is the server's own rendering of the snapshot it
 already polled — the same vocabulary the session reads through the PR-status
@@ -63,13 +63,13 @@ deterministic. **Work orders** are the opposite: the CLI does the deterministic
 graph reasoning itself — ranking the frontier, applying milestone gates,
 accounting for capacity, claiming — and tells the session exactly what to do next
 (coordinate this ticket, review this milestone). The session
-runs the named skill and never has to read or understand the graph. **Fetch
+runs the named skill and never has to read or understand the graph. **Ingest
 instructions**, the third family, delegate the reads the server cannot make —
 next paragraph.
 
 One source the server **cannot** reach is a tracker exposed only over MCP (Linear
 today). A channel is an MCP server, not a client; it cannot call another MCP
-server. So a tracker refresh is delegated: the server pushes fetch
+server. So a tracker refresh is delegated: the server pushes ingest
 instructions (`scan_project`, `fetch_ticket`, and `refresh_ticket` for
 in-flight and parked tickets whose tracker state can move under the graph) and the session
 — which holds the MCP client and the tracker adapter skill — fetches and writes

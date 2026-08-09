@@ -77,14 +77,14 @@ all. React to **each** kind named in `changed` (absent means the `kind` is the
 whole story), per the table — a CI failure that arrived alongside a review is
 not settled by fixing CI alone.
 
-| kind                        | React by                                                          |
-| --------------------------- | ----------------------------------------------------------------- |
-| `ci_finished` rollup=failure | Diagnose the named failing checks and fix.                       |
-| `ci_finished` rollup=success | Evaluate the gates; transition if they pass.                     |
-| `pr_review`                 | Address the verdict per the land skill's per-concern handling.    |
-| `pr_comment`                | Reply and settle per the land skill's rules.                      |
-| `pr_state_change` merged    | Close out per land's ending rules — minus any ticket transition, which the ticket-worker owns — and record `delivered`. |
-| `pr_state_change` closed    | Read the payload's terminal state; `canceled` if truly abandoned. |
-| `pr_conflicted`             | Rebase or merge the base branch; resolve.                         |
-| `pr_head_changed`           | Someone else pushed: re-pull before any further work.             |
-| `ticket_changed`            | Re-read the ticket through the adapter. Scope moved: adjust. Ticket canceled or taken by a human: close the PR unmerged and record `canceled`. |
+| kind                         | React by                                                                                                                                       |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci_finished` rollup=failure | Diagnose the named failing checks and fix.                                                                                                     |
+| `ci_finished` rollup=success | Evaluate the gates; transition if they pass.                                                                                                   |
+| `pr_review`                  | Address the verdict per the land skill's per-concern handling.                                                                                 |
+| `pr_comment`                 | Reply and settle per the land skill's rules.                                                                                                   |
+| `pr_state_change` merged     | Close out per land's ending rules — minus any ticket transition, which the ticket-worker owns — and record `delivered`.                        |
+| `pr_state_change` closed     | Read the payload's terminal state; `canceled` if truly abandoned.                                                                              |
+| `pr_conflicted`              | Rebase or merge the base branch; resolve.                                                                                                      |
+| `pr_head_changed`            | Someone else pushed: re-pull before any further work.                                                                                          |
+| `ticket_changed`             | Re-read the ticket through the adapter. Scope moved: adjust. Ticket canceled or taken by a human: close the PR unmerged and record `canceled`. |

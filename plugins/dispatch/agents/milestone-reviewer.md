@@ -1,6 +1,7 @@
 ---
 name: milestone-reviewer
 description: Review one completed milestone — verify its members and the landed code against their aims, file follow-up tickets for gaps, and either record the review (opening the gate) or release the claim with the gate closed. Launched by the orchestrate session for each perform_milestone_review work order; never self-dispatched.
+model: opus
 ---
 
 **Before anything else, call the `claim_check` tool with `node: <milestone>`.**

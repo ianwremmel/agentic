@@ -83,6 +83,9 @@ The per-PR cache root is:
 | `reviews/<id>.summary.md`     | 1–3-sentence model summary; written once the review first settles, then persists     |
 | `reviews/<id>.ack`            | Marker file; presence means the review body is non-actionable                        |
 
+A `.summary.md` is written only by a generation that succeeded (§Summaries); an
+item whose summary failed has no file until a later run produces one.
+
 ### Cache lifecycle
 
 The cache persists across sessions. The script MUST update cached entries
@@ -298,10 +301,12 @@ Every top-level PR comment MUST appear. Top-level PR comments are the flat
 chronological stream on the PR, distinct from inline review threads.
 
 The `<summary>` child is a persisted recap (see §Summaries). For
-`actionable="false"` elements it MUST be present. For `actionable="true"`
-elements it MAY be present — it appears iff the item was `actionable="false"` on
-an earlier run (a recap was persisted then) and has since flipped back to
-actionable; a never-settled actionable item carries no `<summary>`.
+`actionable="false"` elements it MUST be present once one has been generated;
+generation is best-effort, so an element whose summary could not be generated
+carries none and is retried on the next run. For `actionable="true"` elements it
+MAY be present — it appears iff the item was `actionable="false"` on an earlier
+run (a recap was persisted then) and has since flipped back to actionable; a
+never-settled actionable item carries no `<summary>`.
 
 | Attribute    | Type          | Requirement                                                      | Meaning                                               |
 | ------------ | ------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
@@ -344,8 +349,9 @@ MUST NOT appear, and a thread whose comments are all drafts MUST NOT appear at
 all; a thread carrying both keeps its submitted comments.
 
 The `<summary>` child follows the same rule as for `<comment>`: present for
-`actionable="false"`, and present for `actionable="true"` only when a recap was
-persisted on an earlier run (see §Summaries).
+`actionable="false"` once one has been generated, and present for
+`actionable="true"` only when a recap was persisted on an earlier run (see
+§Summaries).
 
 | Attribute    | Type          | Requirement                                                      | Meaning                                               |
 | ------------ | ------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
@@ -455,6 +461,19 @@ comment, thread, review, or annotation.
    actionable — e.g. a reviewer replies to a settled thread — the agent reads the
    persisted `<summary>` plus the new content from the `<id>.md` cache file
    instead of re-reading the whole item.
+4. Generation is **best-effort and may fail**. On failure the script MUST NOT
+   write `<id>.summary.md` — not a placeholder, not an empty file. The file's
+   existence is what rule 1 tests, so anything written on failure latches for
+   the life of the cache and the item is never summarized again. Absence is the
+   retry signal: the item is emitted without a `<summary>`, and the next run
+   that finds it `actionable="false"` tries again — rule 1 still gates
+   generation, so an item that has flipped back to actionable waits until it
+   settles once more. The failure MUST NOT be silent — the reason goes to
+   stderr, which never carries payload.
+5. A summary file that is empty, or that holds the placeholder
+   `(summary unavailable)` written by a pre-rule-4 implementation, is a recorded
+   failure rather than a recap. The script MUST treat it as absent and
+   regenerate it; this is the one exception to rule 2.
 
 The `<id>.md` cache file itself is rewritten whenever the item's body changes;
 the script SHOULD detect "content changed" with a stored content hash rather than

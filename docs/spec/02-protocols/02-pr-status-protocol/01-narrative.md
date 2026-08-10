@@ -35,16 +35,16 @@ merge-conflict flag, reviewer list, a `<comment>` element for top-level PR
 comments, and a `<thread>` or `<annotation>` element for every review thread and
 annotation on the PR. Actionable items are listed without their body — the agent
 reads the cache file — and also carry a `reason`-free start tag. Non-actionable
-items carry a `reason=` token plus a one-to-three-sentence summary so the agent
-can skim them without loading the full content. (A summary persists once
-generated, so an item that has flipped back to actionable may still carry one —
-see below.)
+items carry a `reason=` token plus, once one has been generated, a
+one-to-three-sentence summary so the agent can skim them without loading the
+full content. (A summary persists once generated, so an item that has flipped
+back to actionable may still carry one — see below.)
 
 **Disk cache (per-PR directory)** — heavy, read on demand. Each comment, thread,
 annotation, and review body is stored verbatim at a stable path keyed by platform ID.
-Non-actionable items also have a `.summary.md` alongside. The cache persists
-across sessions; the script updates it incrementally rather than fetching
-everything on every run.
+Non-actionable items also have a `.summary.md` alongside, once one has been
+generated. The cache persists across sessions; the script updates it
+incrementally rather than fetching everything on every run.
 
 This split keeps the agent's working context small on quiet PRs (few actionable
 items, lots of summaries to skim) while still giving it full thread content when
@@ -89,6 +89,13 @@ the item's body later changes, so a quiet PR pays no re-summarization cost
 between polls. Because it persists, the recap is still attached when an item
 flips back to actionable (a reviewer reply), letting the agent read the recap
 plus the new content instead of re-reading the whole thread.
+
+The model call can fail, and that possibility shapes the write: the file is
+written only when a real summary comes back, because its existence is the same
+signal that says "already summarized". A placeholder written on failure would
+satisfy that check forever and silently cost the item its recap for the life of
+the cache. So a failure writes nothing, reports itself on stderr, and is retried
+on the next poll.
 
 ## How a caller uses the output
 

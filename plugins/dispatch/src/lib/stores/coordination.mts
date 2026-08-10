@@ -122,18 +122,38 @@ export class CoordinationStore {
    * being served on a timer — so leaving it behind would make this verb wait
    * on the very PR change the operator is answering out of band.
    *
-   * Only when an outcome was actually there, though. On a node that has none,
-   * any watch belongs to a worker that yielded its wait to the server, and
-   * dropping that — with whatever it has observed and not yet delivered —
-   * would strand the worker waiting on it.
+   * Only the parked watch, though, and a recorded outcome does not identify
+   * one: a park that was already revived keeps its outcome until the resumed
+   * worker reports, so an outcome can sit alongside that worker's own yield.
+   * A live worker is what separates them — a park deletes the worker row, a
+   * launch recreates it — so a node that has one is being worked, and
+   * dropping its wait, with whatever it has observed and not yet delivered,
+   * would strand it. Unparking is then a no-op beyond the outcome: the worker
+   * is already on the item and its own watch will wake it.
+   *
+   * Liveness is judged on the worker's session heartbeat, the same rule the
+   * scheduler applies. A worker row outlives the agent it addresses, and a
+   * dead one must not hold an operator's unpark until the next stale sweep.
    */
-  async removeOutcome(node: string): Promise<boolean> {
-    const found = findNode(this.#db, node);
-    if (found === null) return false;
+  async removeOutcome(
+    node: string,
+    liveness: {now: string; staleAfterSeconds: number}
+  ): Promise<boolean> {
+    assertInstant(liveness.now, 'now');
     return this.#db.transaction(() => {
+      const found = findNode(this.#db, node);
+      if (found === null) return false;
+      const worked =
+        this.#db.get(
+          `SELECT 1 AS held FROM worker w
+           JOIN session s ON s.id = w.session_id
+           WHERE w.node_id = ?
+             AND unixepoch(?) - unixepoch(s.heartbeat_at) <= ?`,
+          [found.id, liveness.now, liveness.staleAfterSeconds]
+        ) !== undefined;
       const removed =
         this.#db.run('DELETE FROM outcome WHERE node_id = ?', [found.id]) > 0;
-      if (removed) {
+      if (removed && !worked) {
         this.#db.run('DELETE FROM watch WHERE node_id = ?', [found.id]);
         this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [found.id]);
       }

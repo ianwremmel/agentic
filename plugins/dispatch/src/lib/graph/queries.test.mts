@@ -16,6 +16,7 @@ import {
   WorkerStore,
 } from '../stores/index.mts';
 import type {PrSnapshot} from '../watch/snapshot.mts';
+import {DEFAULT_STALE_AFTER_SECONDS} from './pipeline.mts';
 import {
   classifiedItems,
   dispatchQueue,
@@ -528,7 +529,10 @@ describe('waiting on an operator response', () => {
     // in person. `dispatch outcome rm` is the operator saying so, and it has
     // to take the watch with it: while the watch runs, the item is withheld.
     // `pass: null` is the plain available pass.
-    await coordination.removeOutcome('o/r#10');
+    await coordination.removeOutcome('o/r#10', {
+      now: NOW,
+      staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+    });
     assert.deepEqual(await queueOf(db), [{id: 'o/r#10', pass: null}]);
     await db.close();
   });

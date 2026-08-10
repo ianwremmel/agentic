@@ -46,6 +46,19 @@ export function limitFor(
 }
 
 /**
+ * A cap must be a whole number of 0 or more. A negative one is never reached
+ * from below, so it would refuse every PR item forever — and the build cap's
+ * only promise is that it drains without an agent.
+ */
+export function assertCapLimit(value: number, option: string): number {
+  assertUsage(
+    Number.isInteger(value) && value >= 0,
+    `option ${option} expects a whole number of 0 or more, got "${String(value)}"`
+  );
+  return value;
+}
+
+/**
  * Parse an override list — `owner/repo=2,owner/other=0` — into a limit per
  * repo. The option name rides along so a malformed entry names the flag its
  * writer has to fix.

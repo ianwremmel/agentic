@@ -56,7 +56,11 @@ export class Command extends AbstractCommand {
       }
       // Why the queue is idle when it is: a repo at one of its caps holds
       // work back with nothing else to show for it, which otherwise reads as
-      // a wedged system.
+      // a wedged system. Deliberately no `reserve` here — this reports the
+      // caps holding work *now*, from load already on the forge. Simulating
+      // the fill pass instead would blame a cap for a queue the compute budget
+      // is what is actually holding, and the scheduler's own claims land in
+      // this reading within a tick anyway.
       const admission = new RepoAdmission(
         await new PolicyStore(db).getRepoCaps(),
         await repoPrLoad(db)

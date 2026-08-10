@@ -603,7 +603,9 @@ describe('per-repo PR load', () => {
     db: Database,
     node: string
   ): Promise<{open: boolean; building: boolean}> {
-    const entry = (await repoPrLoad(db)).find((row) => row.node === node);
+    const entry = (await repoPrLoad(db, {now: NOW})).find(
+      (row) => row.node === node
+    );
     assert.ok(entry, `expected ${node} in the repo load`);
     return {open: entry.open, building: entry.building};
   }
@@ -656,14 +658,44 @@ describe('per-repo PR load', () => {
     await db.close();
   });
 
-  it('counts a build only while an open PR has a running rollup', async () => {
+  it('counts a build until the rollup stops running, open PR or not', async () => {
     const db = await fresh();
     await addPr(db, 'o/r#7', 7);
     await stored(db, 'o/r#7', {rollup: 'PENDING'});
     assert.deepEqual(await loadOf(db, 'o/r#7'), {open: true, building: true});
 
+    // A closed PR's trailing jobs hold CI concurrency like any other.
+    await stored(db, 'o/r#7', {state: 'CLOSED', rollup: 'PENDING'});
+    assert.deepEqual(await loadOf(db, 'o/r#7'), {open: false, building: true});
+
     await stored(db, 'o/r#7', {rollup: 'FAILURE'});
     assert.deepEqual(await loadOf(db, 'o/r#7'), {open: true, building: false});
+    await db.close();
+  });
+
+  it('counts a live claim as a PR about to open and a build about to start', async () => {
+    const db = await fresh();
+    await addPr(db, 'o/r#todo', null);
+    await session(db, 'S1', NOW);
+    await claim(db, 'o/r#todo', 'S1');
+
+    assert.deepEqual(await loadOf(db, 'o/r#todo'), {
+      open: true,
+      building: true,
+    });
+    await db.close();
+  });
+
+  it('stops counting a claim whose session went stale', async () => {
+    const db = await fresh();
+    await addPr(db, 'o/r#todo', null);
+    await session(db, 'DEAD', STALE);
+    await claim(db, 'o/r#todo', 'DEAD');
+
+    assert.deepEqual(await loadOf(db, 'o/r#todo'), {
+      open: false,
+      building: false,
+    });
     await db.close();
   });
 });

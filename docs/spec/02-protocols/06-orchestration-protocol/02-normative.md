@@ -164,10 +164,19 @@ therefore gate admission alongside the budget:
 registering PR items, and those items wait in the queue for a slot.
 
 Both counts MUST come from the graph and the snapshots the watch poll already
-stored, never a fetch of their own, and a work order the scheduler emits MUST
-count against them for the rest of the pass, so one tick cannot overshoot a cap
-it will only observe next tick. `dispatch status` MUST report a cap holding
-queued work back, so a queue idle behind one does not read as a wedged system.
+stored, never a fetch of their own. A dispatched PR item is not yet visible in
+either place — its PR is unopened, its build unstarted — so a live claim on one
+MUST count against both caps, and a work order this pass emits MUST count for
+the rest of it. Without the first, a cap admits another item every tick until
+the forge catches up; without the second, a single pass does.
+
+Unlike the claim cap, these are enforced against a pre-claim reading rather
+than inside the claim transaction, so two servers scheduling at the same
+instant can each spend the same free slot. The claims they write bound the
+overshoot to one pass each.
+
+`dispatch status` MUST report a cap holding queued work back, so a queue idle
+behind one does not read as a wedged system.
 
 ## State and recovery
 

@@ -8,6 +8,7 @@ import {DEFAULT_STALE_AFTER_SECONDS} from '../lib/graph/index.mts';
 import {processStartIso, retireNonLive} from '../lib/liveness/index.mts';
 import {runMcpServer} from '../lib/mcp/index.mts';
 import {
+  assertCapLimit,
   DEFAULT_MAX_IN_FLIGHT_BUILDS,
   DEFAULT_MAX_OPEN_PRS,
   parseRepoLimits,
@@ -84,8 +85,11 @@ export class Command extends AbstractCommand {
     // Parsed before anything is written: a malformed override list is a usage
     // error, not a server that starts and then enforces half a policy.
     const repoCaps = {
-      openPrs: parsed['max-open-prs'],
-      inFlightBuilds: parsed['max-in-flight-builds'],
+      openPrs: assertCapLimit(parsed['max-open-prs'], 'max-open-prs'),
+      inFlightBuilds: assertCapLimit(
+        parsed['max-in-flight-builds'],
+        'max-in-flight-builds'
+      ),
       openPrsByRepo: parseRepoLimits(
         parsed['max-open-prs-by-repo'] ?? '',
         'max-open-prs-by-repo'

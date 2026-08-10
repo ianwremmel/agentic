@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/require-await --
  * `node:sqlite` is synchronous; the async facade keeps call sites stable. */
 import type {Database} from '../db/database.mts';
+import {nowIso} from '../db/time.mts';
 import {
+  DEFAULT_STALE_AFTER_SECONDS,
   PREFIX,
   PROJECT_FILTER,
   QUEUE_ORDER,
@@ -69,9 +71,9 @@ export async function dispatchQueue(
 export interface RepoPrLoad {
   node: string;
   repo: string;
-  /** A PR exists on the forge and has neither merged nor closed. */
+  /** A PR is on the forge and still open, or a live worker is about to open one. */
   open: boolean;
-  /** That PR's head commit still has checks running. */
+  /** Checks are running, or a live worker is about to start some. */
   building: boolean;
 }
 
@@ -83,36 +85,57 @@ export interface RepoPrLoad {
  * counts for nothing. Without one, an item that names a PR number is open
  * until a snapshot says otherwise: the poll has to have run at least once for
  * a closed PR to stop counting, and the cap should hold rather than let go on
- * an item nobody has looked at yet. `building` is read from the check rollup
- * and scoped to open PRs — a merged PR's trailing jobs are not this repo's
- * in-flight work.
+ * an item nobody has looked at yet.
+ *
+ * A live claim counts as both. The work it names is a dispatched pr-worker,
+ * which will open a PR (if the item has none yet) and push to it — neither
+ * visible in a snapshot until it happens, so a cap reading only the forge
+ * would admit a second item on every tick until the first one's PR appeared.
+ * The claim is shared state, so this is also what keeps a second server on the
+ * same database from re-spending a slot this one just spent.
+ *
+ * `building` is deliberately not scoped to open PRs: a merged PR's trailing
+ * jobs hold CI concurrency exactly like any other, and its item stops counting
+ * as soon as its worker reports.
  */
-export async function repoPrLoad(db: Database): Promise<RepoPrLoad[]> {
+export async function repoPrLoad(
+  db: Database,
+  options: DeriveOptions = {}
+): Promise<RepoPrLoad[]> {
   return db
     .all(
       `SELECT n.external_id AS node, pr.repo, pr.pr_number, o.outcome,
               json_extract(w.snapshot, '$.state') AS pr_state,
-              json_extract(w.snapshot, '$.rollup') AS rollup
+              json_extract(w.snapshot, '$.rollup') AS rollup,
+              lc.node_id IS NOT NULL AS claimed
        FROM pr
        JOIN node n ON n.id = pr.node_id
        LEFT JOIN watch w ON w.node_id = pr.node_id
        LEFT JOIN outcome o ON o.node_id = pr.node_id
+       LEFT JOIN (
+         SELECT c.node_id FROM claim c
+         JOIN session s ON s.id = c.session_id
+         WHERE unixepoch(?) - unixepoch(s.heartbeat_at) <= ?
+       ) lc ON lc.node_id = pr.node_id
        WHERE pr.repo IS NOT NULL
-       ORDER BY n.external_id`
+       ORDER BY n.external_id`,
+      [
+        options.now ?? nowIso(),
+        options.staleAfterSeconds ?? DEFAULT_STALE_AFTER_SECONDS,
+      ]
     )
     .map((row) => {
-      const outcome = text(row.outcome);
+      const settled = RESOLVED_OUTCOMES.has(text(row.outcome) ?? '');
+      const claimed = !settled && integer(row.claimed) === 1;
       const state = text(row.pr_state);
-      const open =
-        row.pr_number !== null &&
-        row.pr_number !== undefined &&
-        !RESOLVED_OUTCOMES.has(outcome ?? '') &&
-        (state === null || state === 'OPEN');
+      const unopened = row.pr_number === null || row.pr_number === undefined;
       return {
         node: text(row.node) ?? '',
         repo: text(row.repo) ?? '',
-        open,
-        building: open && text(row.rollup) === 'PENDING',
+        open: unopened
+          ? claimed
+          : !settled && (state === null || state === 'OPEN'),
+        building: claimed || (!settled && text(row.rollup) === 'PENDING'),
       };
     });
 }

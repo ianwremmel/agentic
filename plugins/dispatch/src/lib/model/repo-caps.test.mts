@@ -2,7 +2,26 @@ import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
 import {UsageError} from '../errors/index.mts';
-import {DEFAULT_REPO_CAPS, limitFor, parseRepoLimits} from './repo-caps.mts';
+import {
+  assertCapLimit,
+  DEFAULT_REPO_CAPS,
+  limitFor,
+  parseRepoLimits,
+} from './repo-caps.mts';
+
+describe('assertCapLimit', () => {
+  it('accepts a whole number of 0 or more', () => {
+    assert.equal(assertCapLimit(0, 'flag'), 0);
+    assert.equal(assertCapLimit(4, 'flag'), 4);
+  });
+
+  it('refuses a limit no count can reach from below', () => {
+    // A negative cap refuses every item forever, and the build cap's whole
+    // safety argument is that it drains on its own.
+    assert.throws(() => assertCapLimit(-1, 'flag'), UsageError);
+    assert.throws(() => assertCapLimit(1.5, 'flag'), UsageError);
+  });
+});
 
 describe('parseRepoLimits', () => {
   it('reads one limit per repo, ignoring surrounding whitespace', () => {

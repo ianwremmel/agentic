@@ -162,7 +162,7 @@ describe('per-repo admission caps', () => {
     await db.close();
   });
 
-  it('releases both caps as the PR closes and its build finishes', async () => {
+  it('releases each cap on its own signal — the PR closing, and the build finishing', async () => {
     const {db, scheduler} = await fresh(
       caps({openPrs: 1, inFlightBuilds: 1}),
       1
@@ -173,8 +173,25 @@ describe('per-repo admission caps', () => {
 
     assert.deepEqual(await dispatchedPrs(scheduler, NOW), []);
 
+    // Closing the PR frees its open slot, but its jobs still hold CI.
+    await observed(db, 'o/r#7', snapshot('CLOSED', 'PENDING'));
+    assert.deepEqual(await dispatchedPrs(scheduler, LATER), []);
+
     await observed(db, 'o/r#7', snapshot('CLOSED', 'SUCCESS'));
     assert.deepEqual(await dispatchedPrs(scheduler, LATER), ['o/r#new']);
+    await db.close();
+  });
+
+  it('holds a slot for a dispatched item until its PR and build show up', async () => {
+    const {db, scheduler} = await fresh(caps({openPrs: 1}));
+    await addPr(db, 'o/r#first', 'o/r', null);
+    await addPr(db, 'o/r#second', 'o/r', null);
+
+    assert.deepEqual(await dispatchedPrs(scheduler, NOW), ['o/r#first']);
+
+    // The claim is the only sign the first PR is coming: without counting it,
+    // every tick before that PR appears would admit another item.
+    assert.deepEqual(await dispatchedPrs(scheduler, LATER), []);
     await db.close();
   });
 

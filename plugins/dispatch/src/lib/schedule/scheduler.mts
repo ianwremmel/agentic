@@ -87,10 +87,16 @@ export class Scheduler {
       orders.push(...reviews);
       // The per-repo caps bound resources the claim ledger cannot see: a PR
       // holds preview stacks and cloud quota for as long as it stays open,
-      // and a yielded worker holds no claim at all.
+      // and a yielded worker holds no claim at all. Like the budget, they are
+      // read before any claim is taken, so two servers scheduling at the same
+      // instant can each spend the same free slot; the claims each one writes
+      // are what the other's next tick counts.
       const admission = new RepoAdmission(
         await new PolicyStore(this.#db).getRepoCaps(),
-        await repoPrLoad(this.#db)
+        await repoPrLoad(this.#db, {
+          now,
+          staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+        })
       );
       orders.push(
         ...(await this.#fill(now, budget - reviews.length, admission))

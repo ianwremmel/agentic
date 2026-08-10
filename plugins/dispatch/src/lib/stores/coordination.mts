@@ -121,6 +121,11 @@ export class CoordinationStore {
    * the queue while it is `watching` — that is what keeps a parked item from
    * being served on a timer — so leaving it behind would make this verb wait
    * on the very PR change the operator is answering out of band.
+   *
+   * Only when an outcome was actually there, though. On a node that has none,
+   * any watch belongs to a worker that yielded its wait to the server, and
+   * dropping that — with whatever it has observed and not yet delivered —
+   * would strand the worker waiting on it.
    */
   async removeOutcome(node: string): Promise<boolean> {
     const found = findNode(this.#db, node);
@@ -128,8 +133,10 @@ export class CoordinationStore {
     return this.#db.transaction(() => {
       const removed =
         this.#db.run('DELETE FROM outcome WHERE node_id = ?', [found.id]) > 0;
-      this.#db.run('DELETE FROM watch WHERE node_id = ?', [found.id]);
-      this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [found.id]);
+      if (removed) {
+        this.#db.run('DELETE FROM watch WHERE node_id = ?', [found.id]);
+        this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [found.id]);
+      }
       return removed;
     });
   }

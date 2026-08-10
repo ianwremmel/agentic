@@ -298,6 +298,21 @@ describe('CoordinationStore recordOutcome', () => {
     await concluded.db.close();
   });
 
+  it('leaves a yielded worker its watch when there was no outcome to remove', async () => {
+    const {db, store} = await fresh();
+    db.run(
+      `INSERT INTO watch (node_id, state, snapshot, interval_s, session_id, created_at, expires_at)
+       SELECT id, 'watching', '{}', 60, 's1', ?, ? FROM node WHERE external_id = 'T1'`,
+      ['2026-07-31T00:00:00Z', '2026-07-31T06:00:00Z']
+    );
+
+    // Nothing was parked here: the watch is a live worker's wait handed to
+    // the server. Unparking a node that was never parked must not take it.
+    assert.equal(await store.removeOutcome('T1'), false);
+    assert.equal(Number(db.get('SELECT COUNT(*) AS n FROM watch')?.n), 1);
+    await db.close();
+  });
+
   it('rejects retryable on a non-failed outcome', async () => {
     const {db, store} = await fresh();
     await assert.rejects(

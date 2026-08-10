@@ -265,10 +265,12 @@ the item from watched to unreachable.
 A `ticket_changed` row is written without a session, so any acked live server
 MAY deliver it. So MAY any server deliver a row whose session no longer exists:
 the worker it named died with the session, and a row held for a session that
-cannot return is a notice nobody ever reads. For every observation event the delivery mark MUST be a
-conditional claim taken as the last write before the push, so no event is ever
-delivered twice; the residual is a push that throws after the claim — a dying
-server — which loses that delivery rather than repeating it.
+cannot return is a notice nobody ever reads.
+
+For every observation event the delivery mark MUST be a conditional claim taken
+as the last write before the push, so no event is ever delivered twice; the
+residual is a push that throws after the claim — a dying server — which loses
+that delivery rather than repeating it.
 
 **Ingest instructions** — the server delegates tracker reads it cannot make
 itself (§Work the server cannot do itself). Body is a short instruction naming

@@ -19,8 +19,9 @@ export interface DueWatch {
   /**
    * Past its expiry. The snapshot sees only the forge, so a signal outside it
    * — an approval given on the ticket, a reaction, an out-of-band go-ahead —
-   * would otherwise never reach the worker. An expired watch fires with no
-   * events attached, which tells the worker to go look for itself.
+   * would otherwise never reach the worker. An expired watch fires on no diff
+   * at all, reporting `watch_expired`, which tells the worker to go look for
+   * itself.
    *
    * Never true for a parked item: expiry addresses a worker, and an item
    * whose outcome is recorded has none. Its watch keeps running until a real

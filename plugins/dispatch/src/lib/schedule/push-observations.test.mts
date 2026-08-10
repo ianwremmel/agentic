@@ -106,6 +106,39 @@ describe('pushObservations meta shaping', () => {
     assert.equal(event.meta.repo, 'o/r');
   });
 
+  it('drains an event whose owning session is gone', async () => {
+    const env = await tempEnv();
+    await seed(env);
+    await withDatabase(undefined, env, async (db) => {
+      db.run(
+        "INSERT INTO pr_event (node_id, kind, summary, meta, session_id, observed_at) VALUES ((SELECT id FROM node WHERE external_id='o/r#1'), 'watch_expired', 'deadline', '{}', 'gone-1', ?)",
+        [NOW]
+      );
+      await new SessionStore(db).register({
+        id: 'reg-2',
+        host: hostname(),
+        pid: process.pid,
+        claudeSessionId: 'c2',
+        startedAt: processStartIso(),
+        heartbeatAt: new Date().toISOString(),
+      });
+    });
+
+    // A watch can outlive the session that armed it — six hours of expiry
+    // against a server that restarts. Held for a session that will never
+    // return, the notice is never read by anyone.
+    const {channel, pushed} = capture();
+    await pushObservations(channel, env, 'reg-2', NOW);
+
+    assert.equal(pushed.length, 1);
+    const [event] = pushed;
+    assert.ok(event !== undefined);
+    assert.equal(event.kind, 'watch_expired');
+    // Nobody live holds the item, so there is no address to relay to and the
+    // session cold-starts a resume pass instead.
+    assert.equal(event.meta.agent, undefined);
+  });
+
   it('leaves an event undelivered when its render throws, to retry', async () => {
     const env = await tempEnv();
     await seed(env);

@@ -37,7 +37,11 @@ export class PrEventStore {
    * Scoped to the session that armed the wait: several servers share one
    * graph DB, and only the session whose worker holds the PR can route the
    * event to it. A row with no session is drainable by any — it belongs to a
-   * wait armed outside a server.
+   * wait armed outside a server. So is a row whose session is gone: the worker
+   * it named died with it, and holding the row for a session that will never
+   * come back keeps a wait's last notice from ever being read. A watch can
+   * outlive its session by hours, so this is the ordinary case for one that
+   * reaches its deadline, not an edge.
    */
   async undelivered(session: string, limit = 50): Promise<PendingEvent[]> {
     return this.#db
@@ -45,7 +49,8 @@ export class PrEventStore {
         `SELECT e.id, n.external_id AS node, e.kind, e.summary, e.meta, e.observed_at
          FROM pr_event e JOIN node n ON n.id = e.node_id
          WHERE e.delivered_at IS NULL
-           AND (e.session_id IS NULL OR e.session_id = ?)
+           AND (e.session_id IS NULL OR e.session_id = ?
+                OR NOT EXISTS (SELECT 1 FROM session s WHERE s.id = e.session_id))
          ORDER BY e.id
          LIMIT ?`,
         [session, limit]

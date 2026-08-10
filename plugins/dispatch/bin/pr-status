@@ -58,6 +58,14 @@ for _tool in gh jq; do
     || { echo "pr-status: required tool not found on PATH: $_tool" >&2; exit 3; }
 done
 
+# claude is optional — without it items are emitted without a <summary>. Resolve
+# it once here so the absence is reported once, not once per item.
+HAVE_CLAUDE=true
+if ! command -v claude >/dev/null 2>&1; then
+  HAVE_CLAUDE=false
+  echo "pr-status: claude not found on PATH; items will be emitted without summaries" >&2
+fi
+
 # Required plugin option (§2.2.2 Operator identity). The env var wins when set
 # (hook processes get it injected; a caller may also export it). Otherwise read
 # it from the settings files Claude Code itself reads, in Claude Code's
@@ -123,6 +131,13 @@ BASE="${DISPATCH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dispatch}"
 DIR="$BASE/deliver/$SLUG/$PR"
 mkdir -p "$DIR/comments" "$DIR/threads" "$DIR/annotations" "$DIR/reviews"
 
+# A run killed mid-summary leaves its staging files behind. Nothing reads them —
+# only <id>.summary.md is — but they accumulate. A day is far longer than any
+# `claude -p` call, which has no timeout of its own, so sweeping at that age
+# cannot take a staging file a live run still owns.
+find "$DIR" -type f \( -name '*.summary.md.out.*' -o -name '*.summary.md.err.*' \) \
+  -mmin +1440 -delete 2>/dev/null || true
+
 INFORMATIONAL_RE="${DISPATCH_INFORMATIONAL_CHECKS:-}"     # e.g. "^(coverage|codeql)$"
 STUCK_AFTER_SEC="${DISPATCH_STUCK_AFTER_SEC:-3600}"
 
@@ -146,12 +161,82 @@ xml_text() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\
 
 # --- summary helper -----------------------------------------------------------
 # Args: <body-file> <out-file>
+#
+# Writes <out-file> only when the call succeeds and produced a real summary, and
+# returns non-zero otherwise. The emitters read the file's existence as "already
+# summarized", so anything written on failure is never retried and latches for
+# the life of the cache — a missing summary must stay missing. Nested `claude -p`
+# calls intermittently answer with Claude Code's own "Not logged in" banner on a
+# zero exit, so a plausible-looking body is checked too. Diagnostics go to
+# stderr; stdout carries the XML payload.
+#
+# The output is staged in a sibling temp file and moved into place, so a
+# concurrent pr-status over the same PR never reads a half-written summary.
 summarize() {
   local body="$1" out="$2"
+  [[ "$HAVE_CLAUDE" == true ]] || return 1
+
+  # Every caller guards this function with `|| true`, which disables errexit for
+  # its whole body — so each step that can fail is checked by hand here.
+  local tmp_out tmp_err rc=0
+  tmp_out="$(mktemp "$out.out.XXXXXX")" || {
+    echo "pr-status: could not create a temp file beside $out; skipping its summary" >&2
+    return 1
+  }
+  tmp_err="$(mktemp "$out.err.XXXXXX")" || {
+    echo "pr-status: could not create a temp file beside $out; skipping its summary" >&2
+    rm -f "$tmp_out"
+    return 1
+  }
+
   claude -p --max-turns 1 \
     "Summarize the following PR item in 1-3 sentences describing its outcome. Plain prose only.
 
-$(cat "$body")" > "$out" 2>/dev/null </dev/null || echo "(summary unavailable)" > "$out"
+$(cat "$body")" > "$tmp_out" 2>"$tmp_err" </dev/null || rc=$?
+
+  local text; text="$(cat "$tmp_out")" || text=""
+  local first_line; first_line="$(grep -m1 -v '^[[:space:]]*$' <<<"$text")" || first_line=""
+  local reason=""
+  if (( rc != 0 )); then
+    reason="claude exited $rc"
+  elif [[ -z "${text//[[:space:]]/}" ]]; then
+    reason="claude produced no output"
+  elif grep -qiE '^[[:space:]]*(not logged in|please run /login|invalid api key|authentication failed)' \
+       <<<"$first_line"; then
+    # Claude Code generates these banners locally and exits zero, so the exit
+    # code cannot tell them from a summary. Matching only the opening line keeps
+    # a recap that discusses an auth bug — which mentions the same words, but
+    # further in — from being thrown away, while still catching a banner that
+    # runs long or spans lines.
+    reason="claude answered with an auth error instead of a summary"
+  elif ! mv "$tmp_out" "$out"; then
+    reason="the summary could not be moved into place"
+  fi
+
+  if [[ -z "$reason" ]]; then
+    rm -f "$tmp_err"
+    return 0
+  fi
+
+  echo "pr-status: could not summarize $body ($reason); leaving it unsummarized so a later run retries" >&2
+  [[ -s "$tmp_err" ]] && sed 's/^/pr-status:   /' "$tmp_err" >&2
+  rm -f "$tmp_out" "$tmp_err"
+  return 1
+}
+
+# Args: <summary-file>
+# A summary file that is empty, or that holds the literal `(summary
+# unavailable)`, records a failure rather than a recap. It still satisfies the
+# existence check that gates regeneration, so evict it and let this run write a
+# real one.
+evict_placeholder_summary() {
+  local sum="$1"
+  [[ -f "$sum" ]] || return 0
+  if [[ ! -s "$sum" ]] || [[ "$(cat "$sum")" == "(summary unavailable)" ]]; then
+    # An unremovable file is this item's problem, not the payload's: swallow the
+    # failure so the run keeps emitting rather than dying mid-section.
+    rm -f "$sum" || true
+  fi
 }
 
 # Args: <id> <subdir> <body>
@@ -165,6 +250,7 @@ cache_item() {
   local id="$1" sub="$2" body="$3"
   local md="$DIR/$sub/$id.md"
   local hash_file="$DIR/$sub/$id.hash"
+  evict_placeholder_summary "$DIR/$sub/$id.summary.md"
   local new_hash; new_hash="$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)"
   local old_hash=""; [[ -f "$hash_file" ]] && old_hash="$(cat "$hash_file")"
   if [[ ! -f "$md" || "$new_hash" != "$old_hash" ]]; then
@@ -487,8 +573,11 @@ reviews_xml() {
         actionable="true"; reason_attr=""
       fi
       # Same lazy recap as comments and threads: written once the item settles,
-      # then persisted and emitted in either state.
-      [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+      # then persisted and emitted in either state. A failed summary writes
+      # nothing and must not abort the payload — the item is emitted without one.
+      if [[ "$actionable" == "false" && ! -f "$sum_path" ]]; then
+        summarize "$cache_path" "$sum_path" || true
+      fi
       [[ -f "$sum_path" ]] && inner="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
     fi
 
@@ -623,7 +712,9 @@ comments_xml() {
     # Generate the recap lazily, only for a settled (non-actionable) item with no
     # summary yet; once written it persists and is emitted in either state so the
     # agent can read it when the item later flips back to actionable.
-    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+    if [[ "$actionable" == "false" && ! -f "$sum_path" ]]; then
+      summarize "$cache_path" "$sum_path" || true
+    fi
     local inner=""
     [[ -f "$sum_path" ]] && inner+="<summary>$(xml_text "$(cat "$sum_path")")</summary>"
     inner+="$(reactions_xml_for "$reactions")"
@@ -659,7 +750,9 @@ threads_xml() {
     # yet; it persists and is emitted in either state. When the thread flips back
     # to actionable (a reviewer reply), the agent reads this recap plus the new
     # content from the cache file instead of re-reading the whole thread.
-    [[ "$actionable" == "false" && ! -f "$sum_path" ]] && summarize "$cache_path" "$sum_path"
+    if [[ "$actionable" == "false" && ! -f "$sum_path" ]]; then
+      summarize "$cache_path" "$sum_path" || true
+    fi
     if [[ -f "$sum_path" ]]; then
       printf '    <thread id="%s" actionable="%s"%s cache="%s"><summary>%s</summary></thread>\n' \
         "$(xml_attr "$id")" "$actionable" "$reason_attr" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
@@ -693,9 +786,16 @@ annotations_xml() {
       local cache_path="$DIR/annotations/$id.md"
       local sum_path="$DIR/annotations/$id.summary.md"
       if [[ -f "$ack" ]]; then
-        [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path"
-        printf '    <annotation id="%s" actionable="false" reason="acked" cache="%s"><summary>%s</summary></annotation>\n' \
-          "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+        [[ -f "$sum_path" ]] || summarize "$cache_path" "$sum_path" || true
+        # The summary is best-effort: an acked annotation is still emitted, and
+        # still non-actionable, when the summary could not be generated.
+        if [[ -f "$sum_path" ]]; then
+          printf '    <annotation id="%s" actionable="false" reason="acked" cache="%s"><summary>%s</summary></annotation>\n' \
+            "$(xml_attr "$id")" "$(xml_attr "$cache_path")" "$(xml_text "$(cat "$sum_path")")"
+        else
+          printf '    <annotation id="%s" actionable="false" reason="acked" cache="%s"/>\n' \
+            "$(xml_attr "$id")" "$(xml_attr "$cache_path")"
+        fi
       else
         printf '    <annotation id="%s" actionable="true" cache="%s"/>\n' \
           "$(xml_attr "$id")" "$(xml_attr "$cache_path")"

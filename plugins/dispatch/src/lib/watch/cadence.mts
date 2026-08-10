@@ -38,10 +38,8 @@ export function cadenceFor(snapshot: PrSnapshot | null): number {
  * sees only the forge, so an approval given on the ticket or a reaction never
  * reaches it; expiry sends the worker to look for itself.
  *
- * Measured from when the wait was armed, never from the last poll — a
- * deadline a poll can push out is one a quiet PR never reaches, and a quiet
- * PR is the only kind that needs it. The cost of it working is that every
- * unchanged PR wakes a worker once per window, which is the intended price:
- * a wasted look every six hours against an item stranded indefinitely.
+ * Measured from arming, never from the last poll: a deadline a poll can push
+ * out is one a quiet PR never reaches, and a quiet PR is the only kind that
+ * needs it. The price is a wasted look at every unchanged PR once a window.
  */
 export const EXPIRY_SECONDS = 21_600;

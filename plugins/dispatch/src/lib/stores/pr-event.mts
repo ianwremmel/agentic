@@ -38,10 +38,9 @@ export class PrEventStore {
    * graph DB, and only the session whose worker holds the PR can route the
    * event to it. A row with no session is drainable by any — it belongs to a
    * wait armed outside a server. So is a row whose session is gone: the worker
-   * it named died with it, and holding the row for a session that will never
-   * come back keeps a wait's last notice from ever being read. A watch can
-   * outlive its session by hours, so this is the ordinary case for one that
-   * reaches its deadline, not an edge.
+   * it named died with it, and a watch outlives its session often enough that
+   * holding the row would strand the last notice of every wait a restart
+   * interrupted.
    */
   async undelivered(session: string, limit = 50): Promise<PendingEvent[]> {
     return this.#db

@@ -53,9 +53,9 @@ export class WatchStore {
     intervalSeconds: number;
     at: string;
     /**
-     * The deadline this wait fires at no matter what the diff says. Arming is
-     * the only thing that sets it — a poll must never push it out, or a PR
-     * polled more often than the expiry window never reaches it.
+     * The deadline this wait fires at whatever the diff says. Arming is the
+     * only thing that sets it: a PR polled more often than the expiry window
+     * never reaches a deadline a poll can push out.
      */
     expiresAt: string;
     /**
@@ -127,10 +127,9 @@ export class WatchStore {
    * it comes round on its interval alone. Otherwise the pass would fire it
    * into a `resume` nobody prompted, on a schedule rather than on an answer.
    *
-   * Expired rows come first, then oldest check. An expired row has already
-   * been checked, so under the plain oldest-check order it sorts behind every
-   * never-checked row and a steady influx of new watches can hold it outside
-   * the cap indefinitely — starving the deadline that is the whole safety net.
+   * Expired rows come first, then oldest check. An expired row has been
+   * checked, so under oldest-check order alone a steady influx of new watches
+   * holds it outside the cap indefinitely.
    */
   async due(now: string, limit: number): Promise<DueWatch[]> {
     assertInstant(now, 'now');
@@ -176,9 +175,9 @@ export class WatchStore {
    * land events for a wait that never fired, which the next tick would then
    * re-derive from the same unchanged snapshot and record a second time.
    *
-   * `expires_at` is deliberately not written here. It belongs to the wait, not
-   * to the observation: a poll that extends it makes the deadline unreachable
-   * for exactly the quiet PRs it exists to rescue.
+   * `expires_at` belongs to the wait, not to the observation, so it is not
+   * written here: a poll that extends the deadline makes it unreachable for
+   * exactly the quiet PRs it exists to rescue.
    *
    * A row replaced mid-poll (`createdAt` differs) is left alone, events and
    * all: the observation belongs to a wait that no longer exists.
@@ -235,11 +234,10 @@ export class WatchStore {
   /**
    * Fire a watch outright (expiry); same generation guard as `observe`.
    *
-   * The `watch_expired` event is what makes the deadline mean anything. A
+   * The `watch_expired` event is what makes the deadline mean anything: a
    * fired row is no longer polled, and a yielded worker whose session is live
-   * keeps the item out of the queue, so firing without an event would move the
-   * item from watched to unreachable. The event carries the watch's session,
-   * which is what routes it to the worker holding the PR.
+   * keeps the item out of the queue, so a silent fire strands it. The event
+   * carries the watch's session, which routes it to that worker.
    */
   async fire(
     node: string,

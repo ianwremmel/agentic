@@ -255,22 +255,16 @@ through the same queue as the PR/CI triggers, with the same routing keys.
 | `ticket_changed` | `ticket`, `from`, `to`                           | a tracker write (`dispatch ticket set`) reveals a status transition |
 | `watch_expired`  | —                                                | a watch reaches its deadline with no diff to report                 |
 
-A watch's deadline MUST be measured from when the wait was armed. A poll that
-extends it is one a quiet PR never reaches, and the quiet PR — no CI moving,
-no reviewer requested — is the only kind the deadline exists for. Firing MUST
-emit the `watch_expired` event: a fired watch is no longer polled and a live
-worker holding the item keeps it out of the queue, so a silent fire would move
-the item from watched to unreachable.
+A watch's deadline MUST be measured from when it was armed, never extended by a
+poll, and firing MUST emit the `watch_expired` event — a fired watch is no
+longer polled, so a silent fire strands the item.
 
 A `ticket_changed` row is written without a session, so any acked live server
-MAY deliver it. So MAY any server deliver a row whose session no longer exists:
-the worker it named died with the session, and a row held for a session that
-cannot return is a notice nobody ever reads.
-
-For every observation event the delivery mark MUST be a conditional claim taken
-as the last write before the push, so no event is ever delivered twice; the
-residual is a push that throws after the claim — a dying server — which loses
-that delivery rather than repeating it.
+MAY deliver it, as MAY any server deliver a row whose session no longer exists.
+For every observation event the delivery mark MUST be a
+conditional claim taken as the last write before the push, so no event is ever
+delivered twice; the residual is a push that throws after the claim — a dying
+server — which loses that delivery rather than repeating it.
 
 **Ingest instructions** — the server delegates tracker reads it cannot make
 itself (§Work the server cannot do itself). Body is a short instruction naming

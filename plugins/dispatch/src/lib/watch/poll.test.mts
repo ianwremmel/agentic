@@ -167,6 +167,31 @@ describe('pollWatches', () => {
     });
   });
 
+  it('still expires a watch that polls kept finding unchanged', async () => {
+    const env = await tempEnv();
+    await fixture(env, BASE);
+
+    // A quiet PR is polled many times before its deadline. None of those polls
+    // may move the deadline, or the item it exists to rescue never reaches it.
+    for (const at of [LATER, '2026-08-05T12:45:00.000Z']) {
+      const {fired} = await pollWatches(env, {
+        snapshot: snapshotter(BASE),
+        now: () => at,
+      });
+      assert.deepEqual(fired, []);
+    }
+
+    const {fired} = await pollWatches(env, {
+      snapshot: () => {
+        throw new Error('must not be called for an expired watch');
+      },
+      // The expiry the fixture armed, unchanged by the polls in between.
+      now: () => '2026-08-05T13:00:00.000Z',
+    });
+
+    assert.deepEqual(fired, ['owner/repo#1']);
+  });
+
   it('delays a failed read by one interval instead of failing the pass', async () => {
     const env = await tempEnv();
     await fixture(env, BASE);

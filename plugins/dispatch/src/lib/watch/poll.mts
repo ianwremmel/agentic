@@ -70,9 +70,6 @@ export async function pollWatches(
           createdAt: due.createdAt,
           fire: observed.length > 0,
           intervalSeconds: cadenceFor(taken),
-          expiresAt: new Date(
-            Date.parse(now()) + EXPIRY_SECONDS * 1_000
-          ).toISOString(),
           events: observed,
         });
         if (outcome === 'fired') fired.push(due.node);

@@ -51,6 +51,11 @@ export class WatchStore {
     node: string;
     intervalSeconds: number;
     at: string;
+    /**
+     * The deadline this wait fires at no matter what the diff says. Arming is
+     * the only thing that sets it — a poll must never push it out, or a PR
+     * polled more often than the expiry window never reaches it.
+     */
     expiresAt: string;
     /**
      * The PR as of arming. Recording it here is what closes the gap between
@@ -165,6 +170,10 @@ export class WatchStore {
    * land events for a wait that never fired, which the next tick would then
    * re-derive from the same unchanged snapshot and record a second time.
    *
+   * `expires_at` is deliberately not written here. It belongs to the wait, not
+   * to the observation: a poll that extends it makes the deadline unreachable
+   * for exactly the quiet PRs it exists to rescue.
+   *
    * A row replaced mid-poll (`createdAt` differs) is left alone, events and
    * all: the observation belongs to a wait that no longer exists.
    */
@@ -175,7 +184,6 @@ export class WatchStore {
     createdAt: string;
     fire: boolean;
     intervalSeconds: number;
-    expiresAt: string;
     events: readonly Observation[];
   }): Promise<'recorded' | 'fired' | 'stale'> {
     assertInstant(input.at, 'at');
@@ -204,14 +212,13 @@ export class WatchStore {
       }
       this.#db.run(
         `UPDATE watch SET snapshot = ?, checked_at = ?, state = ?,
-                          interval_s = ?, expires_at = ?
+                          interval_s = ?
          WHERE node_id = ?`,
         [
           JSON.stringify(input.snapshot),
           input.at,
           input.fire ? 'fired' : 'watching',
           input.intervalSeconds,
-          input.expiresAt,
           nodeId,
         ]
       );

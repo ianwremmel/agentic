@@ -218,6 +218,84 @@ describe('pollWatches', () => {
     });
   });
 
+  it('watches a PR item parked on an operator', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new PrStore(db).upsertPr({
+        id: 'owner/repo#4',
+        ticket: null,
+        origin: 'prompt',
+        repo: 'owner/repo',
+        prNumber: 4,
+        url: null,
+        branch: null,
+        title: 'parked',
+        injected: false,
+        priority: null,
+        updatedAt: NOW,
+      });
+      await new CoordinationStore(db).recordOutcome(
+        {
+          node: 'owner/repo#4',
+          outcome: 'human-blocked',
+          retryable: null,
+          detail: 'is the deploy pipeline meant to be red?',
+          recordedAt: NOW,
+        },
+        {session: ''}
+      );
+    });
+
+    // The park never armed a watch — nothing to keep — so the pass has to
+    // open one, or the operator's answer lands where nobody is looking.
+    await pollWatches(env, {snapshot: snapshotter(BASE), now: () => LATER});
+
+    await withDatabase(undefined, env, async (db) => {
+      assert.equal(
+        (await new WatchStore(db).get('owner/repo#4'))?.state,
+        'watching'
+      );
+    });
+  });
+
+  it('re-arms rather than fires an expired watch on a parked item', async () => {
+    const env = await tempEnv();
+    await fixture(env, BASE);
+    await withDatabase(undefined, env, async (db) => {
+      await new CoordinationStore(db).recordOutcome(
+        {
+          node: 'owner/repo#1',
+          outcome: 'human-blocked',
+          retryable: null,
+          detail: null,
+          recordedAt: NOW,
+        },
+        {session: 'S1'}
+      );
+    });
+
+    const {fired} = await pollWatches(env, {
+      snapshot: snapshotter(BASE),
+      // Well past the fixture's expiry.
+      now: () => '2026-08-05T20:00:00.000Z',
+    });
+
+    // Expiry sends a worker to look for itself, and a parked item has none.
+    // Firing here would re-dispatch on a deadline rather than on an answer.
+    assert.deepEqual(fired, []);
+    await withDatabase(undefined, env, async (db) => {
+      assert.equal(
+        (await new WatchStore(db).get('owner/repo#1'))?.state,
+        'watching'
+      );
+      // The poll pushed the expiry out, so the row is not perpetually due.
+      assert.deepEqual(
+        await new WatchStore(db).due('2026-08-05T20:00:01.000Z', 5),
+        []
+      );
+    });
+  });
+
   it('does not watch an item that already concluded', async () => {
     const env = await tempEnv();
     await withDatabase(undefined, env, async (db) => {

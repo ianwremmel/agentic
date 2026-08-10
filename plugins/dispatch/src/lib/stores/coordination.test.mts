@@ -252,6 +252,52 @@ describe('CoordinationStore recordOutcome', () => {
     await db.close();
   });
 
+  it('keeps a parked item watched and drops the watch on every other outcome', async () => {
+    const at = '2026-07-31T00:00:00Z';
+    const arm = (db: Database): void => {
+      db.run(
+        `INSERT INTO watch (node_id, state, snapshot, interval_s, session_id, created_at, expires_at)
+         SELECT id, 'fired', '{}', 60, 's1', ?, ? FROM node WHERE external_id = 'T1'`,
+        [at, '2026-07-31T06:00:00Z']
+      );
+    };
+    const watchRow = (db: Database): Record<string, unknown> | undefined =>
+      db.get('SELECT state, session_id FROM watch');
+
+    const parked = await fresh();
+    arm(parked.db);
+    await parked.store.recordOutcome(
+      {
+        node: 'T1',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: 'which auth flow?',
+        recordedAt: at,
+      },
+      {session: 's1'}
+    );
+    // The wait moved to the operator rather than ending, so the row keeps
+    // running — unbound from the worker's session, which is gone.
+    assert.equal(watchRow(parked.db)?.state, 'watching');
+    assert.equal(watchRow(parked.db)?.session_id, null);
+    await parked.db.close();
+
+    const concluded = await fresh();
+    arm(concluded.db);
+    await concluded.store.recordOutcome(
+      {
+        node: 'T1',
+        outcome: 'delivered',
+        retryable: null,
+        detail: null,
+        recordedAt: at,
+      },
+      {session: 's1'}
+    );
+    assert.equal(watchRow(concluded.db), undefined);
+    await concluded.db.close();
+  });
+
   it('rejects retryable on a non-failed outcome', async () => {
     const {db, store} = await fresh();
     await assert.rejects(

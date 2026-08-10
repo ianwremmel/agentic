@@ -288,7 +288,7 @@ export class Scheduler {
               : {project: entry.item.project ?? '', ticket: entry.item.id},
           body:
             entry.outcome?.outcome === 'human-blocked'
-              ? `PR item ${entry.item.id} is waiting on an operator response${entry.outcome.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the PR if one exists, else on its ticket, and requeue with \`dispatch outcome rm --id ${entry.item.id}\` once the response arrives.`
+              ? `PR item ${entry.item.id} is waiting on an operator response${entry.outcome.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the PR if one exists, else on its ticket. An answer on the PR — a comment, a review, a push — requeues it on its own; if the answer arrives anywhere else, requeue it with \`dispatch outcome rm --id ${entry.item.id}\`.`
               : entry.item.kind === 'pr'
                 ? `PR item ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator; requeue by removing the outcome once addressed.`
                 : `Ticket ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the ticket; requeue by removing the outcome once addressed.`,

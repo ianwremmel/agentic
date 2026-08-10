@@ -118,7 +118,9 @@ reviewer after draft clears. Never self-merge unless instructed.
 If the operator tells you to stop while the PR is open, post what you
 finished and what remains, leave the PR and the worktree in place for a
 resumed run, and record `human-blocked` with `detail` saying the operator
-stopped the run — removing the outcome is how they resume it.
+stopped the run. The server keeps watching the PR, so a later comment, review,
+or push there puts the item back in the queue; `dispatch outcome rm` does the
+same when the answer arrives somewhere else.
 
 **Act, then yield.** Each wake-up — the dispatch pass, or a relayed event —
 carries work; do all of it, and when the next step belongs to someone else
@@ -142,7 +144,8 @@ the outcome is always your last act, because it releases your claim: outcome
 terminal state, don't guess), `human-blocked`
 when delivery is blocked on an operator response (post the question on the PR
 thread and put a one-line version in `detail`; the scheduler alerts the
-operator and the item requeues when they remove the outcome), `failed` (with
+operator, the server keeps watching the PR, and an answer there requeues the
+item), `failed` (with
 `retryable` when a fresh run could succeed and one line of why in `detail`),
 or `canceled` if the PR was closed unmerged on purpose.
 

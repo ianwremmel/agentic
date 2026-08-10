@@ -273,9 +273,25 @@ export class CoordinationStore {
       // event for a concluded node has no one to wake.
       this.#db.run('DELETE FROM worker WHERE node_id = ?', [node.id]);
       // A final report ends any server-side wait. The watch would otherwise
-      // re-serve work that just concluded, and its undelivered observations
-      // describe a wait nobody is in any more.
-      this.#db.run('DELETE FROM watch WHERE node_id = ?', [node.id]);
+      // re-serve work that just concluded.
+      //
+      // `human-blocked` is the one report that concludes nobody: the wait
+      // moved from the worker to the operator, and something still has to
+      // notice when they answer on the PR. Keep the row watching, with its
+      // snapshot, so the baseline spans the park and the answer reads as a
+      // change; unbind it from the departed worker's session so whichever
+      // server sees it next may route what it observes.
+      if (report.outcome === 'human-blocked') {
+        this.#db.run(
+          `UPDATE watch SET state = 'watching', session_id = NULL
+           WHERE node_id = ?`,
+          [node.id]
+        );
+      } else {
+        this.#db.run('DELETE FROM watch WHERE node_id = ?', [node.id]);
+      }
+      // Undelivered observations describe a wait nobody is in any more,
+      // whichever way the report went.
       this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [node.id]);
     });
   }

@@ -21,6 +21,10 @@ export interface DueWatch {
    * — an approval given on the ticket, a reaction, an out-of-band go-ahead —
    * would otherwise never reach the worker. An expired watch fires with no
    * events attached, which tells the worker to go look for itself.
+   *
+   * Never true for a parked item: expiry addresses a worker, and an item
+   * whose outcome is recorded has none. Its watch keeps running until a real
+   * diff fires it.
    */
   expired: boolean;
 }
@@ -107,6 +111,12 @@ export class WatchStore {
    * Watching rows ready for a poll — expired, never checked, or past their
    * interval — oldest check first, capped so one pass stays short. A row
    * whose item lacks PR coordinates is skipped; there is nothing to read yet.
+   *
+   * A parked row (an outcome is recorded, so the only watch left is the one
+   * `human-blocked` keeps) is never expired and is never made due by expiry:
+   * it comes round on its interval alone, and each poll pushes `expires_at`
+   * out again. Otherwise the pass would fire it into a `resume` nobody
+   * prompted, on a schedule rather than on an answer.
    */
   async due(now: string, limit: number): Promise<DueWatch[]> {
     assertInstant(now, 'now');
@@ -114,13 +124,16 @@ export class WatchStore {
       .all(
         `SELECT n.external_id AS node, pr.repo, pr.pr_number,
                 w.snapshot, w.created_at,
-                (unixepoch(?) >= unixepoch(w.expires_at)) AS expired
+                (unixepoch(?) >= unixepoch(w.expires_at)
+                 AND o.node_id IS NULL) AS expired
          FROM watch w
          JOIN node n ON n.id = w.node_id
          JOIN pr ON pr.node_id = w.node_id
+         LEFT JOIN outcome o ON o.node_id = w.node_id
          WHERE w.state = 'watching'
            AND pr.repo IS NOT NULL AND pr.pr_number IS NOT NULL
-           AND (unixepoch(?) >= unixepoch(w.expires_at)
+           AND ((unixepoch(?) >= unixepoch(w.expires_at)
+                 AND o.node_id IS NULL)
                 OR w.checked_at IS NULL
                 OR unixepoch(?) - unixepoch(w.checked_at) >= w.interval_s)
          ORDER BY w.checked_at IS NOT NULL, w.checked_at, n.external_id
@@ -259,9 +272,15 @@ export class WatchStore {
   }
 
   /**
-   * Open a watch on every PR item that has a PR and no outcome and is not
-   * already watched. A PR moves whether or not a worker asked anyone to look,
-   * and an unwatched item is exactly the one whose change goes unnoticed.
+   * Open a watch on every PR item that has a PR and is not already watched and
+   * has not concluded. A PR moves whether or not a worker asked anyone to
+   * look, and an unwatched item is exactly the one whose change goes
+   * unnoticed.
+   *
+   * A `human-blocked` outcome counts as unconcluded: the item is waiting on a
+   * person, and the answer usually arrives on the PR. This is also what picks
+   * up an item parked before the watch survived its report — without it, a
+   * park that predates that behaviour stays unwatched for good.
    */
   async ensureForLiveItems(at: string, expirySeconds: number): Promise<number> {
     assertInstant(at, 'at');
@@ -275,7 +294,8 @@ export class WatchStore {
        LEFT JOIN watch w ON w.node_id = pr.node_id
        LEFT JOIN outcome o ON o.node_id = pr.node_id
        WHERE pr.repo IS NOT NULL AND pr.pr_number IS NOT NULL
-         AND w.node_id IS NULL AND o.node_id IS NULL`,
+         AND w.node_id IS NULL
+         AND (o.node_id IS NULL OR o.outcome = 'human-blocked')`,
       [at, expiresAt]
     );
   }

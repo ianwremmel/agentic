@@ -1,7 +1,9 @@
 import {AbstractCommand} from '../lib/command/index.mts';
 import type {CommandContext, ParsedOptions} from '../lib/command/index.mts';
 import {DB_OPTION, withDatabase} from '../lib/db/index.mts';
-import {derive} from '../lib/graph/index.mts';
+import {derive, dispatchQueue, repoPrLoad} from '../lib/graph/index.mts';
+import {RepoAdmission} from '../lib/schedule/index.mts';
+import {PolicyStore} from '../lib/stores/index.mts';
 
 const options = {
   project: {
@@ -50,6 +52,24 @@ export class Command extends AbstractCommand {
           `pr ${entry.item.id}` +
             (entry.item.ticket === null ? '' : ` ticket=${entry.item.ticket}`) +
             ` ${entry.classification}\n`
+        );
+      }
+      // Why the queue is idle when it is: a repo at one of its caps holds
+      // work back with nothing else to show for it, which otherwise reads as
+      // a wedged system.
+      const admission = new RepoAdmission(
+        await new PolicyStore(db).getRepoCaps(),
+        await repoPrLoad(db)
+      );
+      for (const {entry} of await dispatchQueue(db, {
+        project: parsed.project,
+      })) {
+        if (entry.item.kind === 'pr') admission.admit(entry.item);
+      }
+      for (const hold of admission.holds()) {
+        ctx.io.write(
+          `cap-hold ${hold.repo} ${hold.cap}=${String(hold.observed)}/${String(hold.limit)} ` +
+            `waiting=${String(hold.waiting)}\n`
         );
       }
       for (const anomaly of graph.anomalies) {

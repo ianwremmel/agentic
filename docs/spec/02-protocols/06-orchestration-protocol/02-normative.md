@@ -65,7 +65,9 @@ Each tick, in order:
 4. **Fill** — for each queue entry up to the remaining budget, claim the node
    for this session under an immediate transaction, then emit one work order.
    A node already claimed by any live session MUST be skipped, so two servers
-   on one database cannot double-dispatch.
+   on one database cannot double-dispatch. A PR item MUST also pass its repo's
+   admission caps (below); an entry a cap refuses MUST be skipped rather than
+   ending the pass, because a later entry for another repo may still fit.
 5. Emit the condition orders once per episode, tracked durably:
    `park_human_blocked` for a human-blocked ticket not yet parked,
    `alert_failure` for a non-retryable failure or a PR item waiting on an
@@ -141,6 +143,31 @@ by the scheduler when it emits a work order and released by the outcome report
 or the stale-session sweep — a dead server cannot leak capacity. A unit merely
 awaiting CI, review, or a human holds no claim, because the wait itself is
 handed back to the server.
+
+## Repository admission caps
+
+Claims bound compute. They do not bound what an open PR holds while no agent
+does — preview stacks, cloud quota, CI concurrency — because a worker that
+yields its wait releases its claim and the PR stays open. Two further caps,
+both per repository, each a global default with a per-repo override,
+therefore gate admission alongside the budget:
+
+- **Open PRs** MUST gate `dispatch_pr` only for an item that would open a
+  *new* PR — one with no PR number yet. An item whose PR already exists is
+  counted against the cap already, and gating it would deadlock: nothing could
+  finish to free a slot.
+- **In-flight builds** — PRs whose check rollup reports CI running — MUST gate
+  every `dispatch_pr`. It cannot deadlock, since builds drain without an agent.
+  It is deliberately coarse: one PR counts once however many jobs it runs.
+
+`dispatch_ticket` MUST NOT be gated: ticket-workers keep planning and
+registering PR items, and those items wait in the queue for a slot.
+
+Both counts MUST come from the graph and the snapshots the watch poll already
+stored, never a fetch of their own, and a work order the scheduler emits MUST
+count against them for the rest of the pass, so one tick cannot overshoot a cap
+it will only observe next tick. `dispatch status` MUST report a cap holding
+queued work back, so a queue idle behind one does not read as a wedged system.
 
 ## State and recovery
 

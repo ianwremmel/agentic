@@ -6,7 +6,9 @@ export {
   dispatchQueue,
   frontier,
   milestoneStates,
+  repoPrLoad,
 } from './queries.mts';
+export type {RepoPrLoad} from './queries.mts';
 export type {
   Anomaly,
   Classification,

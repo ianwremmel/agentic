@@ -222,7 +222,9 @@ item AS (
     t.branch_hint,
     t.labels,
     t.updated_at,
-    NULL AS origin
+    NULL AS origin,
+    NULL AS repo,
+    NULL AS pr_number
   FROM ticket t
   JOIN node n ON n.id = t.node_id
   JOIN node np ON np.id = t.project_id
@@ -243,7 +245,9 @@ item AS (
     pr.branch,
     '[]',
     pr.updated_at,
-    pr.origin
+    pr.origin,
+    pr.repo,
+    pr.pr_number
   FROM pr
   JOIN node n ON n.id = pr.node_id
   LEFT JOIN node nt ON nt.id = pr.ticket_id

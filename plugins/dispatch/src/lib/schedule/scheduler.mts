@@ -5,14 +5,16 @@ import {
   milestoneStates,
 } from '../graph/index.mts';
 import {classifiedItems} from '../graph/index.mts';
-import {derive} from '../graph/index.mts';
+import {derive, repoPrLoad} from '../graph/index.mts';
 import {
   CoordinationStore,
   FetchRequestStore,
   NoticeStore,
+  PolicyStore,
   SessionStore,
 } from '../stores/index.mts';
 import type {NoticeKind} from '../stores/notice.mts';
+import {RepoAdmission} from './caps.mts';
 
 /** How many agents may be in flight at once when nothing configures it. */
 export const DEFAULT_MAX_PARALLEL = 3;
@@ -83,7 +85,16 @@ export class Scheduler {
       const budget = Math.max(0, this.#maxParallel - inFlight);
       const reviews = await this.#reviews(now, budget);
       orders.push(...reviews);
-      orders.push(...(await this.#fill(now, budget - reviews.length)));
+      // The per-repo caps bound resources the claim ledger cannot see: a PR
+      // holds preview stacks and cloud quota for as long as it stays open,
+      // and a yielded worker holds no claim at all.
+      const admission = new RepoAdmission(
+        await new PolicyStore(this.#db).getRepoCaps(),
+        await repoPrLoad(this.#db)
+      );
+      orders.push(
+        ...(await this.#fill(now, budget - reviews.length, admission))
+      );
       orders.push(...(await this.#conditions(now)));
     }
     return {orders, retired: false};
@@ -139,13 +150,24 @@ export class Scheduler {
    * binds, because a second server scheduling concurrently computed its budget
    * from the same pre-claim reading. A `full` outcome ends the pass — the
    * later entries cannot fit either.
+   *
+   * A per-repo cap ends nothing: it refuses one entry, and a later entry for
+   * another repo may still fit. Only PR items are gated; a ticket-worker keeps
+   * planning and registering PR items, which then wait in the queue for a slot
+   * — that is the queue doing its job.
    */
-  async #fill(now: string, budget: number): Promise<WorkOrder[]> {
+  async #fill(
+    now: string,
+    budget: number,
+    admission: RepoAdmission
+  ): Promise<WorkOrder[]> {
     const coordination = new CoordinationStore(this.#db);
     const orders: WorkOrder[] = [];
 
     for (const {entry, pass} of await dispatchQueue(this.#db, {now})) {
       if (orders.length >= budget) break;
+      if (entry.item.kind === 'pr' && admission.admit(entry.item) !== null)
+        continue;
       const claim = await coordination.claim({
         node: entry.item.id,
         session: this.#session,
@@ -160,6 +182,7 @@ export class Scheduler {
         continue;
       const passNote = pass === null ? '' : ` (pass: ${pass})`;
       if (entry.item.kind === 'pr') {
+        admission.reserve(entry.item);
         orders.push({
           kind: 'dispatch_pr',
           meta: {

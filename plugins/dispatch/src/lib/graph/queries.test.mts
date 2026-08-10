@@ -12,12 +12,15 @@ import {
   ProjectStore,
   SessionStore,
   TicketStore,
+  WatchStore,
 } from '../stores/index.mts';
+import type {PrSnapshot} from '../watch/snapshot.mts';
 import {
   classifiedItems,
   dispatchQueue,
   frontier,
   milestoneStates,
+  repoPrLoad,
 } from './queries.mts';
 
 const NOW = '2026-08-03T12:00:00.000Z';
@@ -541,6 +544,126 @@ describe('human-owned work', () => {
     assert.equal(await classificationOf(db, 'B'), 'human-blocked');
     assert.equal(await classificationOf(db, 'C'), 'human-blocked');
     assert.deepEqual(await queueOf(db), []);
+    await db.close();
+  });
+});
+
+describe('per-repo PR load', () => {
+  async function addPr(
+    db: Database,
+    id: string,
+    prNumber: number | null
+  ): Promise<void> {
+    await new PrStore(db).upsertPr({
+      id,
+      ticket: null,
+      origin: 'prompt',
+      repo: 'o/r',
+      prNumber,
+      url: null,
+      branch: null,
+      title: id,
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+  }
+
+  async function stored(
+    db: Database,
+    node: string,
+    over: Partial<PrSnapshot>
+  ): Promise<void> {
+    await new WatchStore(db).set({
+      node,
+      intervalSeconds: 60,
+      at: NOW,
+      expiresAt: '2026-08-03T13:00:00.000Z',
+      snapshot: {
+        head: 'aaaaaaaa',
+        state: 'OPEN',
+        draft: false,
+        merged: false,
+        mergeable: 'MERGEABLE',
+        mergeState: 'CLEAN',
+        reviewDecision: null,
+        rollup: 'SUCCESS',
+        checks: [],
+        reviews: [],
+        threads: [],
+        comments: [],
+        totals: {reviews: 0, threads: 0, comments: 0},
+        ...over,
+      },
+      session: null,
+    });
+  }
+
+  async function loadOf(
+    db: Database,
+    node: string
+  ): Promise<{open: boolean; building: boolean}> {
+    const entry = (await repoPrLoad(db)).find((row) => row.node === node);
+    assert.ok(entry, `expected ${node} in the repo load`);
+    return {open: entry.open, building: entry.building};
+  }
+
+  it('counts a PR nobody has snapshotted yet as open', async () => {
+    const db = await fresh();
+    await addPr(db, 'o/r#7', 7);
+
+    assert.deepEqual(await loadOf(db, 'o/r#7'), {open: true, building: false});
+    await db.close();
+  });
+
+  it('stops counting a PR item with no PR of its own yet', async () => {
+    const db = await fresh();
+    await addPr(db, 'o/r#todo', null);
+
+    assert.deepEqual(await loadOf(db, 'o/r#todo'), {
+      open: false,
+      building: false,
+    });
+    await db.close();
+  });
+
+  it('stops counting once the snapshot says the PR left OPEN', async () => {
+    const db = await fresh();
+    await addPr(db, 'o/r#7', 7);
+    await stored(db, 'o/r#7', {state: 'MERGED', merged: true});
+
+    assert.deepEqual(await loadOf(db, 'o/r#7'), {open: false, building: false});
+    await db.close();
+  });
+
+  it('stops counting on a terminal outcome, whatever the snapshot last said', async () => {
+    const db = await fresh();
+    await addPr(db, 'o/r#7', 7);
+    await stored(db, 'o/r#7', {rollup: 'PENDING'});
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'o/r#7',
+        outcome: 'delivered',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    assert.deepEqual(await loadOf(db, 'o/r#7'), {open: false, building: false});
+    await db.close();
+  });
+
+  it('counts a build only while an open PR has a running rollup', async () => {
+    const db = await fresh();
+    await addPr(db, 'o/r#7', 7);
+    await stored(db, 'o/r#7', {rollup: 'PENDING'});
+    assert.deepEqual(await loadOf(db, 'o/r#7'), {open: true, building: true});
+
+    await stored(db, 'o/r#7', {rollup: 'FAILURE'});
+    assert.deepEqual(await loadOf(db, 'o/r#7'), {open: true, building: false});
     await db.close();
   });
 });

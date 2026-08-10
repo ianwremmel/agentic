@@ -65,6 +65,65 @@ export async function dispatchQueue(
     }));
 }
 
+/** What one PR item costs the repo it belongs to, right now. */
+export interface RepoPrLoad {
+  node: string;
+  repo: string;
+  /** A PR exists on the forge and has neither merged nor closed. */
+  open: boolean;
+  /** That PR's head commit still has checks running. */
+  building: boolean;
+}
+
+/**
+ * Per-repo load for the admission caps, read from the graph and the snapshots
+ * the watch poll already stored — no fetch of its own.
+ *
+ * A terminal outcome settles the item whatever the forge last said, so it
+ * counts for nothing. Without one, an item that names a PR number is open
+ * until a snapshot says otherwise: the poll has to have run at least once for
+ * a closed PR to stop counting, and the cap should hold rather than let go on
+ * an item nobody has looked at yet. `building` is read from the check rollup
+ * and scoped to open PRs — a merged PR's trailing jobs are not this repo's
+ * in-flight work.
+ */
+export async function repoPrLoad(db: Database): Promise<RepoPrLoad[]> {
+  return db
+    .all(
+      `SELECT n.external_id AS node, pr.repo, pr.pr_number, o.outcome,
+              json_extract(w.snapshot, '$.state') AS pr_state,
+              json_extract(w.snapshot, '$.rollup') AS rollup
+       FROM pr
+       JOIN node n ON n.id = pr.node_id
+       LEFT JOIN watch w ON w.node_id = pr.node_id
+       LEFT JOIN outcome o ON o.node_id = pr.node_id
+       WHERE pr.repo IS NOT NULL
+       ORDER BY n.external_id`
+    )
+    .map((row) => {
+      const outcome = text(row.outcome);
+      const state = text(row.pr_state);
+      const open =
+        row.pr_number !== null &&
+        row.pr_number !== undefined &&
+        !RESOLVED_OUTCOMES.has(outcome ?? '') &&
+        (state === null || state === 'OPEN');
+      return {
+        node: text(row.node) ?? '',
+        repo: text(row.repo) ?? '',
+        open,
+        building: open && text(row.rollup) === 'PENDING',
+      };
+    });
+}
+
+/** Outcomes that end a PR item's life, whatever the forge last reported. */
+const RESOLVED_OUTCOMES: ReadonlySet<string> = new Set([
+  'delivered',
+  'verified',
+  'canceled',
+]);
+
 /** Every milestone's derived state, ordered by project then id. */
 export async function milestoneStates(
   db: Database,

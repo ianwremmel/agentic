@@ -118,14 +118,18 @@ export class WatchStore {
 
   /**
    * Watching rows ready for a poll — expired, never checked, or past their
-   * interval — oldest check first, capped so one pass stays short. A row
-   * whose item lacks PR coordinates is skipped; there is nothing to read yet.
+   * interval — capped so one pass stays short. A row whose item lacks PR
+   * coordinates is skipped; there is nothing to read yet.
    *
    * A parked row (an outcome is recorded, so the only watch left is the one
    * `human-blocked` keeps) is never expired and is never made due by expiry:
-   * it comes round on its interval alone, and each poll pushes `expires_at`
-   * out again. Otherwise the pass would fire it into a `resume` nobody
-   * prompted, on a schedule rather than on an answer.
+   * it comes round on its interval alone. Otherwise the pass would fire it
+   * into a `resume` nobody prompted, on a schedule rather than on an answer.
+   *
+   * Expired rows come first, then oldest check. An expired row has already
+   * been checked, so under the plain oldest-check order it sorts behind every
+   * never-checked row and a steady influx of new watches can hold it outside
+   * the cap indefinitely — starving the deadline that is the whole safety net.
    */
   async due(now: string, limit: number): Promise<DueWatch[]> {
     assertInstant(now, 'now');
@@ -145,7 +149,8 @@ export class WatchStore {
                  AND o.node_id IS NULL)
                 OR w.checked_at IS NULL
                 OR unixepoch(?) - unixepoch(w.checked_at) >= w.interval_s)
-         ORDER BY w.checked_at IS NOT NULL, w.checked_at, n.external_id
+         ORDER BY expired DESC, w.checked_at IS NOT NULL, w.checked_at,
+                  n.external_id
          LIMIT ?`,
         [now, now, now, limit]
       )
@@ -226,7 +231,15 @@ export class WatchStore {
     });
   }
 
-  /** Fire a watch outright (expiry); same generation guard as `observe`. */
+  /**
+   * Fire a watch outright (expiry); same generation guard as `observe`.
+   *
+   * The `watch_expired` event is what makes the deadline mean anything. A
+   * fired row is no longer polled, and a yielded worker whose session is live
+   * keeps the item out of the queue, so firing without an event would move the
+   * item from watched to unreachable. The event carries the watch's session,
+   * which is what routes it to the worker holding the PR.
+   */
   async fire(
     node: string,
     at: string,
@@ -234,13 +247,29 @@ export class WatchStore {
   ): Promise<'fired' | 'stale'> {
     assertInstant(at, 'at');
     return this.#db.transaction(() => {
-      const changed = this.#db.run(
-        `UPDATE watch SET state = 'fired', checked_at = ?
-         WHERE node_id = (SELECT id FROM node WHERE external_id = ?)
-           AND state = 'watching' AND created_at = ?`,
-        [at, node, createdAt]
+      const row = this.#db.get(
+        `SELECT w.node_id, w.session_id FROM watch w
+         JOIN node n ON n.id = w.node_id
+         WHERE n.external_id = ? AND w.state = 'watching' AND w.created_at = ?`,
+        [node, createdAt]
       );
-      return changed > 0 ? 'fired' : 'stale';
+      if (row === undefined) return 'stale';
+      const nodeId = Number(row.node_id);
+      this.#db.run(
+        `UPDATE watch SET state = 'fired', checked_at = ? WHERE node_id = ?`,
+        [at, nodeId]
+      );
+      this.#db.run(
+        `INSERT INTO pr_event (node_id, kind, summary, meta, session_id, observed_at)
+         VALUES (?, 'watch_expired', ?, '{}', ?, ?)`,
+        [
+          nodeId,
+          'The watch reached its deadline with nothing changed on the forge. Look for a signal the snapshot cannot see.',
+          typeof row.session_id === 'string' ? row.session_id : null,
+          at,
+        ]
+      );
+      return 'fired';
     });
   }
 

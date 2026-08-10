@@ -253,6 +253,14 @@ through the same queue as the PR/CI triggers, with the same routing keys.
 | kind             | `meta` (beyond source/kind/seq and routing keys) | fires when                                                          |
 | ---------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
 | `ticket_changed` | `ticket`, `from`, `to`                           | a tracker write (`dispatch ticket set`) reveals a status transition |
+| `watch_expired`  | —                                                | a watch reaches its deadline with no diff to report                 |
+
+A watch's deadline MUST be measured from when the wait was armed. A poll that
+extends it is one a quiet PR never reaches, and the quiet PR — no CI moving,
+no reviewer requested — is the only kind the deadline exists for. Firing MUST
+emit the `watch_expired` event: a fired watch is no longer polled and a live
+worker holding the item keeps it out of the queue, so a silent fire would move
+the item from watched to unreachable.
 
 A `ticket_changed` row is written without a session, so any acked live server
 MAY deliver it. For every observation event the delivery mark MUST be a

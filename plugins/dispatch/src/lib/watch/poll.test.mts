@@ -159,12 +159,90 @@ describe('pollWatches', () => {
       now: () => '2026-08-05T14:00:00.000Z',
     });
 
-    // Expiry is the safety net for signals the snapshot cannot see, so it
-    // fires with no events — the worker goes and looks for itself.
+    // Expiry is the safety net for signals the snapshot cannot see. It has no
+    // diff to report, but it must still say something: a fired watch is no
+    // longer polled, so a silent fire leaves the item unreachable.
     assert.deepEqual(fired, ['owner/repo#1']);
     await withDatabase(undefined, env, async (db) => {
-      assert.deepEqual(await new PrEventStore(db).undelivered('S1'), []);
+      const events = await new PrEventStore(db).undelivered('S1');
+      assert.deepEqual(
+        events.map((event) => event.kind),
+        ['watch_expired']
+      );
     });
+  });
+
+  it('starts a fresh wait when an expired watch is re-armed', async () => {
+    const env = await tempEnv();
+    await fixture(env, BASE);
+
+    await pollWatches(env, {
+      snapshot: () => {
+        throw new Error('must not be called for an expired watch');
+      },
+      now: () => '2026-08-05T13:00:00.000Z',
+    });
+
+    // The worker woken by expiry yields again, which re-arms the watch. The
+    // new deadline is the new wait's, and the expiry event belongs to the
+    // wait nobody is in any more.
+    await withDatabase(undefined, env, async (db) => {
+      await new WatchStore(db).set({
+        node: 'owner/repo#1',
+        intervalSeconds: 900,
+        at: '2026-08-05T13:05:00.000Z',
+        expiresAt: '2026-08-05T19:05:00.000Z',
+        snapshot: BASE,
+        session: 'S1',
+      });
+      assert.deepEqual(await new PrEventStore(db).undelivered('S1'), []);
+      const due = await new WatchStore(db).due('2026-08-05T14:00:00.000Z', 5);
+      assert.equal(due[0]?.expired, false);
+    });
+  });
+
+  it('polls an expired watch ahead of a flood of never-checked ones', async () => {
+    const env = await tempEnv();
+    await fixture(env, BASE);
+
+    // Give the expired row a checked_at, which is what sinks it behind every
+    // never-checked row under a plain oldest-check order.
+    await pollWatches(env, {snapshot: snapshotter(BASE), now: () => LATER});
+
+    await withDatabase(undefined, env, async (db) => {
+      for (let n = 2; n <= 13; n += 1) {
+        await new PrStore(db).upsertPr({
+          id: `owner/repo#${String(n)}`,
+          ticket: null,
+          origin: 'prompt',
+          repo: 'owner/repo',
+          prNumber: n,
+          url: null,
+          branch: null,
+          title: `pr ${String(n)}`,
+          injected: false,
+          priority: null,
+          updatedAt: NOW,
+        });
+        await new WatchStore(db).set({
+          node: `owner/repo#${String(n)}`,
+          intervalSeconds: 60,
+          at: '2026-08-05T12:50:00.000Z',
+          expiresAt: '2026-08-05T18:50:00.000Z',
+          snapshot: BASE,
+          session: 'S1',
+        });
+      }
+    });
+
+    // One pass reads at most ten watches. More than that arrive unchecked, so
+    // an expiry that waits its turn is an expiry that never happens.
+    const {fired} = await pollWatches(env, {
+      snapshot: snapshotter(BASE),
+      now: () => '2026-08-05T13:00:00.000Z',
+    });
+
+    assert.deepEqual(fired, ['owner/repo#1']);
   });
 
   it('still expires a watch that polls kept finding unchanged', async () => {

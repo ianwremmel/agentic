@@ -76,10 +76,14 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   response — and a PR by its watch firing on an observation, which is the
  *   forge saying someone who is not this agent touched it. Expiry alone does
  *   not qualify: it fires with no events, and a deadline is not an answer.
- *   The revive branch is deliberately ahead of the human-blocked guard;
- *   behind it, it is unreachable for a PR item, whose classification is
- *   derived from that very outcome. Nothing human-owned, still parked,
- *   resolved, or held by a live claim is ever handed out.
+ *   Revive defers to a live worker like every other resume: a park that was
+ *   already revived once leaves its outcome standing until the next report,
+ *   so without that guard a yield from the resumed worker would read as a
+ *   second park and race a warm relay. The branch is deliberately ahead of
+ *   the human-blocked guard; behind it, it is unreachable for a PR item,
+ *   whose classification is derived from that very outcome. Nothing
+ *   human-owned, still parked, resolved, or held by a live claim is ever
+ *   handed out.
  */
 export const PREFIX = `
 WITH RECURSIVE
@@ -325,6 +329,7 @@ queued AS (
         OR classification IN ('verified', 'canceled', 'dormant')
         THEN NULL
       WHEN outcome = 'human-blocked' AND (claim_live IS NULL OR claim_live = 0)
+        AND worker_live = 0
         AND (
           (kind = 'pr' AND watch_state = 'fired' AND events_observed)
           OR (kind = 'ticket' AND classification = 'available'

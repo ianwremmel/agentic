@@ -114,13 +114,24 @@ export class CoordinationStore {
     });
   }
 
-  /** Drop a recorded outcome, so the queue re-serves the node as fresh work. */
+  /**
+   * Drop a recorded outcome, so the queue re-serves the node as fresh work.
+   *
+   * The watch a park left running goes with it. It suppresses the node from
+   * the queue while it is `watching` — that is what keeps a parked item from
+   * being served on a timer — so leaving it behind would make this verb wait
+   * on the very PR change the operator is answering out of band.
+   */
   async removeOutcome(node: string): Promise<boolean> {
     const found = findNode(this.#db, node);
     if (found === null) return false;
-    return (
-      this.#db.run('DELETE FROM outcome WHERE node_id = ?', [found.id]) > 0
-    );
+    return this.#db.transaction(() => {
+      const removed =
+        this.#db.run('DELETE FROM outcome WHERE node_id = ?', [found.id]) > 0;
+      this.#db.run('DELETE FROM watch WHERE node_id = ?', [found.id]);
+      this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [found.id]);
+      return removed;
+    });
   }
 
   /* eslint-disable @typescript-eslint/no-base-to-string --

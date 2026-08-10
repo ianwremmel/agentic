@@ -35,6 +35,10 @@ export interface DueWatch {
  * stored snapshot, and fires the row when something a worker would act on
  * changed. The row survives dispatch — a crashed resume still reads as a wait
  * to pick up — and is removed when the item's outcome is recorded.
+ *
+ * `human-blocked` is the exception both ways: it keeps its watch, because a
+ * park is a wait handed to the operator rather than a conclusion, and
+ * `dispatch outcome rm` is what finally drops it.
  */
 export class WatchStore {
   readonly #db: Database;

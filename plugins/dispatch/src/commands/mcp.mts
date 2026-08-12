@@ -7,14 +7,50 @@ import {nowIso, withDatabase} from '../lib/db/index.mts';
 import {DEFAULT_STALE_AFTER_SECONDS} from '../lib/graph/index.mts';
 import {processStartIso, retireNonLive} from '../lib/liveness/index.mts';
 import {runMcpServer} from '../lib/mcp/index.mts';
+import {
+  assertCapLimit,
+  DEFAULT_MAX_IN_FLIGHT_BUILDS,
+  DEFAULT_MAX_OPEN_PRS,
+  parseRepoLimits,
+} from '../lib/model/index.mts';
 import {createTickState, runServerTick} from '../lib/schedule/index.mts';
-import {SessionStore} from '../lib/stores/index.mts';
+import {PolicyStore, SessionStore} from '../lib/stores/index.mts';
 
 const options = {
   'max-parallel': {
     type: 'number',
     description:
       'Cap on agents running at once, across every session sharing this database.',
+    positional: false,
+    required: false,
+  },
+  'max-open-prs': {
+    type: 'number',
+    description:
+      'Cap on PRs open at once in one repo, for every repo without an override.',
+    positional: false,
+    required: false,
+    default: DEFAULT_MAX_OPEN_PRS,
+  },
+  'max-open-prs-by-repo': {
+    type: 'string',
+    description:
+      'Per-repo overrides of --max-open-prs, as owner/repo=<number>, comma separated.',
+    positional: false,
+    required: false,
+  },
+  'max-in-flight-builds': {
+    type: 'number',
+    description:
+      "Cap on one repo's PRs with CI running at once, for every repo without an override.",
+    positional: false,
+    required: false,
+    default: DEFAULT_MAX_IN_FLIGHT_BUILDS,
+  },
+  'max-in-flight-builds-by-repo': {
+    type: 'string',
+    description:
+      'Per-repo overrides of --max-in-flight-builds, as owner/repo=<number>, comma separated.',
     positional: false,
     required: false,
   },
@@ -46,7 +82,28 @@ export class Command extends AbstractCommand {
     const registryId = randomUUID();
     const registeredAt = nowIso();
     const claudeSessionId = ctx.env.CLAUDE_CODE_SESSION_ID ?? null;
+    // Parsed before anything is written: a malformed override list is a usage
+    // error, not a server that starts and then enforces half a policy.
+    const repoCaps = {
+      openPrs: assertCapLimit(parsed['max-open-prs'], 'max-open-prs'),
+      inFlightBuilds: assertCapLimit(
+        parsed['max-in-flight-builds'],
+        'max-in-flight-builds'
+      ),
+      openPrsByRepo: parseRepoLimits(
+        parsed['max-open-prs-by-repo'] ?? '',
+        'max-open-prs-by-repo'
+      ),
+      inFlightBuildsByRepo: parseRepoLimits(
+        parsed['max-in-flight-builds-by-repo'] ?? '',
+        'max-in-flight-builds-by-repo'
+      ),
+    };
     await withDatabase(undefined, ctx.env, async (db) => {
+      // The caps bound the host's shared resources, so the policy lives in the
+      // database where every reader — this server's scheduler, and `dispatch
+      // status` in another process — sees the same one.
+      await new PolicyStore(db).setRepoCaps(repoCaps);
       await new SessionStore(db).register({
         id: registryId,
         host: hostname(),

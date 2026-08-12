@@ -16,6 +16,8 @@ concept, not a single table: an operation may write several tables atomically.
 - `fetch-request` — the durable instruction queue: enqueue, deliver, redeliver,
   resolve, and the open count that decides when a refresh closes.
 - `notice` — once-per-episode markers for the scheduler's condition orders.
+- `policy` — the per-repo admission caps the running server was started with,
+  so a reader in another process reports against the caps in force.
 - `review` — milestone reviews with the member snapshot that expires them.
 
 The derived read-model (frontier, classification, milestone state, anomalies)

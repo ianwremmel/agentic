@@ -111,7 +111,9 @@ const SNAPSHOT: PrSnapshot = {
 
 /**
  * Put a node's watch where the server would have left it, without running a
- * poll: `events` empty is the expiry path, which fires with nothing attached.
+ * poll: `events` empty is the expiry path. Callers here are parked items, for
+ * which expiry attaches nothing — on an unparked one it reports
+ * `watch_expired`.
  */
 async function watchFires(
   db: Database,
@@ -139,7 +141,6 @@ async function watchFires(
     createdAt: NOW,
     fire: true,
     intervalSeconds: 60,
-    expiresAt: arm.expiresAt,
     events,
   });
 }

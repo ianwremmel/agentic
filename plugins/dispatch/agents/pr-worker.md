@@ -169,3 +169,4 @@ not settled by fixing CI alone.
 | `pr_conflicted`              | Rebase or merge the base branch; resolve.                                                                                                      |
 | `pr_head_changed`            | Someone else pushed: re-pull before any further work.                                                                                          |
 | `ticket_changed`             | Re-read the ticket through the adapter. Scope moved: adjust. Ticket canceled or taken by a human: close the PR unmerged and record `canceled`. |
+| `watch_expired`              | Nothing the snapshot sees has changed for hours. Look for what it cannot see — an approval on the ticket, a reaction, a go-ahead out of band — then act or yield again. |

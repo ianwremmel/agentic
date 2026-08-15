@@ -13,10 +13,11 @@ const MAX_POLLS_PER_PASS = 10;
  * One polling pass over the due watches: fire the expired ones outright,
  * snapshot the rest, and record what changed as events.
  *
- * A watch fires only when the diff produced something — an unchanged PR, or
- * one that changed in a way only the agent itself caused, leaves the row
- * watching. That is the whole point of diffing structurally rather than
- * hashing: a worker is woken for a reason it can be told.
+ * Short of its deadline, a watch fires only when the diff produced something
+ * — an unchanged PR, or one that changed in a way only the agent itself
+ * caused, leaves the row watching. That is the whole point of diffing
+ * structurally rather than hashing: a worker is woken for a reason it can be
+ * told. Expiry is the one wake with no reason to give, and says so.
  *
  * A parked item never reads as expired (`due`), so for it the diff is the
  * only thing that fires: it is waiting on a person, and "your six hours are
@@ -70,9 +71,6 @@ export async function pollWatches(
           createdAt: due.createdAt,
           fire: observed.length > 0,
           intervalSeconds: cadenceFor(taken),
-          expiresAt: new Date(
-            Date.parse(now()) + EXPIRY_SECONDS * 1_000
-          ).toISOString(),
           events: observed,
         });
         if (outcome === 'fired') fired.push(due.node);

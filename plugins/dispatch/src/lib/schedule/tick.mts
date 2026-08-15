@@ -114,8 +114,10 @@ export async function runServerTick(
       snapshot: opts.snapshot ?? githubSnapshot,
       log: opts.log,
     });
-    // A fired watch re-queued its item; a second pass dispatches it in this
-    // tick instead of the next. Claims make the extra pass idempotent.
+    // A fired watch re-queued its item unless a live worker still holds it,
+    // in which case the push below relays instead; a second pass dispatches
+    // the queued ones in this tick rather than the next. Claims make the
+    // extra pass idempotent.
     if (fired.length > 0) await schedule();
   } catch (error) {
     opts.log?.error('watch pass failed', {

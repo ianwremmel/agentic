@@ -238,6 +238,11 @@ export class WatchStore {
    * fired row is no longer polled, and a yielded worker whose session is live
    * keeps the item out of the queue, so a silent fire strands it. The event
    * carries the watch's session, which routes it to that worker.
+   *
+   * A parked item is not fired at all: any event revives it, and a deadline is
+   * not the answer a park waits for. The guard sits on the generation read, so
+   * a park landing between `due` and here leaves the row watching rather than
+   * fired-with-no-event — which is neither polled nor revivable.
    */
   async fire(
     node: string,
@@ -249,7 +254,8 @@ export class WatchStore {
       const row = this.#db.get(
         `SELECT w.node_id, w.session_id FROM watch w
          JOIN node n ON n.id = w.node_id
-         WHERE n.external_id = ? AND w.state = 'watching' AND w.created_at = ?`,
+         WHERE n.external_id = ? AND w.state = 'watching' AND w.created_at = ?
+           AND NOT EXISTS (SELECT 1 FROM outcome o WHERE o.node_id = w.node_id)`,
         [node, createdAt]
       );
       if (row === undefined) return 'stale';

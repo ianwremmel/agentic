@@ -257,7 +257,9 @@ through the same queue as the PR/CI triggers, with the same routing keys.
 
 A watch's deadline MUST be measured from when it was armed, never extended by a
 poll, and firing MUST emit the `watch_expired` event — a fired watch is no
-longer polled, so a silent fire strands the item.
+longer polled, so a silent fire strands the item. A parked item's watch MUST NOT
+fire on the deadline at all: any event revives it, and a deadline is not the
+answer a park waits for.
 
 A `ticket_changed` row is written without a session, so any acked live server
 MAY deliver it, as MAY any server deliver a row whose session no longer exists.

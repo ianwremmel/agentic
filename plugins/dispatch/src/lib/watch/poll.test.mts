@@ -172,6 +172,40 @@ describe('pollWatches', () => {
     });
   });
 
+  it('leaves a parked item watching rather than firing its expired watch', async () => {
+    const env = await tempEnv();
+    await fixture(env, BASE);
+    await withDatabase(undefined, env, async (db) => {
+      await new CoordinationStore(db).recordOutcome(
+        {
+          node: 'owner/repo#1',
+          outcome: 'human-blocked',
+          retryable: null,
+          detail: 'which auth flow?',
+          recordedAt: NOW,
+        },
+        {session: ''}
+      );
+      // Fire it directly: `due` already withholds a parked row from expiry,
+      // and this pins the rule at the write, which is what a park landing
+      // mid-pass hits.
+      assert.equal(
+        await new WatchStore(db).fire('owner/repo#1', LATER, NOW),
+        'stale'
+      );
+      // Any event revives a parked item, and a deadline is not the answer a
+      // park waits for.
+      assert.deepEqual(await new PrEventStore(db).undelivered('S1'), []);
+      // Fired-with-no-event would be the worst of both: never polled again
+      // (`due` takes only watching rows) and never revived (revival needs an
+      // event), so the park could only be undone by hand.
+      assert.equal(
+        (await new WatchStore(db).get('owner/repo#1'))?.state,
+        'watching'
+      );
+    });
+  });
+
   it('starts a fresh wait when an expired watch is re-armed', async () => {
     const env = await tempEnv();
     await fixture(env, BASE);
@@ -361,7 +395,7 @@ describe('pollWatches', () => {
     });
   });
 
-  it('re-arms rather than fires an expired watch on a parked item', async () => {
+  it('keeps polling a parked watch past its deadline instead of expiring it', async () => {
     const env = await tempEnv();
     await fixture(env, BASE);
     await withDatabase(undefined, env, async (db) => {
@@ -391,11 +425,17 @@ describe('pollWatches', () => {
         (await new WatchStore(db).get('owner/repo#1'))?.state,
         'watching'
       );
-      // The poll pushed the expiry out, so the row is not perpetually due.
+      // The outcome takes expiry out of the due test, so a parked row past its
+      // deadline is not perpetually due — it comes round on its interval, and
+      // still reads unexpired when it does.
       assert.deepEqual(
         await new WatchStore(db).due('2026-08-05T20:00:01.000Z', 5),
         []
       );
+      const [row] = await new WatchStore(db).due('2026-08-05T20:01:01.000Z', 5);
+      assert.ok(row !== undefined);
+      assert.equal(row.node, 'owner/repo#1');
+      assert.equal(row.expired, false);
     });
   });
 

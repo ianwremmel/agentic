@@ -12,7 +12,11 @@ import {
   ProjectStore,
   SessionStore,
   TicketStore,
+  WatchStore,
+  WorkerStore,
 } from '../stores/index.mts';
+import type {PrSnapshot} from '../watch/snapshot.mts';
+import {DEFAULT_STALE_AFTER_SECONDS} from './pipeline.mts';
 import {
   classifiedItems,
   dispatchQueue,
@@ -86,6 +90,58 @@ async function queueOf(
     id: entry.item.id,
     pass,
   }));
+}
+
+/** Enough of a PR read for `observe` to store; the diff is not under test. */
+const SNAPSHOT: PrSnapshot = {
+  head: 'aaaaaaaa',
+  state: 'OPEN',
+  draft: false,
+  merged: false,
+  mergeable: 'MERGEABLE',
+  mergeState: 'BLOCKED',
+  reviewDecision: 'REVIEW_REQUIRED',
+  rollup: 'SUCCESS',
+  checks: [],
+  reviews: [],
+  threads: [],
+  comments: [],
+  totals: {reviews: 0, threads: 0, comments: 0},
+};
+
+/**
+ * Put a node's watch where the server would have left it, without running a
+ * poll: `events` empty is the expiry path, which fires with nothing attached.
+ */
+async function watchFires(
+  db: Database,
+  node: string,
+  events: {kind: 'pr_comment'; meta: Record<string, string>; summary: string}[]
+): Promise<void> {
+  const watches = new WatchStore(db);
+  const arm = {
+    node,
+    intervalSeconds: 60,
+    at: NOW,
+    expiresAt: '2026-08-03T18:00:00.000Z',
+    snapshot: SNAPSHOT,
+    session: null,
+  };
+  await watches.set(arm);
+  if (events.length === 0) {
+    await watches.fire(node, NOW, NOW);
+    return;
+  }
+  await watches.observe({
+    node,
+    snapshot: SNAPSHOT,
+    at: NOW,
+    createdAt: NOW,
+    fire: true,
+    intervalSeconds: 60,
+    expiresAt: arm.expiresAt,
+    events,
+  });
 }
 
 async function classificationOf(db: Database, id: string): Promise<string> {
@@ -374,6 +430,161 @@ describe('waiting on an operator response', () => {
     );
     assert.equal(item?.classification, 'human-blocked');
     assert.deepEqual(await queueOf(db), []);
+    await db.close();
+  });
+
+  it('re-serves a parked PR item as resume once its watch fires on an observation', async () => {
+    const db = await fresh();
+    await new PrStore(db).upsertPr({
+      id: 'o/r#8',
+      ticket: null,
+      origin: 'prompt',
+      repo: 'o/r',
+      prNumber: 8,
+      url: null,
+      branch: null,
+      title: 'parked on the deploy pipeline',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'o/r#8',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: 'deploy example-fly is red on unrelated branches too',
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    // Still parked while the watch runs: nobody has answered yet.
+    await new WatchStore(db).set({
+      node: 'o/r#8',
+      intervalSeconds: 60,
+      at: NOW,
+      expiresAt: '2026-08-03T18:00:00.000Z',
+      snapshot: SNAPSHOT,
+      session: null,
+    });
+    assert.deepEqual(await queueOf(db), []);
+
+    // Expiry fires the watch with nothing attached. A deadline is not an
+    // answer, so the item stays parked.
+    await watchFires(db, 'o/r#8', []);
+    assert.deepEqual(await queueOf(db), []);
+
+    // Someone who is not this agent commented: that is the answer.
+    await watchFires(db, 'o/r#8', [
+      {kind: 'pr_comment', meta: {}, summary: 'operator replied'},
+    ]);
+    assert.deepEqual(await queueOf(db), [{id: 'o/r#8', pass: 'resume'}]);
+
+    // Claimed by the run it just triggered — not handed out twice.
+    await claim(db, 'o/r#8', 'S1');
+    assert.deepEqual(await queueOf(db), []);
+    await db.close();
+  });
+
+  it('requeues a parked PR item the operator unparked by hand', async () => {
+    const db = await fresh();
+    await new PrStore(db).upsertPr({
+      id: 'o/r#10',
+      ticket: null,
+      origin: 'prompt',
+      repo: 'o/r',
+      prNumber: 10,
+      url: null,
+      branch: null,
+      title: 'answered somewhere else',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+    await session(db, 'S1', NOW);
+    const coordination = new CoordinationStore(db);
+    await coordination.recordOutcome(
+      {
+        node: 'o/r#10',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+    await new WatchStore(db).set({
+      node: 'o/r#10',
+      intervalSeconds: 60,
+      at: NOW,
+      expiresAt: '2026-08-03T18:00:00.000Z',
+      snapshot: SNAPSHOT,
+      session: null,
+    });
+    assert.deepEqual(await queueOf(db), []);
+
+    // The answer arrived where the snapshot cannot see it — on the ticket, or
+    // in person. `dispatch outcome rm` is the operator saying so, and it has
+    // to take the watch with it: while the watch runs, the item is withheld.
+    // `pass: null` is the plain available pass.
+    await coordination.removeOutcome('o/r#10', {
+      now: NOW,
+      staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+    });
+    assert.deepEqual(await queueOf(db), [{id: 'o/r#10', pass: null}]);
+    await db.close();
+  });
+
+  it('leaves a revived PR item to its live worker rather than redispatching it', async () => {
+    const db = await fresh();
+    await new PrStore(db).upsertPr({
+      id: 'o/r#9',
+      ticket: null,
+      origin: 'prompt',
+      repo: 'o/r',
+      prNumber: 9,
+      url: null,
+      branch: null,
+      title: 'revived once already',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'o/r#9',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+    // The worker a previous revive launched: claimed, addressed, then
+    // yielded its wait back to the server — claim released, address kept.
+    // It has not reported yet, so the park it was dispatched out of is still
+    // the outcome of record.
+    await claim(db, 'o/r#9', 'S1');
+    await new WorkerStore(db).set({
+      node: 'o/r#9',
+      session: 'S1',
+      agentRef: 'agent-1',
+      at: NOW,
+    });
+    await new CoordinationStore(db).release('o/r#9', 'S1');
+    await watchFires(db, 'o/r#9', [
+      {kind: 'pr_comment', meta: {}, summary: 'operator replied again'},
+    ]);
+
+    // Relaying to that worker and cold-starting a second one are competing
+    // recoveries; queueing here would run both against one PR.
+    assert.deepEqual(await queueOf(db), []);
+
+    await new WorkerStore(db).remove('o/r#9', 'S1');
+    assert.deepEqual(await queueOf(db), [{id: 'o/r#9', pass: 'resume'}]);
     await db.close();
   });
 

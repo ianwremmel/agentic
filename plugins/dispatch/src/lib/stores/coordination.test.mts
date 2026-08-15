@@ -252,6 +252,125 @@ describe('CoordinationStore recordOutcome', () => {
     await db.close();
   });
 
+  it('keeps a parked item watched and drops the watch on every other outcome', async () => {
+    const at = '2026-07-31T00:00:00Z';
+    const arm = (db: Database): void => {
+      db.run(
+        `INSERT INTO watch (node_id, state, snapshot, interval_s, session_id, created_at, expires_at)
+         SELECT id, 'fired', '{}', 60, 's1', ?, ? FROM node WHERE external_id = 'T1'`,
+        [at, '2026-07-31T06:00:00Z']
+      );
+    };
+    const watchRow = (db: Database): Record<string, unknown> | undefined =>
+      db.get('SELECT state, session_id FROM watch');
+
+    const parked = await fresh();
+    arm(parked.db);
+    await parked.store.recordOutcome(
+      {
+        node: 'T1',
+        outcome: 'human-blocked',
+        retryable: null,
+        detail: 'which auth flow?',
+        recordedAt: at,
+      },
+      {session: 's1'}
+    );
+    // The wait moved to the operator rather than ending, so the row keeps
+    // running — unbound from the worker's session, which is gone.
+    assert.equal(watchRow(parked.db)?.state, 'watching');
+    assert.equal(watchRow(parked.db)?.session_id, null);
+    await parked.db.close();
+
+    const concluded = await fresh();
+    arm(concluded.db);
+    await concluded.store.recordOutcome(
+      {
+        node: 'T1',
+        outcome: 'delivered',
+        retryable: null,
+        detail: null,
+        recordedAt: at,
+      },
+      {session: 's1'}
+    );
+    assert.equal(watchRow(concluded.db), undefined);
+    await concluded.db.close();
+  });
+
+  it('unparks around a worker: keeps a live one its watch, takes a dead one', async () => {
+    const at = '2026-07-31T00:00:00Z';
+    // `fresh` heartbeats its sessions at `at`, so this is an hour past the
+    // 300 s window: session 's1' reads dead.
+    const LATER = '2026-07-31T01:00:00Z';
+    const live = {now: at, staleAfterSeconds: 300};
+
+    const armWatch = (db: Database): void => {
+      db.run(
+        `INSERT INTO watch (node_id, state, snapshot, interval_s, session_id, created_at, expires_at)
+         SELECT id, 'watching', '{}', 60, 's1', ?, ? FROM node WHERE external_id = 'T1'`,
+        [at, '2026-07-31T06:00:00Z']
+      );
+    };
+    const addWorker = (db: Database): void => {
+      db.run(
+        `INSERT INTO worker (node_id, session_id, agent_ref, launched_at)
+         SELECT id, 's1', 'agent-1', ? FROM node WHERE external_id = 'T1'`,
+        [at]
+      );
+    };
+    const park = async (store: CoordinationStore): Promise<void> => {
+      await store.recordOutcome(
+        {
+          node: 'T1',
+          outcome: 'human-blocked',
+          retryable: null,
+          detail: null,
+          recordedAt: at,
+        },
+        {session: 's1'}
+      );
+    };
+    const watches = (db: Database): number =>
+      Number(db.get('SELECT COUNT(*) AS n FROM watch')?.n);
+
+    // Nothing was parked here, so the watch is a worker's wait handed to the
+    // server. Unparking a node that was never parked must not take it.
+    const unparked = await fresh();
+    armWatch(unparked.db);
+    assert.equal(await unparked.store.removeOutcome('T1', live), false);
+    assert.equal(watches(unparked.db), 1);
+    await unparked.db.close();
+
+    // A park that was already revived: the outcome stands until the resumed
+    // worker reports, so an outcome and that worker's own yield coexist.
+    // Dropping the outcome must not drop the wait out from under it.
+    const revived = await fresh();
+    await park(revived.store);
+    armWatch(revived.db);
+    addWorker(revived.db);
+    assert.equal(await revived.store.removeOutcome('T1', live), true);
+    assert.equal(watches(revived.db), 1);
+    await revived.db.close();
+
+    // Same shape, but the worker's session stopped heartbeating. A row that
+    // addresses nobody must not hold the operator's unpark until the next
+    // stale sweep.
+    const dead = await fresh();
+    await park(dead.store);
+    armWatch(dead.db);
+    addWorker(dead.db);
+    assert.equal(
+      await dead.store.removeOutcome('T1', {
+        now: LATER,
+        staleAfterSeconds: 300,
+      }),
+      true
+    );
+    assert.equal(watches(dead.db), 0);
+    await dead.db.close();
+  });
+
   it('rejects retryable on a non-failed outcome', async () => {
     const {db, store} = await fresh();
     await assert.rejects(

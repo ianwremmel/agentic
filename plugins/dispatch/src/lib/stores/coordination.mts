@@ -114,13 +114,51 @@ export class CoordinationStore {
     });
   }
 
-  /** Drop a recorded outcome, so the queue re-serves the node as fresh work. */
-  async removeOutcome(node: string): Promise<boolean> {
-    const found = findNode(this.#db, node);
-    if (found === null) return false;
-    return (
-      this.#db.run('DELETE FROM outcome WHERE node_id = ?', [found.id]) > 0
-    );
+  /**
+   * Drop a recorded outcome, so the queue re-serves the node as fresh work.
+   *
+   * The watch a park left running goes with it. It suppresses the node from
+   * the queue while it is `watching` — that is what keeps a parked item from
+   * being served on a timer — so leaving it behind would make this verb wait
+   * on the very PR change the operator is answering out of band.
+   *
+   * Only the parked watch, though, and a recorded outcome does not identify
+   * one: a park that was already revived keeps its outcome until the resumed
+   * worker reports, so an outcome can sit alongside that worker's own yield.
+   * A live worker is what separates them — a park deletes the worker row, a
+   * launch recreates it — so a node that has one is being worked, and
+   * dropping its wait, with whatever it has observed and not yet delivered,
+   * would strand it. Unparking is then a no-op beyond the outcome: the worker
+   * is already on the item and its own watch will wake it.
+   *
+   * Liveness is judged on the worker's session heartbeat, the same rule the
+   * scheduler applies. A worker row outlives the agent it addresses, and a
+   * dead one must not hold an operator's unpark until the next stale sweep.
+   */
+  async removeOutcome(
+    node: string,
+    liveness: {now: string; staleAfterSeconds: number}
+  ): Promise<boolean> {
+    assertInstant(liveness.now, 'now');
+    return this.#db.transaction(() => {
+      const found = findNode(this.#db, node);
+      if (found === null) return false;
+      const worked =
+        this.#db.get(
+          `SELECT 1 AS held FROM worker w
+           JOIN session s ON s.id = w.session_id
+           WHERE w.node_id = ?
+             AND unixepoch(?) - unixepoch(s.heartbeat_at) <= ?`,
+          [found.id, liveness.now, liveness.staleAfterSeconds]
+        ) !== undefined;
+      const removed =
+        this.#db.run('DELETE FROM outcome WHERE node_id = ?', [found.id]) > 0;
+      if (removed && !worked) {
+        this.#db.run('DELETE FROM watch WHERE node_id = ?', [found.id]);
+        this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [found.id]);
+      }
+      return removed;
+    });
   }
 
   /* eslint-disable @typescript-eslint/no-base-to-string --
@@ -273,9 +311,25 @@ export class CoordinationStore {
       // event for a concluded node has no one to wake.
       this.#db.run('DELETE FROM worker WHERE node_id = ?', [node.id]);
       // A final report ends any server-side wait. The watch would otherwise
-      // re-serve work that just concluded, and its undelivered observations
-      // describe a wait nobody is in any more.
-      this.#db.run('DELETE FROM watch WHERE node_id = ?', [node.id]);
+      // re-serve work that just concluded.
+      //
+      // `human-blocked` is the one report that concludes nobody: the wait
+      // moved from the worker to the operator, and something still has to
+      // notice when they answer on the PR. Keep the row watching, with its
+      // snapshot, so the baseline spans the park and the answer reads as a
+      // change; unbind it from the departed worker's session so whichever
+      // server sees it next may route what it observes.
+      if (report.outcome === 'human-blocked') {
+        this.#db.run(
+          `UPDATE watch SET state = 'watching', session_id = NULL
+           WHERE node_id = ?`,
+          [node.id]
+        );
+      } else {
+        this.#db.run('DELETE FROM watch WHERE node_id = ?', [node.id]);
+      }
+      // Undelivered observations describe a wait nobody is in any more,
+      // whichever way the report went.
       this.#db.run('DELETE FROM pr_event WHERE node_id = ?', [node.id]);
     });
   }

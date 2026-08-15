@@ -12,6 +12,7 @@ import {
   SessionStore,
   TicketStore,
 } from '../stores/index.mts';
+import {DEFAULT_STALE_AFTER_SECONDS} from '../graph/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
 
@@ -341,7 +342,10 @@ describe('Scheduler', () => {
     );
 
     // The operator answered and removed the outcome: the item requeues.
-    await new CoordinationStore(db).removeOutcome('o/r#7');
+    await new CoordinationStore(db).removeOutcome('o/r#7', {
+      now: LATER,
+      staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+    });
     const third = await scheduler.tick(LATER);
     assert.deepEqual(
       third.orders

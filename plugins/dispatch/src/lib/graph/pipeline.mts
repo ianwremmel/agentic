@@ -56,7 +56,8 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  * - A `watch` row is a worker's PR wait handed to the server: the item reads
  *   as in-flight while it exists, is never queued while `watching`, and once
  *   the server fires it (the PR changed in a way the worker would act on)
- *   falls through to the `resume` rule.
+ *   falls through to the `resume` rule. A `human-blocked` PR keeps its watch,
+ *   so the same row is also how a parked item hears its answer.
  * - `queued` — what the scheduler may hand out, and as which pass. An
  *   `available` item with no outcome row is dispatchable as-is; a started item
  *   with no live claim and no outcome is a crashed run — its claim is stale or
@@ -66,13 +67,23 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   forge), never `available` (implement from a title); `verify` for a
  *   delivered ticket (a bare PR is done at delivered),
  *   `finalize` for a decomposed parent whose subtasks all resolved, `retry`
- *   for a retryable failure, and `resume` for a ticket whose `human-blocked`
- *   outcome a later tracker update contradicts — the ticket was updated after
- *   the report and now reads available, so the human responded and unparked
- *   it. The timestamp guard keeps a stale local row (ingest lagging the
- *   worker's own park transition) from reading as a response. Nothing
- *   human-owned, parked, resolved, or held by a live claim is ever handed
- *   out.
+ *   for a retryable failure, and `resume` for a `human-blocked` item the
+ *   world has moved on since. That last one reads a different signal per
+ *   kind, because a park is answered wherever the item lives: a ticket by a
+ *   tracker update postdating the report — the ticket now reads available, so
+ *   the human unparked it, and the timestamp guard keeps a stale local row
+ *   (ingest lagging the worker's own park transition) from passing for a
+ *   response — and a PR by its watch firing on an observation, which is the
+ *   forge saying someone who is not this agent touched it. Expiry alone does
+ *   not qualify: it fires with no events, and a deadline is not an answer.
+ *   Revive defers to a live worker like every other resume: a park that was
+ *   already revived once leaves its outcome standing until the next report,
+ *   so without that guard a yield from the resumed worker would read as a
+ *   second park and race a warm relay. The branch is deliberately ahead of
+ *   the human-blocked guard; behind it, it is unreachable for a PR item,
+ *   whose classification is derived from that very outcome. Nothing
+ *   human-owned, still parked, resolved, or held by a live claim is ever
+ *   handed out.
  */
 export const PREFIX = `
 WITH RECURSIVE
@@ -278,6 +289,8 @@ classified AS (
       WHERE mb.member_id = i.node_id) AS milestones,
     COALESCE(f.n, 0) AS fanout,
     w.state AS watch_state,
+    EXISTS (SELECT 1 FROM pr_event pe WHERE pe.node_id = i.node_id)
+      AS events_observed,
     lw.node_id IS NOT NULL AS worker_live,
     CASE
       WHEN i.kind = 'pr' AND o.outcome IN ('delivered', 'verified') THEN 'verified'
@@ -313,18 +326,23 @@ queued AS (
     CASE
       WHEN watch_state = 'watching' THEN NULL
       WHEN requires_human = 1
-        OR classification IN ('verified', 'canceled', 'human-blocked', 'dormant')
+        OR classification IN ('verified', 'canceled', 'dormant')
         THEN NULL
+      WHEN outcome = 'human-blocked' AND (claim_live IS NULL OR claim_live = 0)
+        AND worker_live = 0
+        AND (
+          (kind = 'pr' AND watch_state = 'fired' AND events_observed)
+          OR (kind = 'ticket' AND classification = 'available'
+              AND updated_at IS NOT NULL
+              AND unixepoch(updated_at) > unixepoch(outcome_recorded_at))
+        ) THEN 'resume'
+      WHEN classification = 'human-blocked' THEN NULL
       WHEN outcome IS NULL AND classification = 'available'
         AND origin = 'adopted' THEN 'resume'
       WHEN outcome IS NULL AND classification = 'available' THEN 'available'
       WHEN outcome IS NULL AND (claim_live IS NULL OR claim_live = 0)
         AND classification = 'in-flight'
         AND worker_live = 0 THEN 'resume'
-      WHEN outcome = 'human-blocked' AND (claim_live IS NULL OR claim_live = 0)
-        AND classification = 'available'
-        AND updated_at IS NOT NULL
-        AND unixepoch(updated_at) > unixepoch(outcome_recorded_at) THEN 'resume'
       WHEN outcome IS NULL OR claim_live = 1 THEN NULL
       WHEN outcome = 'delivered' AND kind = 'ticket' THEN 'verify'
       WHEN outcome = 'decomposed'

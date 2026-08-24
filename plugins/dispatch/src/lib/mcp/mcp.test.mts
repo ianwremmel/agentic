@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {Readable, Writable} from 'node:stream';
+import {PassThrough, Readable, Writable} from 'node:stream';
 import {describe, it} from 'node:test';
 
 import {discover} from '../command/index.mts';
@@ -278,6 +278,60 @@ describe('runMcpServer', () => {
     assert.equal(notification.id, undefined);
     assert.equal(notification.method, 'notifications/claude/channel');
     assert.equal(notification.params?.meta?.kind, 'fetch_ticket');
+  });
+
+  it('drains a queued instruction from the timer tick without a tool call', async () => {
+    // An idle session makes no tool calls while it waits on channel events,
+    // so if only tools/call drains, an ask the scheduler enqueues after the
+    // last call is never delivered and the session waits on it forever.
+    const dir = await mkdtemp(path.join(tmpdir(), 'dispatch-mcp-tick-drain-'));
+    const env = {DISPATCH_DB: path.join(dir, 'graph.db')};
+    await withDatabase(undefined, env, async (db) => {
+      await new FetchRequestStore(db).enqueueTicket({
+        source: 'linear',
+        ticket: 'ENG-1',
+        at: '2026-08-01T00:00:00Z',
+      });
+    });
+
+    const stdin = new PassThrough();
+    const chunks: string[] = [];
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(String(chunk));
+        callback();
+      },
+    });
+    const server = runMcpServer({
+      tree: await discover(FIXTURES),
+      stdin,
+      stdout,
+      stderr: nullStream(),
+      env,
+      tick: {intervalMs: 20, run: () => Promise.resolve()},
+    });
+    // One interval is enough; the loop ends the wait as soon as the
+    // notification lands, so the generous cap only bounds failure.
+    for (let waited = 0; waited < 2_000; waited += 20) {
+      if (chunks.join('').includes('notifications/claude/channel')) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    stdin.end();
+    await server;
+
+    const notification = chunks
+      .join('')
+      .trim()
+      .split('\n')
+      .filter((l) => l !== '')
+      .map((l) => JSON.parse(l) as RpcLine)
+      .find((l) => l.method === 'notifications/claude/channel');
+    assert.ok(notification, 'the timer tick must deliver the queued ask');
+    assert.equal(notification.params?.meta?.kind, 'fetch_ticket');
+    const undelivered = await withDatabase(undefined, env, (db) =>
+      new FetchRequestStore(db).undelivered()
+    );
+    assert.deepEqual(undelivered, []);
   });
 
   it('advertises the channel capability in initialize', async () => {

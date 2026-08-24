@@ -81,4 +81,56 @@ describe('ticket set', () => {
     );
     assert.equal(stored?.targetKind, 'pr');
   });
+
+  // Pins the answer half of the refresh cadence through the command path: the
+  // scheduler's ask is resolved by the UPDATE inside `upsertTicket`'s
+  // transaction, and a resolved ask is invisible to the stale sweep. If either
+  // side regresses, the channel re-issues the same ask every ten minutes
+  // forever.
+  it('resolves a delivered refresh ask so the stale sweep cannot re-issue it', async () => {
+    const env = await tempEnv();
+    const askedAt = '2026-08-23T12:00:00.000Z';
+    const deliveredAt = '2026-08-23T12:00:05.000Z';
+    // Far past the ten-minute stale window.
+    const muchLater = '2026-08-23T13:00:00.000Z';
+
+    // A refresh ask the server pushed and marked delivered, as the scheduler
+    // and drain leave it while waiting on the session's answer.
+    await withDatabase(undefined, env, async (db) => {
+      await new ProjectStore(db).upsertProject({
+        id: 'P',
+        name: 'P',
+        source: 'linear',
+      });
+      await new TicketStore(db).upsertTicket({
+        ...ticket('CLC-945', 'P'),
+        status: 'in-progress',
+      });
+      const requests = new FetchRequestStore(db);
+      const id = await requests.enqueueTicketRefresh({
+        source: 'linear',
+        ticket: 'CLC-945',
+        at: askedAt,
+      });
+      assert.ok(id !== null, 'the ask must enqueue');
+      await requests.markDelivered(id, deliveredAt);
+    });
+
+    await runCommand(
+      new Command(),
+      {id: 'CLC-945', project: 'P', status: 'in-progress'},
+      env
+    );
+
+    await withDatabase(undefined, env, async (db) => {
+      const requests = new FetchRequestStore(db);
+      const open = await requests.openTicketRequest('CLC-945');
+      assert.equal(open, null, 'the delivered ask must be resolved by the set');
+      const reoffered = await requests.redeliverStaleTicketRefreshes(
+        muchLater,
+        600
+      );
+      assert.equal(reoffered, 0, 'a resolved ask must not be re-offered');
+    });
+  });
 });

@@ -113,11 +113,17 @@ export async function runMcpServer(opts: {
     }
   };
 
+  // The timer drains as well as ticks: an idle session makes no tool calls
+  // while it waits on channel events, so an instruction the scheduler
+  // enqueues after the last call would otherwise sit undelivered until the
+  // session happens to call a tool — which, waiting on that very
+  // instruction, it never does. Tick first so the asks this beat enqueues
+  // are delivered in the same beat.
   const timer =
     opts.tick === undefined
       ? undefined
       : setInterval(() => {
-          void tickQuietly();
+          void tickQuietly().then(() => drainQuietly(channel, ctx));
         }, opts.tick.intervalMs);
 
   try {

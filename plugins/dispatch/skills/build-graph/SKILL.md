@@ -61,8 +61,11 @@ Never guess a ticket into existence to clear an instruction.
   `backlog`, `paused`, `awaiting-external`, `available`, `in-progress`,
   `in-review`, `finished`, `delivered`, `verified`, or `canceled`. The adapter
   carries the tracker's table and the rule for a state it does not cover: map it
-  only when the lifecycle meaning is unambiguous, otherwise ask the operator.
-  Never guess.
+  only when the lifecycle meaning is unambiguous. Otherwise skip the write, flag
+  the unmapped state on the tracker (a comment on the ticket), and move on.
+  Never guess, and never block the session on a question (`AskUserQuestion` or
+  any blocking prompt) — an unattended run has nobody to answer, and a parked
+  modal stalls every project the session drives.
 - **A milestone is joined by an edge.** `edge add --blocker CLC-945 --blocked M1`
   puts CLC-945 in milestone M1. Milestones are sequenced the same way:
   `edge add --blocker M1 --blocked M2` means M2's work waits on M1.

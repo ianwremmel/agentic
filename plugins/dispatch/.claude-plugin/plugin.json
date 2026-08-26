@@ -1,7 +1,7 @@
 {
   "name": "dispatch",
   "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
-  "version": "0.31.0",
+  "version": "0.31.1",
   "author": {
     "name": "Ian Remmel"
   },

@@ -11,9 +11,16 @@ import {
 } from '../../lib/stores/index.mts';
 import {Command} from './set.mts';
 
+async function seedProject(env: NodeJS.ProcessEnv): Promise<void> {
+  await withDatabase(undefined, env, (db) =>
+    new ProjectStore(db).upsertProject({id: 'P', name: 'P', source: 'linear'})
+  );
+}
+
 describe('ticket set', () => {
   it('records a ticket with its labels split and defaults applied', async () => {
     const env = await tempEnv();
+    await seedProject(env);
     await runCommand(
       new Command(),
       {
@@ -69,6 +76,7 @@ describe('ticket set', () => {
 
   it('applies the pr default when --target-kind is omitted', async () => {
     const env = await tempEnv();
+    await seedProject(env);
 
     await runCommand(
       new Command(),

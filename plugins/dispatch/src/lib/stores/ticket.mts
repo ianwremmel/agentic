@@ -1,6 +1,6 @@
 import {assertInstant} from '../db/time.mts';
 import type {Database} from '../db/database.mts';
-import {DataError, ensure} from '../errors/index.mts';
+import {DataError, ensure, UsageError} from '../errors/index.mts';
 import {
   isStatus,
   isTargetKind,
@@ -8,7 +8,7 @@ import {
   TARGET_KIND_LIST,
 } from '../model/status.mts';
 import type {Ticket} from '../model/types.mts';
-import {findNode, materialize, nodeRef} from './materialize.mts';
+import {findNode, materialize} from './materialize.mts';
 
 /* eslint-disable @typescript-eslint/require-await --
  * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
@@ -38,7 +38,21 @@ export class TicketStore {
     if (ticket.updatedAt !== null) assertInstant(ticket.updatedAt, 'updatedAt');
 
     await this.#db.transaction(() => {
-      const projectId = nodeRef(this.#db, ticket.project);
+      // The project must already be recorded: silently materializing a
+      // placeholder here re-parents the ticket onto an unknown-kind node the
+      // refresh cadence's project join can never see, so a session passing
+      // the project's name where the id belongs corrupts the graph without
+      // any error. Edges tolerate dangling references; a ticket's project
+      // does not.
+      const project = findNode(this.#db, ticket.project);
+      ensure(
+        project !== null && project.kind === 'project',
+        () =>
+          new UsageError(`"${ticket.project}" is not a recorded project`, {
+            hint: 'record it first with `dispatch project set`, and pass the project id — a project name is not its id.',
+          })
+      );
+      const projectId = project.id;
       const nodeId = materialize(this.#db, ticket.id, 'ticket');
       const previous = this.#db.get(
         'SELECT status FROM ticket WHERE node_id = ?',

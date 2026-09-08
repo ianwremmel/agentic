@@ -76,8 +76,6 @@ Never guess a ticket into existence to clear an instruction.
 - **A delta writes only what changed.** When a scan shows a ticket gone, use
   `ticket rm`; when a `fetch_ticket` finds nothing, use `ticket missing`.
 
-Full flags: [`reference.md`](../reference.md).
-
 Report back what you recorded and whether the scan finished or continues under
 another cursor. Ticket content stays in the graph, not in your reply — the
 session that launched you schedules from the CLI, not from what you say.

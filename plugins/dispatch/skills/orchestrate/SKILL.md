@@ -35,8 +35,8 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | Instruction                | Do this                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------ |
 | `probe`                    | Run `dispatch mcp ack --server <id>` with the id the event carries. Work orders wait on it.      |
-| `scan_project`             | Run [`build-graph`](../build-graph/SKILL.md) for the projects and cursor named.                  |
-| `fetch_ticket`             | Run [`build-graph`](../build-graph/SKILL.md) for the single ticket named.                        |
+| `scan_project`             | Launch a background `build-graph` agent, passing the event's projects and cursor.               |
+| `fetch_ticket`             | Launch a background `build-graph` agent, passing the event's ticket.                            |
 | `refresh_complete`         | Report the graph is built. Stay resident — dispatch begins.                                      |
 | `dispatch_ticket`          | Launch a background `ticket-worker` agent, passing the event's ticket, project, and pass. Then record its address: `dispatch worker set --node <ticket> --agent <ref>` with the ref the launch returned. |
 | `dispatch_pr`              | Launch a background `pr-worker` agent, passing the event's PR item id, pass, and (when the item is ticket-backed) its ticket. Then record its address: `dispatch worker set --node <item-id> --agent <ref>`. |

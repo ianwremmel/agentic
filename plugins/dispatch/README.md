@@ -29,8 +29,9 @@ dependency graph, or dispatches anything.
 server builds the dependency graph through channel-pushed fetch instructions,
 then schedules deterministically — ranking, milestone gates, claims — and
 pushes work orders the session answers by launching the plugin's
-agents: `ticket-worker` to coordinate each ticket, `pr-worker` to implement
-each PR item (via `land`), and `milestone-reviewer` per review gate.
+agents: `build-graph` to answer each fetch instruction, `ticket-worker` to
+coordinate each ticket, `pr-worker` to implement each PR item (via `land`),
+and `milestone-reviewer` per review gate.
 
 Reach for `land` when the unit of work is one PR; `/orchestrate` when it is a
 project.

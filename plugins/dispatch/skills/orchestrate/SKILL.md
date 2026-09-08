@@ -45,10 +45,10 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `alert_failure`            | Alert the operator where the order body says — the PR when one exists, else the ticket.          |
 | `project_complete`         | Announce it. Stop once every project the operator named is complete.                             |
 
-**Routing.** An event carrying an `agent` meta key: relay it verbatim to
-that worker (SendMessage to the ref) and do nothing else with it. If the
-relay fails, run `dispatch worker rm --node <id>` and move on. An event with
-no `agent` key needs nothing from you.
+**Relay events.** Some events carry an `agent` meta key instead of an
+instruction from the table: SendMessage the event verbatim to that ref and
+stop. If the relay fails, run `dispatch worker rm --node <id>` and move on. A
+non-instruction event with no `agent` key needs nothing from you.
 
 Return to waiting after each launch. Give each worker only what the event
 carries; never ticket content. Launch every order you receive; the CLI claims

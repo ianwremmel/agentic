@@ -30,7 +30,7 @@ const options = {
   who: {type: 'string', description: 'd', positional: true, required: false},
 } as const;
 
-export class Sample extends AbstractCommand {
+class Sample extends AbstractCommand {
   readonly name = 'sample';
   readonly summary = 's';
   readonly env = [];
@@ -50,4 +50,6 @@ export class Sample extends AbstractCommand {
 }
 
 // Heterogeneous storage must compile: a subclass widens to AbstractCommand.
-export const registry: AbstractCommand[] = [new Sample()];
+// The assertion is also what marks `registry` — and through it `Sample` — used.
+const registry: AbstractCommand[] = [new Sample()];
+expectType<AbstractCommand[]>(registry);

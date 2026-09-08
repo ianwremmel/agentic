@@ -1,8 +1,9 @@
-# build-graph — reference
+# Graph writes — reference
 
-Flag tables for the commands [`SKILL.md`](./SKILL.md) uses. Every command also
-takes `--db` (graph database path; defaults to `$DISPATCH_DB`, else
-`$XDG_STATE_HOME/dispatch/graph-v2.db`), omitted from the tables below.
+Flag tables for the commands the [`build-graph`](./agents/build-graph.md) agent
+uses. Every command also takes `--db` (graph database path; defaults to
+`$DISPATCH_DB`, else `$XDG_STATE_HOME/dispatch/graph-v2.db`), omitted from the
+tables below.
 
 ## `dispatch refresh`
 

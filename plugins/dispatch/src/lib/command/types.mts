@@ -49,9 +49,7 @@ class Sample extends AbstractCommand {
   }
 }
 
-// Reference the class so it is not treated as unused.
-void Sample;
-
 // Heterogeneous storage must compile: a subclass widens to AbstractCommand.
+// The assertion is also what marks `registry` — and through it `Sample` — used.
 const registry: AbstractCommand[] = [new Sample()];
-void registry;
+expectType<AbstractCommand[]>(registry);

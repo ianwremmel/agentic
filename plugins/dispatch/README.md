@@ -29,8 +29,9 @@ dependency graph, or dispatches anything.
 server builds the dependency graph through channel-pushed fetch instructions,
 then schedules deterministically — ranking, milestone gates, claims — and
 pushes work orders the session answers by launching the plugin's
-agents: `ticket-worker` to coordinate each ticket, `pr-worker` to implement
-each PR item (via `land`), and `milestone-reviewer` per review gate.
+agents: `build-graph` to answer each fetch instruction, `ticket-worker` to
+coordinate each ticket, `pr-worker` to implement each PR item (via `land`),
+and `milestone-reviewer` per review gate.
 
 Reach for `land` when the unit of work is one PR; `/orchestrate` when it is a
 project.
@@ -66,8 +67,8 @@ effective blocking, ranking, cycle rejection, and milestone gating are computed
 in the CLI so every consumer gets the same answer. Workers report with
 `outcome set` and open milestone gates with `review record`. `dispatch mcp` runs the same command
 surface as an MCP channel server that schedules and pushes work orders;
-`mcp ack`/`mcp status` carry the channel handshake. Flag tables:
-[`skills/build-graph/reference.md`](skills/build-graph/reference.md).
+`mcp ack`/`mcp status` carry the channel handshake. Every command prints its
+own flags: `dispatch <command> --help`.
 
 `bin/dispatch` is a bash wrapper around `src/main.mts`. The wrapper checks that
 Node is present and at least 24.18 — the CLI ships as unbuilt TypeScript and

@@ -1,14 +1,13 @@
 ---
 name: build-graph
-description: Answer one project-graph fetch instruction — scan a project's tickets, or fetch one ticket, and record what you find through the dispatch CLI. Use when a scan_project or fetch_ticket instruction arrives.
+description: Answer one project-graph fetch instruction — scan the named projects' tickets, or fetch the single ticket named — and record what you find through the dispatch CLI. Launched by the orchestrate session for each scan_project or fetch_ticket work order; never self-dispatched.
+model: opus
 ---
 
-# build-graph
-
-You handle **one instruction**. Fetch what it names, write what you find, and
-stop. Do not decide what to fetch next, chase a dependency you noticed, or judge
-whether the graph is complete — the CLI does all three and will send another
-instruction if it needs one.
+You handle **one instruction**: the one your dispatch names. Fetch what it
+names, write what you find, and stop. Do not decide what to fetch next, chase a
+dependency you noticed, or judge whether the graph is complete — the CLI does
+all three and will send another instruction if it needs one.
 
 The `dispatch` commands below are also tools on the plugin's MCP server
 (`ticket set` → the `ticket_set` tool). When the server is attached, call the
@@ -77,4 +76,6 @@ Never guess a ticket into existence to clear an instruction.
 - **A delta writes only what changed.** When a scan shows a ticket gone, use
   `ticket rm`; when a `fetch_ticket` finds nothing, use `ticket missing`.
 
-Full flags: [`reference.md`](./reference.md).
+Report back what you recorded and whether the scan finished or continues under
+another cursor. Ticket content stays in the graph, not in your reply — the
+session that launched you schedules from the CLI, not from what you say.

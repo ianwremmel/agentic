@@ -70,7 +70,10 @@ Never guess a ticket into existence to clear an instruction.
   `edge add --blocker M1 --blocked M2` means M2's work waits on M1.
 - **Redeclare a direction with `edge set`.** After re-fetching a ticket's
   blockers, `edge set --node CLC-945 --direction blockers --others a,b` makes
-  them exactly `{a,b}` (empty clears them). Use it instead of diffing.
+  the tracker's blockers exactly `{a,b}` (empty clears them). Use it instead of
+  diffing. It replaces only edges to tickets, so a PR item blocking the ticket
+  and the ticket's milestone membership both survive — you are not declaring
+  anything about those. Drop one with `edge rm`.
 - **An edge that would close a cycle is refused.** Fix the direction, or remove
   the opposing edge first.
 - **A delta writes only what changed.** When a scan shows a ticket gone, use

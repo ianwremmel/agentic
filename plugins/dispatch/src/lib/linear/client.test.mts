@@ -39,12 +39,16 @@ function issueNode(overrides: Record<string, unknown> = {}): unknown {
     priority: 2,
     branchName: 'clc-1-do-the-thing',
     updatedAt: '2026-09-11T00:00:00.000Z',
+    archivedAt: null,
     state: {name: 'In Progress', type: 'started'},
     project: {id: 'proj-1'},
     projectMilestone: {id: 'ms-1'},
-    labels: {nodes: [{name: 'infra'}, {name: 'qa'}]},
-    relations: {nodes: []},
-    inverseRelations: {nodes: []},
+    labels: {
+      nodes: [{name: 'infra'}, {name: 'qa'}],
+      pageInfo: {hasNextPage: false},
+    },
+    relations: {nodes: [], pageInfo: {hasNextPage: false}},
+    inverseRelations: {nodes: [], pageInfo: {hasNextPage: false}},
     ...overrides,
   };
 }
@@ -59,27 +63,34 @@ function connection(nodes: unknown[], next?: string): unknown {
 describe('LinearClient.listProjects', () => {
   it('follows the cursor to the end and concatenates the pages', async () => {
     const {execute, calls} = scripted([
-      {
-        projects: connection(
-          [{id: 'p1', name: 'One', url: 'u1', updatedAt: 't1'}],
-          'CUR'
-        ),
-      },
-      {
-        projects: connection([
-          {id: 'p2', name: 'Two', url: 'u2', updatedAt: 't2'},
-        ]),
-      },
+      {projects: connection([{id: 'p1', name: 'One'}], 'CUR')},
+      {projects: connection([{id: 'p2', name: 'Two'}])},
     ]);
 
     const projects = await new LinearClient(execute).listProjects();
 
-    assert.deepEqual(
-      projects.map((project) => project.id),
-      ['p1', 'p2']
-    );
+    assert.deepEqual(projects, [
+      {id: 'p1', name: 'One'},
+      {id: 'p2', name: 'Two'},
+    ]);
     assert.equal(calls[0]?.variables.after, null);
     assert.equal(calls[1]?.variables.after, 'CUR');
+  });
+
+  it('asks Linear to find a named project rather than reading the workspace', async () => {
+    const {execute, calls} = scripted([{projects: connection([])}]);
+
+    await new LinearClient(execute).listProjects({name: 'Agentic'});
+
+    assert.deepEqual(calls[0]?.variables.filter, {name: {eq: 'Agentic'}});
+  });
+
+  it('sends no filter when nothing narrows the search', async () => {
+    const {execute, calls} = scripted([{projects: connection([])}]);
+
+    await new LinearClient(execute).listProjects();
+
+    assert.equal(calls[0]?.variables.filter, null);
   });
 
   it('refuses a connection that reports another page without advancing', async () => {
@@ -94,6 +105,37 @@ describe('LinearClient.listProjects', () => {
         error instanceof DataError &&
         error.message.includes('without advancing its cursor')
     );
+  });
+
+  it('refuses a connection that reports another page with no cursor at all', async () => {
+    const {execute} = scripted([
+      {projects: {nodes: [], pageInfo: {hasNextPage: true, endCursor: null}}},
+    ]);
+
+    await assert.rejects(
+      new LinearClient(execute).listProjects(),
+      (error: unknown) =>
+        error instanceof DataError &&
+        error.message.includes('no cursor to read it')
+    );
+  });
+
+  it('stops rather than paging forever', async () => {
+    const {execute, calls} = scripted(
+      Array.from({length: 1001}, (_unused, index) => ({
+        projects: connection(
+          [{id: `p${String(index)}`, name: 'x'}],
+          `c${String(index)}`
+        ),
+      }))
+    );
+
+    await assert.rejects(
+      new LinearClient(execute).listProjects(),
+      (error: unknown) =>
+        error instanceof DataError && error.message.includes('still paging')
+    );
+    assert.equal(calls.length, 1000);
   });
 });
 
@@ -112,11 +154,27 @@ describe('LinearClient.listMilestones', () => {
 
     const milestones = await new LinearClient(execute).listMilestones('proj-1');
 
-    assert.deepEqual(
-      milestones.map((milestone) => milestone.id),
-      ['m1', 'm2']
-    );
+    assert.deepEqual(milestones, [
+      {id: 'm1', name: 'First', sortOrder: 1},
+      {id: 'm2', name: 'Second', sortOrder: 2},
+    ]);
     assert.equal(calls[0]?.variables.project, 'proj-1');
+  });
+
+  it('keeps only the fields it declares', async () => {
+    const {execute} = scripted([
+      {
+        project: {
+          projectMilestones: connection([
+            {id: 'm1', name: 'First', sortOrder: 1, secret: 'leaked'},
+          ]),
+        },
+      },
+    ]);
+
+    const [milestone] = await new LinearClient(execute).listMilestones('p');
+
+    assert.deepEqual(Object.keys(milestone ?? {}), ['id', 'name', 'sortOrder']);
   });
 
   it('reads a project with no milestones as none, not as a failure', async () => {
@@ -137,17 +195,17 @@ describe('LinearClient.listIssues', () => {
     });
   });
 
-  it('asks only for what moved since the cursor', async () => {
+  it('asks inclusively for what moved since the cursor, so a tie is re-read rather than lost', async () => {
     const {execute, calls} = scripted([{issues: connection([])}]);
 
     await new LinearClient(execute).listIssues({
       project: 'proj-1',
-      updatedAfter: '2026-09-01T00:00:00.000Z',
+      updatedSince: '2026-09-01T00:00:00.000Z',
     });
 
     assert.deepEqual(calls[0]?.variables.filter, {
       project: {id: {eq: 'proj-1'}},
-      updatedAt: {gt: '2026-09-01T00:00:00.000Z'},
+      updatedAt: {gte: '2026-09-01T00:00:00.000Z'},
     });
   });
 
@@ -156,12 +214,29 @@ describe('LinearClient.listIssues', () => {
 
     await new LinearClient(execute).listIssues({
       project: 'proj-1',
-      updatedAfter: '',
+      updatedSince: '',
     });
 
     assert.deepEqual(calls[0]?.variables.filter, {
       project: {id: {eq: 'proj-1'}},
     });
+  });
+
+  it('pages the delta to the end', async () => {
+    const {execute, calls} = scripted([
+      {issues: connection([issueNode({identifier: 'CLC-1'})], 'CUR')},
+      {issues: connection([issueNode({identifier: 'CLC-2'})])},
+    ]);
+
+    const issues = await new LinearClient(execute).listIssues({
+      project: 'proj-1',
+    });
+
+    assert.deepEqual(
+      issues.map((issue) => issue.identifier),
+      ['CLC-1', 'CLC-2']
+    );
+    assert.equal(calls[1]?.variables.after, 'CUR');
   });
 
   it('flattens the fields the graph records', async () => {
@@ -181,11 +256,33 @@ describe('LinearClient.listIssues', () => {
       labels: ['infra', 'qa'],
       branchName: 'clc-1-do-the-thing',
       updatedAt: '2026-09-11T00:00:00.000Z',
+      archivedAt: null,
       projectId: 'proj-1',
       milestoneId: 'ms-1',
       blocks: [],
       blockedBy: [],
     });
+  });
+
+  it('carries an archived ticket through rather than dropping it', async () => {
+    const {execute} = scripted([
+      {
+        issues: connection([
+          issueNode({
+            archivedAt: '2026-09-10T00:00:00.000Z',
+            state: {name: 'Done', type: 'completed'},
+          }),
+        ]),
+      },
+    ]);
+
+    const [issue] = await new LinearClient(execute).listIssues({
+      project: 'proj-1',
+    });
+
+    assert.ok(issue);
+    assert.equal(issue.archivedAt, '2026-09-10T00:00:00.000Z');
+    assert.equal(issue.state.type, 'completed');
   });
 
   it('reads each end of a blocking relation as the direction it points', async () => {
@@ -198,12 +295,14 @@ describe('LinearClient.listIssues', () => {
                 {type: 'blocks', relatedIssue: {identifier: 'CLC-9'}},
                 {type: 'related', relatedIssue: {identifier: 'CLC-8'}},
               ],
+              pageInfo: {hasNextPage: false},
             },
             inverseRelations: {
               nodes: [
                 {type: 'blocks', issue: {identifier: 'CLC-2'}},
                 {type: 'duplicate', issue: {identifier: 'CLC-3'}},
               ],
+              pageInfo: {hasNextPage: false},
             },
           }),
         ]),
@@ -219,11 +318,37 @@ describe('LinearClient.listIssues', () => {
     assert.deepEqual(issue.blockedBy, ['CLC-2']);
   });
 
+  it('refuses an issue whose blockers it can only see half of', async () => {
+    const {execute} = scripted([
+      {
+        issues: connection([
+          issueNode({
+            inverseRelations: {
+              nodes: [{type: 'blocks', issue: {identifier: 'CLC-2'}}],
+              pageInfo: {hasNextPage: true},
+            },
+          }),
+        ]),
+      },
+    ]);
+
+    await assert.rejects(
+      new LinearClient(execute).listIssues({project: 'proj-1'}),
+      (error: unknown) =>
+        error instanceof DataError &&
+        error.message.includes('CLC-1 has more than 50 inverse relations')
+    );
+  });
+
   it('carries a ticket with no project or milestone as null, not as an empty id', async () => {
     const {execute} = scripted([
       {
         issues: connection([
-          issueNode({project: null, projectMilestone: null, labels: null}),
+          issueNode({
+            project: null,
+            projectMilestone: null,
+            labels: {nodes: [], pageInfo: {hasNextPage: false}},
+          }),
         ]),
       },
     ]);
@@ -239,8 +364,25 @@ describe('LinearClient.listIssues', () => {
   });
 });
 
+describe('LinearClient.listIssueIdentifiers', () => {
+  it('lists the whole project, undeltaed, so a caller can spot what left', async () => {
+    const {execute, calls} = scripted([
+      {issues: connection([{identifier: 'CLC-1'}, {identifier: 'CLC-2'}])},
+    ]);
+
+    const identifiers = await new LinearClient(execute).listIssueIdentifiers(
+      'proj-1'
+    );
+
+    assert.deepEqual(identifiers, ['CLC-1', 'CLC-2']);
+    assert.deepEqual(calls[0]?.variables.filter, {
+      project: {id: {eq: 'proj-1'}},
+    });
+  });
+});
+
 describe('LinearClient.getIssue', () => {
-  it('looks an identifier up by team key and number', async () => {
+  it('looks an identifier up by team key and number, whatever its case', async () => {
     const {execute, calls} = scripted([
       {issues: {nodes: [issueNode({identifier: 'CLC-1159'})]}},
     ]);
@@ -249,7 +391,7 @@ describe('LinearClient.getIssue', () => {
 
     assert.equal(issue?.identifier, 'CLC-1159');
     assert.deepEqual(calls[0]?.variables.filter, {
-      team: {key: {eq: 'CLC'}},
+      team: {key: {eqIgnoreCase: 'clc'}},
       number: {eq: 1159},
     });
   });
@@ -260,13 +402,21 @@ describe('LinearClient.getIssue', () => {
     assert.equal(await new LinearClient(execute).getIssue('CLC-9999'), null);
   });
 
-  it('refuses something that is not an identifier before spending a call', async () => {
-    const {execute, calls} = scripted([]);
-
-    await assert.rejects(
-      new LinearClient(execute).getIssue('https://linear.app/x/issue/CLC-1'),
-      (error: unknown) => error instanceof DataError
-    );
-    assert.equal(calls.length, 0);
+  it('refuses an identifier Linear could not answer before spending a call', async () => {
+    for (const bad of [
+      'https://linear.app/x/issue/CLC-1',
+      'CLC-007',
+      'CLC-2147483648',
+      'CLC-0',
+      'CLC',
+    ]) {
+      const {execute, calls} = scripted([]);
+      await assert.rejects(
+        new LinearClient(execute).getIssue(bad),
+        (error: unknown) => error instanceof DataError,
+        `expected ${bad} to be refused`
+      );
+      assert.equal(calls.length, 0);
+    }
   });
 });

@@ -1,9 +1,14 @@
-import {DataError, EnvironmentError, ensure} from '../errors/index.mts';
+import {
+  DataError,
+  DefinitionError,
+  EnvironmentError,
+  ensure,
+} from '../errors/index.mts';
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql';
 export const LINEAR_TOKEN_VAR = 'LINEAR_API_KEY';
 
-/** Long enough for a 250-issue page, short enough that a hung call cannot stall a server tick. */
+/** Long enough for a page of issues, short enough that a hung call cannot stall a server tick. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export type Fetcher = typeof globalThis.fetch;
@@ -35,74 +40,119 @@ interface GraphqlBody<TData> {
   readonly errors?: readonly GraphqlError[];
 }
 
+const BEARER = /^Bearer\s+/iu;
+
 /**
- * Linear takes a personal API key as the bare `Authorization` value and an
- * OAuth token as a `Bearer`. A caller that already wrote a scheme keeps it.
+ * Linear takes a personal API key as the bare `Authorization` value — a
+ * `Bearer` prefix on one is an error it answers with HTTP 400 — so the key is
+ * sent as written, minus that prefix if someone added it. Anything else goes
+ * through untouched, which is how an OAuth token gets its `Bearer`: written
+ * into the variable.
  */
 export function authorization(token: string): string {
-  if (token.includes(' ')) return token;
-  return token.startsWith('lin_api_') ? token : `Bearer ${token}`;
+  const trimmed = token.trim();
+  const bare = trimmed.replace(BEARER, '');
+  return bare.startsWith('lin_api_') ? bare : trimmed;
 }
 
-/** Error types Linear reports for input it understood but could not honor. */
-const INPUT_FAULTS = new Set([
-  'invalid input',
-  'entity not found',
-  'feature not accessible',
-  'usage error',
-]);
+/**
+ * What each Linear error is. `code` is the stable discriminator;
+ * `extensions.type` is prose that has changed before, so it is only a fallback.
+ */
+function faultOf(
+  code: string,
+  type: string
+): 'ratelimited' | 'auth' | 'schema' | 'input' | 'unknown' {
+  if (code === 'RATELIMITED' || type === 'ratelimited') return 'ratelimited';
+  if (code === 'AUTHENTICATION_ERROR' || type === 'authentication error') {
+    return 'auth';
+  }
+  if (code === 'GRAPHQL_VALIDATION_FAILED' || type === 'graphql error') {
+    return 'schema';
+  }
+  if (code === 'INPUT_ERROR' || type === 'invalid input') return 'input';
+  return 'unknown';
+}
+
+/** Most explanatory first: the one worth telling the caller about. */
+const FAULT_ORDER = ['ratelimited', 'auth', 'schema', 'input'] as const;
 
 /**
- * GraphQL answers a rejected request with HTTP 200 and an `errors` array, so
- * the body — not the status — decides. Split them the way the taxonomy does:
- * a fault in what we asked for is the caller's data to fix, anything else is
- * the environment's.
+ * Linear reports a rejected request in `errors[]` whatever the status — 200,
+ * 400 and 401 all carry one — so the body decides the class and the status is
+ * only a fallback for a response with no body to read.
+ *
+ * Every error is weighed, not just the first: a response whose first entry is a
+ * bad id and whose second is an authentication failure is an authentication
+ * failure, and saying "that project does not exist" would send the reader after
+ * the wrong thing.
  */
 function throwForGraphqlErrors(errors: readonly GraphqlError[]): never {
   const message = errors
     .map((error) => error.message ?? 'unknown error')
     .join('; ');
-  const type = errors[0]?.extensions?.type?.toLowerCase() ?? '';
-  if (INPUT_FAULTS.has(type)) {
-    throw new DataError(`linear rejected the query: ${message}`, {
-      hint: 'the project, milestone, or ticket named does not exist on Linear, or the key cannot see it.',
-    });
+  const found = new Set(
+    errors.map((error) =>
+      faultOf(
+        error.extensions?.code ?? '',
+        error.extensions?.type?.toLowerCase() ?? ''
+      )
+    )
+  );
+  const fault = FAULT_ORDER.find((candidate) => found.has(candidate));
+
+  switch (fault) {
+    case 'ratelimited':
+      throw new EnvironmentError(
+        `linear rate-limited the request: ${message}`,
+        {
+          hint: 'wait for the rate-limit window to reset; the next refresh retries.',
+        }
+      );
+    case 'auth':
+      throw new EnvironmentError(`linear rejected the api key: ${message}`, {
+        hint: `set ${LINEAR_TOKEN_VAR} to a key that can read the workspace.`,
+      });
+    // A field this module asks for that the schema does not have. No amount of
+    // retrying or data-fixing clears it; someone edits the query.
+    case 'schema':
+      throw new DefinitionError(`linear refused the query: ${message}`, {
+        hint: 'the query asks for something the Linear schema does not have; fix the query document in the dispatch Linear client.',
+      });
+    case 'input':
+      throw new DataError(`linear rejected the query: ${message}`, {
+        hint: 'the project, milestone, or ticket named does not exist on Linear, or the key cannot see it.',
+      });
+    default:
+      throw new EnvironmentError(`linear returned an error: ${message}`, {
+        hint: `check ${LINEAR_TOKEN_VAR} and https://linearstatus.com; the next refresh retries.`,
+      });
   }
-  if (type === 'authentication error') {
-    throw new EnvironmentError(`linear rejected the api key: ${message}`, {
-      hint: `set ${LINEAR_TOKEN_VAR} to a key that can read the workspace.`,
-    });
-  }
-  throw new EnvironmentError(`linear returned an error: ${message}`, {
-    hint: "usually transient on Linear's side; the next refresh retries.",
-  });
 }
 
-function throwForStatus(status: number, retryAfter: string | null): never {
+function throwForStatus(status: number): never {
   if (status === 401 || status === 403) {
     throw new EnvironmentError(
       `linear rejected the api key (HTTP ${String(status)})`,
-      {
-        hint: `set ${LINEAR_TOKEN_VAR} to a key that can read the workspace.`,
-      }
+      {hint: `set ${LINEAR_TOKEN_VAR} to a key that can read the workspace.`}
     );
-  }
-  if (status === 429) {
-    throw new EnvironmentError('linear rate-limited the request (HTTP 429)', {
-      hint:
-        retryAfter === null
-          ? 'wait for the rate-limit window to reset; the next refresh retries.'
-          : `wait ${retryAfter}s; the next refresh retries.`,
-    });
-  }
-  if (status === 400) {
-    throw new DataError('linear could not parse the query (HTTP 400)', {
-      hint: 'the query or its variables are malformed; this is a bug in the dispatch Linear client.',
-    });
   }
   throw new EnvironmentError(`linear answered HTTP ${String(status)}`, {
     hint: 'check https://linearstatus.com; the next refresh retries.',
   });
+}
+
+/**
+ * `fetch` rejects with the abort reason itself, so a signal from
+ * `AbortSignal.timeout` surfaces as a `TimeoutError` and a plain
+ * `AbortController` as an `AbortError`. Both mean "we stopped it", which is
+ * what separates the timeout from a connection that genuinely failed.
+ */
+function isAbort(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === 'AbortError' || error.name === 'TimeoutError')
+  );
 }
 
 /**
@@ -125,7 +175,26 @@ export function createTransport(options: TransportOptions): GraphqlExecutor {
         ? timeout
         : AbortSignal.any([timeout, input.signal]);
 
+    /** A cancellation the caller asked for is theirs; everything else is ours to name. */
+    const rethrow = (error: unknown): never => {
+      if (input.signal?.aborted === true) throw error;
+      if (isAbort(error) && timeout.aborted) {
+        throw new EnvironmentError(
+          `linear did not answer within ${String(timeoutMs)}ms`,
+          {
+            hint: 'the next refresh retries; raise the timeout if it never does.',
+            cause: error,
+          }
+        );
+      }
+      throw new EnvironmentError(
+        `could not reach linear: ${error instanceof Error ? error.message : String(error)}`,
+        {hint: 'check network access to api.linear.app.', cause: error}
+      );
+    };
+
     let response: Response;
+    let text: string;
     try {
       response = await doFetch(endpoint, {
         method: 'POST',
@@ -140,41 +209,38 @@ export function createTransport(options: TransportOptions): GraphqlExecutor {
         }),
         signal,
       });
+      // The body is read inside the same guard as the request: aborting the
+      // signal tears down the response stream too, so a timeout here arrives
+      // as a failed read, not a failed fetch.
+      text = await response.text();
     } catch (error) {
-      if (timeout.aborted) {
-        throw new EnvironmentError(
-          `linear did not answer within ${String(timeoutMs)}ms`,
-          {
-            hint: 'the next refresh retries; raise the timeout if it never does.',
-          }
-        );
-      }
-      throw new EnvironmentError(
-        `could not reach linear: ${error instanceof Error ? error.message : String(error)}`,
-        {hint: 'check network access to api.linear.app.', cause: error}
-      );
+      return rethrow(error);
     }
 
-    if (!response.ok) {
-      throwForStatus(response.status, response.headers.get('retry-after'));
-    }
-
-    let body: GraphqlBody<TData>;
+    let body: GraphqlBody<TData> | null = null;
     try {
-      body = (await response.json()) as GraphqlBody<TData>;
-    } catch (error) {
-      throw new EnvironmentError(
-        'linear answered with something that is not JSON',
-        {
-          hint: 'a proxy is probably answering in its place; check the endpoint.',
-          cause: error,
-        }
-      );
+      body = JSON.parse(text) as GraphqlBody<TData>;
+    } catch {
+      // Left null: an unparseable body on an error status is better reported
+      // as that status, and only an unparseable 200 is a broken payload.
     }
 
-    if (body.errors !== undefined && body.errors.length > 0) {
+    if (body?.errors !== undefined && body.errors.length > 0) {
       throwForGraphqlErrors(body.errors);
     }
+    if (!response.ok) {
+      throwForStatus(response.status);
+    }
+    ensure(
+      body !== null,
+      () =>
+        new EnvironmentError(
+          'linear answered with something that is not JSON',
+          {
+            hint: 'a proxy is probably answering in its place; check the endpoint.',
+          }
+        )
+    );
     ensure(
       body.data !== undefined && body.data !== null,
       () =>

@@ -11,8 +11,6 @@ export interface LinearProject {
   /** UUID. Tickets carry it as their project, so it is the graph's project id. */
   readonly id: string;
   readonly name: string;
-  readonly url: string;
-  readonly updatedAt: string;
 }
 
 export interface LinearMilestone {
@@ -36,6 +34,11 @@ export interface LinearIssue {
   readonly labels: readonly string[];
   readonly branchName: string;
   readonly updatedAt: string;
+  /**
+   * When Linear archived the issue, or null. Archived work is still work: the
+   * status is what decides whether it counts, not this.
+   */
+  readonly archivedAt: string | null;
   readonly projectId: string | null;
   readonly milestoneId: string | null;
   /** Identifiers this issue blocks. */

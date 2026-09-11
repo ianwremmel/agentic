@@ -1,8 +1,10 @@
 import {DataError, ensure} from '../errors/index.mts';
 import {
   ISSUES_QUERY,
+  ISSUE_IDENTIFIERS_QUERY,
   ISSUE_QUERY,
   MILESTONES_QUERY,
+  NESTED_PAGE_SIZE,
   PROJECTS_QUERY,
 } from './queries.mts';
 import {createTransport, requireLinearToken} from './transport.mts';
@@ -14,14 +16,15 @@ import type {
   Page,
 } from './types.mts';
 
-/** Linear caps a page at 250. Issues carry nested connections, so they ask for less. */
+/** Linear pages at 50 by default and accepts more; issues carry nested connections, so they ask for less. */
 const PAGE_SIZE = 100;
 const ISSUE_PAGE_SIZE = 50;
 
-/** 50k issues is past any real project; past this the server is looping us. */
+/** The loop guard: no query this module sends has a legitimate thousandth page. */
 const MAX_PAGES = 1000;
 
-const IDENTIFIER = /^(?<key>[A-Za-z0-9]+)-(?<number>\d+)$/u;
+/** Linear issue numbers start at 1, and its comparators reject anything past a 32-bit int. */
+const IDENTIFIER = /^(?<key>[A-Za-z0-9]+)-(?<number>[1-9]\d{0,8})$/u;
 
 interface RawPage<TNode> {
   nodes?: TNode[] | null;
@@ -42,6 +45,7 @@ interface RawIssue {
   priority?: number;
   branchName?: string;
   updatedAt?: string;
+  archivedAt?: string | null;
   state?: {name?: string; type?: string} | null;
   project?: {id?: string} | null;
   projectMilestone?: {id?: string} | null;
@@ -63,9 +67,9 @@ function page<TNode>(raw: RawPage<TNode> | null | undefined): Page<TNode> {
 /**
  * Walk a connection to its end.
  *
- * The cursor guard is not paranoia about Linear: a page that reports more
- * pages while handing back the cursor it was given is an infinite loop inside
- * a server tick, and a loop that reports itself is worth the four lines.
+ * The cursor checks are not paranoia about Linear: a page that reports more
+ * pages but cannot say where to resume is an infinite loop inside a server
+ * tick, and a loop that reports itself is worth the few lines.
  */
 async function collect<TNode>(
   load: (after: string | null) => Promise<Page<TNode>>
@@ -78,7 +82,14 @@ async function collect<TNode>(
     if (!current.pageInfo.hasNextPage) return all;
     const next = current.pageInfo.endCursor;
     ensure(
-      next !== null && next !== after,
+      next !== null,
+      () =>
+        new DataError('linear reported another page but no cursor to read it', {
+          hint: 'retry the scan; if it repeats, the query asks for a connection Linear cannot page.',
+        })
+    );
+    ensure(
+      next !== after,
       () =>
         new DataError('linear paged without advancing its cursor', {
           hint: 'retry the scan; if it repeats, the query asks for a connection Linear cannot page.',
@@ -87,17 +98,36 @@ async function collect<TNode>(
     after = next;
   }
   throw new DataError(
-    `linear returned more than ${String(MAX_PAGES)} pages for one query`,
+    `linear was still paging after ${String(MAX_PAGES)} pages`,
     {
-      hint: 'narrow the scan with a cursor, or raise MAX_PAGES if a project really is that large.',
+      hint: 'scan a narrower project, or pass a cursor so the delta is smaller.',
     }
   );
 }
 
-function names(raw: RawPage<{name?: string}> | null | undefined): string[] {
-  return (raw?.nodes ?? [])
-    .map((node) => node.name ?? '')
-    .filter((name) => name !== '');
+/**
+ * Read a nested connection that is never paged, refusing one that overflowed.
+ *
+ * Truncation here is silent data loss into a scheduling graph — half an
+ * issue's blockers look exactly like all of them — so it is a failure, not a
+ * warning nobody reads.
+ */
+function nested<TNode>(
+  raw: RawPage<TNode> | null | undefined,
+  connection: string,
+  issue: string
+): readonly TNode[] {
+  ensure(
+    raw?.pageInfo?.hasNextPage !== true,
+    () =>
+      new DataError(
+        `${issue} has more than ${String(NESTED_PAGE_SIZE)} ${connection}`,
+        {
+          hint: `this client cannot see past the first ${String(NESTED_PAGE_SIZE)}; split the ticket, or raise NESTED_PAGE_SIZE in the dispatch Linear client.`,
+        }
+      )
+  );
+  return raw?.nodes ?? [];
 }
 
 /**
@@ -107,10 +137,10 @@ function names(raw: RawPage<{name?: string}> | null | undefined): string[] {
  * points, so the direction is decided here and nowhere else.
  */
 function related(
-  raw: RawPage<RawRelation> | null | undefined,
+  nodes: readonly RawRelation[],
   side: 'relatedIssue' | 'issue'
 ): string[] {
-  const found = (raw?.nodes ?? [])
+  const found = nodes
     .filter((node) => node.type === 'blocks')
     .map((node) => node[side]?.identifier ?? '')
     .filter((identifier) => identifier !== '');
@@ -118,27 +148,48 @@ function related(
 }
 
 function parseIssue(raw: RawIssue): LinearIssue {
+  const identifier = raw.identifier ?? '';
   return {
     id: raw.id ?? '',
-    identifier: raw.identifier ?? '',
+    identifier,
     title: raw.title ?? '',
     url: raw.url ?? '',
     state: {name: raw.state?.name ?? '', type: raw.state?.type ?? ''},
     priority: raw.priority ?? 0,
-    labels: names(raw.labels),
+    labels: nested(raw.labels, 'labels', identifier)
+      .map((node) => node.name ?? '')
+      .filter((name) => name !== ''),
     branchName: raw.branchName ?? '',
     updatedAt: raw.updatedAt ?? '',
+    archivedAt: raw.archivedAt ?? null,
     projectId: raw.project?.id ?? null,
     milestoneId: raw.projectMilestone?.id ?? null,
-    blocks: related(raw.relations, 'relatedIssue'),
-    blockedBy: related(raw.inverseRelations, 'issue'),
+    blocks: related(
+      nested(raw.relations, 'relations', identifier),
+      'relatedIssue'
+    ),
+    blockedBy: related(
+      nested(raw.inverseRelations, 'inverse relations', identifier),
+      'issue'
+    ),
   };
 }
 
+function issueFilter(project: string, updatedSince?: string | null): object {
+  const filter: Record<string, unknown> = {project: {id: {eq: project}}};
+  if (updatedSince != null && updatedSince !== '') {
+    // Inclusive: two issues saved in the same millisecond can straddle a page
+    // boundary, and `ticket set` is idempotent, so re-reading the boundary
+    // costs a write while skipping it loses the ticket for good.
+    filter.updatedAt = {gte: updatedSince};
+  }
+  return filter;
+}
+
 /**
- * Reads of the Linear workspace the graph is built from. Every method pages
- * to completion, so a caller never handles a cursor; the only cursor it deals
- * in is the delta one, which is a timestamp.
+ * Reads of the Linear workspace the graph is built from. Every list pages to
+ * completion, so a caller never handles a GraphQL cursor; the only cursor it
+ * deals in is the delta one, which is a timestamp.
  */
 export class LinearClient {
   readonly #execute: GraphqlExecutor;
@@ -147,37 +198,64 @@ export class LinearClient {
     this.#execute = execute;
   }
 
-  /** Every project the key can see, so a scan can resolve one named by id or by name. */
-  async listProjects(): Promise<LinearProject[]> {
-    const nodes = await collect<LinearProject>(async (after) => {
+  /**
+   * Projects the key can see, narrowed by exact name or id. A scan is handed
+   * project names or ids, so it asks Linear to find them rather than reading
+   * the whole workspace.
+   */
+  async listProjects(
+    select: {readonly id?: string; readonly name?: string} = {}
+  ): Promise<LinearProject[]> {
+    const filter: Record<string, unknown> = {};
+    if (select.id !== undefined) filter.id = {eq: select.id};
+    if (select.name !== undefined) filter.name = {eq: select.name};
+    const nodes = await collect<{id?: string; name?: string}>(async (after) => {
       const data = await this.#execute<{
-        projects?: RawPage<LinearProject> | null;
+        projects?: RawPage<{id?: string; name?: string}> | null;
       }>({
         query: PROJECTS_QUERY,
-        variables: {first: PAGE_SIZE, after},
+        variables: {
+          filter: Object.keys(filter).length === 0 ? null : filter,
+          first: PAGE_SIZE,
+          after,
+        },
       });
       return page(data.projects);
     });
     return nodes.map((project) => ({
-      id: project.id,
-      name: project.name,
-      url: project.url,
-      updatedAt: project.updatedAt,
+      id: project.id ?? '',
+      name: project.name ?? '',
     }));
   }
 
-  /** A project's milestones, in the order Linear holds them. */
+  /** A project's milestones, ascending by the order Linear keeps them in. */
   async listMilestones(projectId: string): Promise<LinearMilestone[]> {
-    const nodes = await collect<LinearMilestone>(async (after) => {
+    const nodes = await collect<{
+      id?: string;
+      name?: string;
+      sortOrder?: number;
+    }>(async (after) => {
       const data = await this.#execute<{
-        project?: {projectMilestones?: RawPage<LinearMilestone> | null} | null;
+        project?: {
+          projectMilestones?: RawPage<{
+            id?: string;
+            name?: string;
+            sortOrder?: number;
+          }> | null;
+        } | null;
       }>({
         query: MILESTONES_QUERY,
         variables: {project: projectId, first: PAGE_SIZE, after},
       });
       return page(data.project?.projectMilestones);
     });
-    return [...nodes].sort((a, b) => a.sortOrder - b.sortOrder);
+    return nodes
+      .map((milestone) => ({
+        id: milestone.id ?? '',
+        name: milestone.name ?? '',
+        sortOrder: milestone.sortOrder ?? 0,
+      }))
+      .sort((a, b) => a.sortOrder - b.sortOrder);
   }
 
   /**
@@ -185,20 +263,17 @@ export class LinearClient {
    * whole reason to hold a GraphQL client rather than drive the MCP tools,
    * which need a second call per issue to learn the same thing.
    *
-   * `updatedAfter` is the delta cursor: pass the newest `updatedAt` the last
-   * scan saw and only what moved since comes back. A status change and a
-   * relation change both bump it, so one delta carries both.
+   * `updatedSince` is the delta filter, and it is inclusive. Take the cursor
+   * for the next scan from when this scan *started*, not from the newest
+   * `updatedAt` it returned: an issue edited while the scan was paging can
+   * land behind the page already read, and a cursor drawn from the rows would
+   * step over that edit forever.
    */
   async listIssues(input: {
     readonly project: string;
-    readonly updatedAfter?: string | null;
+    readonly updatedSince?: string | null;
   }): Promise<LinearIssue[]> {
-    const filter: Record<string, unknown> = {
-      project: {id: {eq: input.project}},
-    };
-    if (input.updatedAfter != null && input.updatedAfter !== '') {
-      filter.updatedAt = {gt: input.updatedAfter};
-    }
+    const filter = issueFilter(input.project, input.updatedSince);
     const nodes = await collect<RawIssue>(async (after) => {
       const data = await this.#execute<{issues?: RawPage<RawIssue> | null}>({
         query: ISSUES_QUERY,
@@ -207,6 +282,31 @@ export class LinearClient {
       return page(data.issues);
     });
     return nodes.map(parseIssue);
+  }
+
+  /**
+   * Every identifier currently in the project, delta or not. A delta can say
+   * what changed but never what left: a ticket moved to another project or
+   * deleted simply stops appearing. This is the cheap full list to reconcile
+   * the graph's membership against.
+   */
+  async listIssueIdentifiers(projectId: string): Promise<string[]> {
+    const nodes = await collect<{identifier?: string}>(async (after) => {
+      const data = await this.#execute<{
+        issues?: RawPage<{identifier?: string}> | null;
+      }>({
+        query: ISSUE_IDENTIFIERS_QUERY,
+        variables: {
+          filter: issueFilter(projectId),
+          first: PAGE_SIZE,
+          after,
+        },
+      });
+      return page(data.issues);
+    });
+    return nodes
+      .map((node) => node.identifier ?? '')
+      .filter((identifier) => identifier !== '');
   }
 
   /** One issue by identifier, or `null` when the workspace has no such issue. */
@@ -224,7 +324,7 @@ export class LinearClient {
       query: ISSUE_QUERY,
       variables: {
         filter: {
-          team: {key: {eq: key.toUpperCase()}},
+          team: {key: {eqIgnoreCase: key}},
           number: {eq: Number(number)},
         },
       },

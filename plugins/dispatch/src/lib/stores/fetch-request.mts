@@ -101,8 +101,10 @@ export class FetchRequestStore {
    * exists (for a re-read it always does, which would resolve it before any
    * fetch happened), and `enqueueTicket` dedupes against resolved rows for
    * the life of a refresh (which would allow exactly one re-read ever).
-   * A `refresh_ticket` is resolved by `ticket set` writing the ticket, and
-   * dedupes only against its own open rows — one outstanding ask per ticket.
+   * A `refresh_ticket` is resolved by the ticket write itself — the UPDATE
+   * inside `TicketStore.upsertTicket`'s transaction, so `ticket set` answers
+   * whoever asked — and dedupes only against its own open rows: one
+   * outstanding ask per ticket.
    */
   async enqueueTicketRefresh(input: {
     source: string;
@@ -131,18 +133,6 @@ export class FetchRequestStore {
       );
       return this.#insert(input.source, 'refresh_ticket', payload, input.at);
     });
-  }
-
-  /**
-   * Resolve every open re-read ask for a ticket, any source. Called by
-   * `ticket set`: the write is the answer, whoever asked.
-   */
-  async resolveTicketRefresh(ticket: string): Promise<number> {
-    return this.#db.run(
-      `UPDATE fetch_request SET resolution = 'materialized'
-       WHERE kind = 'refresh_ticket' AND resolution IS NULL AND payload = ?`,
-      [JSON.stringify({ticket} satisfies TicketPayload)]
-    );
   }
 
   /**

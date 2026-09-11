@@ -18,6 +18,11 @@ export const OBSERVATION_KINDS = [
   // Not a PR observation: written by `ticket set` when a tracker write
   // reveals a status transition. Same queue, same delivery.
   'ticket_changed',
+  // Also not a diff: written when a watch reaches its deadline. It reports
+  // that nothing the snapshot can see changed, which is the one thing a diff
+  // can never say — and the signal it stands in for (an approval on the
+  // ticket, a reaction, a go-ahead out of band) is outside the forge.
+  'watch_expired',
 ] as const;
 export type ObservationKind = (typeof OBSERVATION_KINDS)[number];
 

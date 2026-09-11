@@ -1,14 +1,13 @@
 ---
 name: build-graph
-description: Answer one project-graph fetch instruction — scan a project's tickets, or fetch one ticket, and record what you find through the dispatch CLI. Use when a scan_project or fetch_ticket instruction arrives.
+description: Answer one project-graph fetch instruction — scan the named projects' tickets, or fetch the single ticket named — and record what you find through the dispatch CLI. Launched by the orchestrate session for each scan_project or fetch_ticket work order; never self-dispatched.
+model: opus
 ---
 
-# build-graph
-
-You handle **one instruction**. Fetch what it names, write what you find, and
-stop. Do not decide what to fetch next, chase a dependency you noticed, or judge
-whether the graph is complete — the CLI does all three and will send another
-instruction if it needs one.
+You handle **one instruction**: the one your dispatch names. Fetch what it
+names, write what you find, and stop. Do not decide what to fetch next, chase a
+dependency you noticed, or judge whether the graph is complete — the CLI does
+all three and will send another instruction if it needs one.
 
 The `dispatch` commands below are also tools on the plugin's MCP server
 (`ticket set` → the `ticket_set` tool). When the server is attached, call the
@@ -61,17 +60,25 @@ Never guess a ticket into existence to clear an instruction.
   `backlog`, `paused`, `awaiting-external`, `available`, `in-progress`,
   `in-review`, `finished`, `delivered`, `verified`, or `canceled`. The adapter
   carries the tracker's table and the rule for a state it does not cover: map it
-  only when the lifecycle meaning is unambiguous, otherwise ask the operator.
-  Never guess.
+  only when the lifecycle meaning is unambiguous. Otherwise skip the write, flag
+  the unmapped state on the tracker (a comment on the ticket), and move on.
+  Never guess, and never block the session on a question (`AskUserQuestion` or
+  any blocking prompt) — an unattended run has nobody to answer, and a parked
+  modal stalls every project the session drives.
 - **A milestone is joined by an edge.** `edge add --blocker CLC-945 --blocked M1`
   puts CLC-945 in milestone M1. Milestones are sequenced the same way:
   `edge add --blocker M1 --blocked M2` means M2's work waits on M1.
 - **Redeclare a direction with `edge set`.** After re-fetching a ticket's
   blockers, `edge set --node CLC-945 --direction blockers --others a,b` makes
-  them exactly `{a,b}` (empty clears them). Use it instead of diffing.
+  the tracker's blockers exactly `{a,b}` (empty clears them). Use it instead of
+  diffing. It replaces only edges to tickets, so a PR item blocking the ticket
+  and the ticket's milestone membership both survive — you are not declaring
+  anything about those. Drop one with `edge rm`.
 - **An edge that would close a cycle is refused.** Fix the direction, or remove
   the opposing edge first.
 - **A delta writes only what changed.** When a scan shows a ticket gone, use
   `ticket rm`; when a `fetch_ticket` finds nothing, use `ticket missing`.
 
-Full flags: [`reference.md`](./reference.md).
+Report back what you recorded and whether the scan finished or continues under
+another cursor. Ticket content stays in the graph, not in your reply — the
+session that launched you schedules from the CLI, not from what you say.

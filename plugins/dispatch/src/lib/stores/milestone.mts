@@ -1,6 +1,7 @@
 import type {Database} from '../db/database.mts';
+import {ensure, UsageError} from '../errors/index.mts';
 import type {Milestone} from '../model/types.mts';
-import {findNode, materialize, nodeRef} from './materialize.mts';
+import {findNode, materialize} from './materialize.mts';
 
 /* eslint-disable @typescript-eslint/require-await --
  * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
@@ -19,7 +20,19 @@ export class MilestoneStore {
 
   async upsertMilestone(milestone: Milestone): Promise<void> {
     await this.#db.transaction(() => {
-      const projectId = nodeRef(this.#db, milestone.project);
+      // Same rule as tickets: the project must already be recorded. A name
+      // passed where the id belongs would otherwise materialize an
+      // unknown-kind placeholder and silently parent the milestone onto a
+      // node no project join can see.
+      const project = findNode(this.#db, milestone.project);
+      ensure(
+        project !== null && project.kind === 'project',
+        () =>
+          new UsageError(`"${milestone.project}" is not a recorded project`, {
+            hint: 'record it first with `dispatch project set`, and pass the project id — a project name is not its id.',
+          })
+      );
+      const projectId = project.id;
       const nodeId = materialize(this.#db, milestone.id, 'milestone');
       this.#db.run(
         `INSERT INTO milestone (node_id, project_id, name) VALUES (?, ?, ?)

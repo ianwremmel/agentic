@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
 import {Database} from '../db/database.mts';
-import {DataError} from '../errors/index.mts';
+import {DataError, UsageError} from '../errors/index.mts';
 import type {Ticket} from '../model/types.mts';
+import {ProjectStore} from './project.mts';
 import {TicketStore} from './ticket.mts';
 
 const BASE: Ticket = {
@@ -23,6 +24,11 @@ const BASE: Ticket = {
 
 async function fresh(): Promise<{db: Database; store: TicketStore}> {
   const db = await Database.open(':memory:');
+  await new ProjectStore(db).upsertProject({
+    id: 'P1',
+    name: 'P1',
+    source: 'linear',
+  });
   return {db, store: new TicketStore(db)};
 }
 
@@ -39,6 +45,19 @@ describe('TicketStore', () => {
     await assert.rejects(
       store.upsertTicket({...BASE, status: 'nope' as Ticket['status']}),
       (err: unknown) => err instanceof DataError
+    );
+    await db.close();
+  });
+
+  it('rejects a project that is not recorded instead of re-parenting silently', async () => {
+    // A session passing the project's *name* ("Anyhook") where the id belongs
+    // used to materialize an unknown-kind placeholder and quietly re-parent
+    // the ticket onto it — invisible to the refresh cadence, whose join
+    // requires a real project row. The write must fail loudly instead.
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.upsertTicket({...BASE, project: 'Anyhook'}),
+      (err: unknown) => err instanceof UsageError
     );
     await db.close();
   });

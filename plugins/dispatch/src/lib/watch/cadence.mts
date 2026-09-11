@@ -37,5 +37,9 @@ export function cadenceFor(snapshot: PrSnapshot | null): number {
  * How long a watch runs before firing regardless of the diff. The snapshot
  * sees only the forge, so an approval given on the ticket or a reaction never
  * reaches it; expiry sends the worker to look for itself.
+ *
+ * Measured from arming, never from the last poll: a deadline a poll can push
+ * out is one a quiet PR never reaches, and a quiet PR is the only kind that
+ * needs it. The price is a wasted look at every unchanged PR once a window.
  */
 export const EXPIRY_SECONDS = 21_600;

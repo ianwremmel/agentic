@@ -36,6 +36,15 @@ export class EdgeStore {
   /**
    * Replace every edge in one direction of a node with the given set — lets a
    * re-fetch declare "these are now exactly my blockers/blocks" atomically.
+   *
+   * "Every edge" means every edge the declaration could have named. A tracker
+   * lists tickets, and an id it names that nobody has fetched yet is a
+   * placeholder, so those two kinds are what a redeclaration replaces. Edges
+   * whose other endpoint is a PR item or a milestone were minted here — a
+   * worker registering the PR that implements a ticket, a scan recording
+   * milestone membership — and no tracker relation list mentions them, so a
+   * redeclaration that dropped them would be deleting on no evidence. Remove
+   * one of those with `edge rm`, which says which edge it means.
    */
   async setEdges(
     node: string,
@@ -44,8 +53,18 @@ export class EdgeStore {
   ): Promise<void> {
     await this.#db.transaction(() => {
       const nodeId = nodeRef(this.#db, node);
-      const column = direction === 'blockers' ? 'blocked' : 'blocker';
-      this.#db.run(`DELETE FROM edge WHERE ${column} = ?`, [nodeId]);
+      const [own, far] =
+        direction === 'blockers'
+          ? ['blocked', 'blocker']
+          : ['blocker', 'blocked'];
+      this.#db.run(
+        `DELETE FROM edge
+         WHERE ${own} = ?
+           AND ${far} IN (
+             SELECT id FROM node WHERE kind IN ('ticket', 'unknown')
+           )`,
+        [nodeId]
+      );
       for (const other of others) {
         if (direction === 'blockers') this.#insert(other, node);
         else this.#insert(node, other);

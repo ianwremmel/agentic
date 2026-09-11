@@ -8,10 +8,12 @@ import {
   MilestoneStore,
   PrStore,
   ProjectStore,
+  RefreshStore,
   ReviewStore,
   SessionStore,
   TicketStore,
 } from '../stores/index.mts';
+import {DEFAULT_STALE_AFTER_SECONDS} from '../graph/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
 
@@ -341,7 +343,10 @@ describe('Scheduler', () => {
     );
 
     // The operator answered and removed the outcome: the item requeues.
-    await new CoordinationStore(db).removeOutcome('o/r#7');
+    await new CoordinationStore(db).removeOutcome('o/r#7', {
+      now: LATER,
+      staleAfterSeconds: DEFAULT_STALE_AFTER_SECONDS,
+    });
     const third = await scheduler.tick(LATER);
     assert.deepEqual(
       third.orders
@@ -349,6 +354,68 @@ describe('Scheduler', () => {
         .map((order) => order.meta.pr),
       ['o/r#7']
     );
+    await db.close();
+  });
+
+  it('holds every work order while a tracker scan is still writing the graph', async () => {
+    const {db, scheduler} = await fresh();
+    await new TicketStore(db).upsertTicket(baseTicket('A', 'P'));
+    const refreshes = new RefreshStore(db);
+    await refreshes.open({
+      source: 'linear',
+      projects: ['P'],
+      sessionId: 'claude-1',
+      at: NOW,
+    });
+
+    const held = await scheduler.tick(NOW);
+    assert.deepEqual(held.orders, []);
+    assert.deepEqual(held.ingesting, ['linear']);
+
+    await refreshes.close('linear', LATER);
+    const {orders} = await scheduler.tick(LATER);
+    assert.deepEqual(kinds(orders), ['dispatch_ticket']);
+    await db.close();
+  });
+
+  it('holds a milestone review under a scan too, not just the queue', async () => {
+    const {db, scheduler} = await fresh();
+    await new MilestoneStore(db).upsertMilestone({
+      id: 'M1',
+      project: 'P',
+      name: 'M1',
+    });
+    await new TicketStore(db).upsertTicket({
+      ...baseTicket('T1', 'P'),
+      status: 'verified',
+    });
+    const {EdgeStore} = await import('../stores/index.mts');
+    await new EdgeStore(db).addEdge('T1', 'M1');
+    await new RefreshStore(db).open({
+      source: 'linear',
+      projects: ['P'],
+      sessionId: 'claude-1',
+      at: NOW,
+    });
+
+    const {orders} = await scheduler.tick(NOW);
+    assert.deepEqual(orders, []);
+    await db.close();
+  });
+
+  it('schedules through a scan whose owning session has been swept', async () => {
+    const {db, scheduler} = await fresh();
+    await new TicketStore(db).upsertTicket(baseTicket('A', 'P'));
+    await new RefreshStore(db).open({
+      source: 'linear',
+      projects: ['P'],
+      sessionId: 'claude-gone',
+      at: NOW,
+    });
+
+    const {orders, ingesting} = await scheduler.tick(NOW);
+    assert.deepEqual(ingesting, []);
+    assert.deepEqual(kinds(orders), ['dispatch_ticket']);
     await db.close();
   });
 

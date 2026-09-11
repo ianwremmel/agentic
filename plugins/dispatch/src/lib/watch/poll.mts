@@ -13,10 +13,15 @@ const MAX_POLLS_PER_PASS = 10;
  * One polling pass over the due watches: fire the expired ones outright,
  * snapshot the rest, and record what changed as events.
  *
- * A watch fires only when the diff produced something — an unchanged PR, or
- * one that changed in a way only the agent itself caused, leaves the row
- * watching. That is the whole point of diffing structurally rather than
- * hashing: a worker is woken for a reason it can be told.
+ * Short of its deadline, a watch fires only when the diff produced something
+ * — an unchanged PR, or one that changed in a way only the agent itself
+ * caused, leaves the row watching. That is the whole point of diffing
+ * structurally rather than hashing: a worker is woken for a reason it can be
+ * told. Expiry is the one wake with no reason to give, and says so.
+ *
+ * A parked item never reads as expired (`due`), so for it the diff is the
+ * only thing that fires: it is waiting on a person, and "your six hours are
+ * up" is not an answer.
  *
  * A failed snapshot costs only that row's interval: `touch` pushes the retry
  * out so a broken PR is not hammered every tick, and the error goes to the
@@ -34,9 +39,10 @@ export async function pollWatches(
   const now = opts.now ?? nowIso;
   return withDatabase(opts.dbPath, env, async (db) => {
     const watches = new WatchStore(db);
-    // Every unconcluded PR item is watched, whether or not a worker ever
-    // asked. A PR moves whether anyone is waiting on it, and an item nobody
-    // armed is exactly the one whose change would otherwise be missed.
+    // Every unconcluded PR item is watched — including one parked on an
+    // operator — whether or not a worker ever asked. A PR moves whether
+    // anyone is waiting on it, and an item nobody armed is exactly the one
+    // whose change would otherwise be missed.
     await watches.ensureForLiveItems(now(), EXPIRY_SECONDS);
     const fired: string[] = [];
 
@@ -65,9 +71,6 @@ export async function pollWatches(
           createdAt: due.createdAt,
           fire: observed.length > 0,
           intervalSeconds: cadenceFor(taken),
-          expiresAt: new Date(
-            Date.parse(now()) + EXPIRY_SECONDS * 1_000
-          ).toISOString(),
           events: observed,
         });
         if (outcome === 'fired') fired.push(due.node);

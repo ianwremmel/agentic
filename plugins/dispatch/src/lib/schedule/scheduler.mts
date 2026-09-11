@@ -11,6 +11,7 @@ import {
   FetchRequestStore,
   NoticeStore,
   PolicyStore,
+  RefreshStore,
   SessionStore,
 } from '../stores/index.mts';
 import type {NoticeKind} from '../stores/notice.mts';
@@ -35,6 +36,8 @@ export interface TickResult {
   orders: WorkOrder[];
   /** The session's own row is gone; the server must exit, not re-register. */
   retired: boolean;
+  /** Sources mid-ingest that held this tick's scheduling; empty when none did. */
+  ingesting: string[];
 }
 
 /**
@@ -60,7 +63,7 @@ export class Scheduler {
   async tick(now: string): Promise<TickResult> {
     const sessions = new SessionStore(this.#db);
     if (!(await sessions.heartbeat(this.#session, now))) {
-      return {orders: [], retired: true};
+      return {orders: [], retired: true, ingesting: []};
     }
     await sessions.sweepStale(now, DEFAULT_STALE_AFTER_SECONDS);
 
@@ -69,9 +72,20 @@ export class Scheduler {
     const own = await sessions.getSession(this.#session);
     const orders: WorkOrder[] = [];
 
+    // Nothing at all while a tracker scan is writing the graph. A scan fills
+    // the graph ticket by ticket and learns each ticket's dependencies in a
+    // second round trip, so under one a real blocker can simply be absent —
+    // and an item with no blocker edges is indistinguishable from an item
+    // with none, which admits work whose blocker is still open. Reviews and
+    // the completion notice read the same half-built graph, so the whole
+    // emission waits rather than just the queue. The scan itself is delivered
+    // off `fetch_request` rows, not from here, so holding this cannot stall
+    // the thing it is waiting for.
+    const ingesting = await new RefreshStore(this.#db).ingesting();
+
     // No work order before the acknowledgement: a work order claims a node,
     // which a session that never hears the channel would never release.
-    if (own?.ackedAt != null) {
+    if (own?.ackedAt != null && ingesting.length === 0) {
       // One admission budget per tick: the cap minus everything in flight. A
       // claim is both the obligation to run an agent and that agent's compute
       // grant, so it consumes capacity from the moment it exists. Reviews
@@ -103,7 +117,7 @@ export class Scheduler {
       );
       orders.push(...(await this.#conditions(now)));
     }
-    return {orders, retired: false};
+    return {orders, retired: false, ingesting};
   }
 
   /**
@@ -317,7 +331,7 @@ export class Scheduler {
               : {project: entry.item.project ?? '', ticket: entry.item.id},
           body:
             entry.outcome?.outcome === 'human-blocked'
-              ? `PR item ${entry.item.id} is waiting on an operator response${entry.outcome.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the PR if one exists, else on its ticket, and requeue with \`dispatch outcome rm --id ${entry.item.id}\` once the response arrives.`
+              ? `PR item ${entry.item.id} is waiting on an operator response${entry.outcome.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the PR if one exists, else on its ticket. An answer on the PR — a comment, a review, a push — requeues it on its own; if the answer arrives anywhere else, requeue it with \`dispatch outcome rm --id ${entry.item.id}\`.`
               : entry.item.kind === 'pr'
                 ? `PR item ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator; requeue by removing the outcome once addressed.`
                 : `Ticket ${entry.item.id} failed unrecoverably${entry.outcome?.detail == null ? '' : ` (${entry.outcome.detail})`}. Alert the operator on the ticket; requeue by removing the outcome once addressed.`,

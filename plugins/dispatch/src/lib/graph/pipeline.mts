@@ -27,6 +27,10 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   milestone does not block, a closed one does. A milestone's own readiness
  *   (`dep_blocked`) counts only non-milestone ancestors, so openness never
  *   depends on itself.
+ * - `open_dep` — every item held by something unfinished, whether a blocker or
+ *   a closed milestone gate. One definition serving two readers: it is what
+ *   makes an item read `blocked`, and what `queued` consults before handing
+ *   out a pass that launches implementation work.
  * - `descendant`/`fanout` — transitive descendant counts, resolved or not: how
  *   much work an item gates, a ranking signal rather than a blocking one.
  * - `live_claim` — a claim is live while its session's heartbeat is fresh;
@@ -84,6 +88,14 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   whose classification is derived from that very outcome. Nothing
  *   human-owned, still parked, resolved, or held by a live claim is ever
  *   handed out.
+ *
+ *   Every pass that puts an agent on implementation — `resume`, `finalize`,
+ *   `retry` — additionally requires `dependency_open = 0`. The classification
+ *   cannot carry that on its own: a started status, a live claim, or a watch
+ *   all outrank `blocked`, so an item can be genuinely in flight *and*
+ *   genuinely held, and only admission sees both. `verify` is exempt — it
+ *   confirms work that already landed, which an open blocker does not
+ *   invalidate.
  */
 export const PREFIX = `
 WITH RECURSIVE
@@ -216,6 +228,11 @@ gate(item_id, milestone_id) AS (
   JOIN milestone_state ms ON ms.id = a.id
   WHERE ms.member_count > 0 AND a.id NOT IN (SELECT id FROM milestone_open)
 ),
+open_dep(id) AS (
+  SELECT target FROM blocker_view
+  UNION
+  SELECT item_id FROM gate
+),
 item AS (
   SELECT
     t.node_id,
@@ -292,6 +309,7 @@ classified AS (
     EXISTS (SELECT 1 FROM pr_event pe WHERE pe.node_id = i.node_id)
       AS events_observed,
     lw.node_id IS NOT NULL AS worker_live,
+    i.node_id IN (SELECT id FROM open_dep) AS dependency_open,
     CASE
       WHEN i.kind = 'pr' AND o.outcome IN ('delivered', 'verified') THEN 'verified'
       WHEN i.kind = 'pr' AND o.outcome = 'canceled' THEN 'canceled'
@@ -302,8 +320,7 @@ classified AS (
       WHEN lc.node_id IS NOT NULL THEN 'in-flight'
       WHEN w.node_id IS NOT NULL THEN 'in-flight'
       WHEN i.status = 'backlog' THEN 'dormant'
-      WHEN EXISTS (SELECT 1 FROM blocker_view bv WHERE bv.target = i.node_id)
-        OR EXISTS (SELECT 1 FROM gate g WHERE g.item_id = i.node_id) THEN 'blocked'
+      WHEN i.node_id IN (SELECT id FROM open_dep) THEN 'blocked'
       WHEN i.requires_human = 1
         OR i.target_kind = 'human-only'
         OR i.status IN ('paused', 'awaiting-external') THEN 'human-blocked'
@@ -342,14 +359,12 @@ queued AS (
       WHEN outcome IS NULL AND classification = 'available' THEN 'available'
       WHEN outcome IS NULL AND (claim_live IS NULL OR claim_live = 0)
         AND classification = 'in-flight'
-        AND worker_live = 0 THEN 'resume'
+        AND worker_live = 0 AND dependency_open = 0 THEN 'resume'
       WHEN outcome IS NULL OR claim_live = 1 THEN NULL
       WHEN outcome = 'delivered' AND kind = 'ticket' THEN 'verify'
-      WHEN outcome = 'decomposed'
-        AND NOT EXISTS (SELECT 1 FROM blocker_view bv WHERE bv.target = node_id)
-        AND NOT EXISTS (SELECT 1 FROM gate g WHERE g.item_id = node_id)
-        THEN 'finalize'
-      WHEN outcome = 'failed' AND outcome_retryable = 1 THEN 'retry'
+      WHEN outcome = 'decomposed' AND dependency_open = 0 THEN 'finalize'
+      WHEN outcome = 'failed' AND outcome_retryable = 1
+        AND dependency_open = 0 THEN 'retry'
     END AS pass
   FROM classified
 )

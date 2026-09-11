@@ -115,6 +115,28 @@ export class RefreshStore {
     );
   }
 
+  /**
+   * Sources whose ingest is mid-flight and still owned by a live session. A
+   * scan writes a ticket before it writes that ticket's edges, so the graph
+   * under one is missing dependencies it will have moments later — and a
+   * missing edge reads as "no blockers", the permissive answer. Callers that
+   * would act on the graph wait for this to come back empty.
+   *
+   * A refresh whose session has been swept is excluded: nobody is going to
+   * finish it, so leaving it in would wedge those callers for good.
+   */
+  async ingesting(): Promise<string[]> {
+    return this.#db
+      .all(
+        `SELECT r.source FROM refresh r
+         JOIN session s
+           ON s.id = r.session_id OR s.claude_session_id = r.session_id
+         WHERE r.state <> 'idle'
+         ORDER BY r.source`
+      )
+      .map((row) => String(row.source));
+  }
+
   async get(source: string): Promise<RefreshRow | null> {
     const row = this.#db.get(
       `SELECT ${COLUMNS} FROM refresh WHERE source = ?`,

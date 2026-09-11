@@ -84,6 +84,11 @@ export async function runServerTick(
         state.retired = true;
         return;
       }
+      if (result.ingesting.length > 0) {
+        opts.log?.debug('scheduling held while the graph is being built', {
+          sources: result.ingesting.join(','),
+        });
+      }
       orders = [...orders, ...result.orders];
 
       const own = await new SessionStore(db).getSession(state.registryId);

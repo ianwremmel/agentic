@@ -323,6 +323,46 @@ describe('claims and passes', () => {
     await db.close();
   });
 
+  it('holds a crashed run whose blocker is still open', async () => {
+    // The tracker still says in-progress, so the item reads in-flight and the
+    // blocked arm of the classification never runs. Admission has to check.
+    const db = await fresh();
+    await addTicket(db, 'A', 'in-progress');
+    await addTicket(db, 'B');
+    await block(db, 'B', 'A');
+
+    assert.equal(await classificationOf(db, 'A'), 'in-flight');
+    assert.deepEqual(await queueOf(db), [{id: 'B', pass: null}]);
+
+    await addTicket(db, 'B', 'verified');
+    assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'resume'}]);
+    await db.close();
+  });
+
+  it('holds a retryable failure whose blocker is still open', async () => {
+    const db = await fresh();
+    await addTicket(db, 'A');
+    await addTicket(db, 'B');
+    await block(db, 'B', 'A');
+    await session(db, 'S1', NOW);
+    await new CoordinationStore(db).recordOutcome(
+      {
+        node: 'A',
+        outcome: 'failed',
+        retryable: true,
+        detail: null,
+        recordedAt: NOW,
+      },
+      {session: 'S1'}
+    );
+
+    assert.deepEqual(await queueOf(db), [{id: 'B', pass: null}]);
+
+    await addTicket(db, 'B', 'verified');
+    assert.deepEqual(await queueOf(db), [{id: 'A', pass: 'retry'}]);
+    await db.close();
+  });
+
   it('re-admits a delivered ticket as verify', async () => {
     const db = await fresh();
     await addTicket(db, 'A', 'delivered');

@@ -20,7 +20,9 @@ const options = {
   },
   others: {
     type: 'string',
-    description: 'Comma-separated node ids; empty clears the direction.',
+    description:
+      'Comma-separated node ids; empty clears the direction. Only edges to ' +
+      'tickets are replaced — PR items and milestones are left alone.',
     positional: false,
     required: false,
     default: '',

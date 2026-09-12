@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import {DataError} from '../errors/index.mts';
+import {DataError, EnvironmentError} from '../errors/index.mts';
 import {LinearClient} from './client.mts';
 import type {ExecuteInput, GraphqlExecutor} from './transport.mts';
 
 interface Call {
   query: string;
   variables: Record<string, unknown>;
+  signal: AbortSignal | undefined;
 }
 
 /** An executor that answers from a script and records what it was asked. */
@@ -18,7 +19,11 @@ function scripted(responses: unknown[]): {
   const calls: Call[] = [];
   let index = 0;
   const execute = (<TData,>(input: ExecuteInput): Promise<TData> => {
-    calls.push({query: input.query, variables: input.variables ?? {}});
+    calls.push({
+      query: input.query,
+      variables: input.variables ?? {},
+      signal: input.signal,
+    });
     const response = responses[index];
     index += 1;
     assert.ok(
@@ -102,7 +107,7 @@ describe('LinearClient.listProjects', () => {
     await assert.rejects(
       new LinearClient(execute).listProjects(),
       (error: unknown) =>
-        error instanceof DataError &&
+        error instanceof EnvironmentError &&
         error.message.includes('without advancing its cursor')
     );
   });
@@ -115,8 +120,48 @@ describe('LinearClient.listProjects', () => {
     await assert.rejects(
       new LinearClient(execute).listProjects(),
       (error: unknown) =>
-        error instanceof DataError &&
+        error instanceof EnvironmentError &&
         error.message.includes('no cursor to read it')
+    );
+  });
+
+  it('refuses an answer with no paging information rather than reading it as the last page', async () => {
+    const {execute} = scripted([
+      {projects: {nodes: [{id: 'p1', name: 'One'}]}},
+    ]);
+
+    await assert.rejects(
+      new LinearClient(execute).listProjects(),
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('without the projects')
+    );
+  });
+
+  it('refuses an answer missing the connection entirely', async () => {
+    const {execute} = scripted([{}]);
+
+    await assert.rejects(
+      new LinearClient(execute).listProjects(),
+      (error: unknown) => error instanceof EnvironmentError
+    );
+  });
+
+  it('carries the caller cancellation into every page', async () => {
+    const controller = new AbortController();
+    const {execute, calls} = scripted([
+      {projects: connection([{id: 'p1', name: 'One'}], 'CUR')},
+      {projects: connection([{id: 'p2', name: 'Two'}])},
+    ]);
+
+    await new LinearClient(execute).listProjects(
+      {},
+      {signal: controller.signal}
+    );
+
+    assert.deepEqual(
+      calls.map((call) => call.signal),
+      [controller.signal, controller.signal]
     );
   });
 
@@ -178,9 +223,21 @@ describe('LinearClient.listMilestones', () => {
   });
 
   it('reads a project with no milestones as none, not as a failure', async () => {
-    const {execute} = scripted([{project: {projectMilestones: null}}]);
+    const {execute} = scripted([
+      {project: {projectMilestones: connection([])}},
+    ]);
 
     assert.deepEqual(await new LinearClient(execute).listMilestones('p'), []);
+  });
+
+  it('refuses a project linear does not have, rather than reading it as milestone-less', async () => {
+    const {execute} = scripted([{project: null}]);
+
+    await assert.rejects(
+      new LinearClient(execute).listMilestones('nope'),
+      (error: unknown) =>
+        error instanceof DataError && error.message.includes('no project nope')
+    );
   });
 });
 
@@ -318,14 +375,60 @@ describe('LinearClient.listIssues', () => {
     assert.deepEqual(issue.blockedBy, ['CLC-2']);
   });
 
-  it('refuses an issue whose blockers it can only see half of', async () => {
-    const {execute} = scripted([
+  it('finishes an issue whose blockers overflowed its inline page', async () => {
+    const {execute, calls} = scripted([
       {
         issues: connection([
           issueNode({
             inverseRelations: {
               nodes: [{type: 'blocks', issue: {identifier: 'CLC-2'}}],
-              pageInfo: {hasNextPage: true},
+              pageInfo: {hasNextPage: true, endCursor: 'REL'},
+            },
+          }),
+        ]),
+      },
+      {
+        issue: {
+          inverseRelations: connection(
+            [{type: 'blocks', issue: {identifier: 'CLC-3'}}],
+            'REL2'
+          ),
+        },
+      },
+      {
+        issue: {
+          inverseRelations: connection([
+            {type: 'blocks', issue: {identifier: 'CLC-4'}},
+          ]),
+        },
+      },
+    ]);
+
+    const [issue] = await new LinearClient(execute).listIssues({
+      project: 'proj-1',
+    });
+
+    assert.ok(issue);
+    assert.deepEqual(issue.blockedBy, ['CLC-2', 'CLC-3', 'CLC-4']);
+    // Resumed by uuid, from the cursor the overflowing page ended on.
+    const resumed = calls[1];
+    const resumedAgain = calls[2];
+    assert.ok(resumed);
+    assert.ok(resumedAgain);
+    assert.equal(resumed.variables.id, 'uuid-1');
+    assert.equal(resumed.variables.after, 'REL');
+    assert.equal(resumedAgain.variables.after, 'REL2');
+  });
+
+  it('refuses an overflowing issue it cannot resume, rather than recording half its blockers', async () => {
+    const {execute} = scripted([
+      {
+        issues: connection([
+          issueNode({
+            id: '',
+            inverseRelations: {
+              nodes: [{type: 'blocks', issue: {identifier: 'CLC-2'}}],
+              pageInfo: {hasNextPage: true, endCursor: 'REL'},
             },
           }),
         ]),
@@ -335,8 +438,43 @@ describe('LinearClient.listIssues', () => {
     await assert.rejects(
       new LinearClient(execute).listIssues({project: 'proj-1'}),
       (error: unknown) =>
-        error instanceof DataError &&
-        error.message.includes('CLC-1 has more than 50 inverse relations')
+        error instanceof EnvironmentError &&
+        error.message.includes('did not answer with the id')
+    );
+  });
+
+  it('refuses a blocking relation linear did not name both ends of', async () => {
+    const {execute} = scripted([
+      {
+        issues: connection([
+          issueNode({
+            inverseRelations: {
+              nodes: [{type: 'blocks', issue: null}],
+              pageInfo: {hasNextPage: false},
+            },
+          }),
+        ]),
+      },
+    ]);
+
+    await assert.rejects(
+      new LinearClient(execute).listIssues({project: 'proj-1'}),
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('without naming its other end')
+    );
+  });
+
+  it('refuses an issue whose relations came back without paging information', async () => {
+    const {execute} = scripted([
+      {issues: connection([issueNode({relations: null})])},
+    ]);
+
+    await assert.rejects(
+      new LinearClient(execute).listIssues({project: 'proj-1'}),
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('relations of CLC-1')
     );
   });
 
@@ -402,11 +540,23 @@ describe('LinearClient.getIssue', () => {
     assert.equal(await new LinearClient(execute).getIssue('CLC-9999'), null);
   });
 
+  it('accepts the largest issue number Linear can hold', async () => {
+    const {execute, calls} = scripted([{issues: {nodes: []}}]);
+
+    await new LinearClient(execute).getIssue('CLC-2147483647');
+
+    assert.deepEqual(calls[0]?.variables.filter, {
+      team: {key: {eqIgnoreCase: 'CLC'}},
+      number: {eq: 2147483647},
+    });
+  });
+
   it('refuses an identifier Linear could not answer before spending a call', async () => {
     for (const bad of [
       'https://linear.app/x/issue/CLC-1',
       'CLC-007',
       'CLC-2147483648',
+      'CLC-9999999999',
       'CLC-0',
       'CLC',
     ]) {

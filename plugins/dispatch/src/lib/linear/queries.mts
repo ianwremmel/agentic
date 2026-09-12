@@ -1,8 +1,9 @@
 /**
- * How many labels or relations one issue can carry before this client stops
- * seeing them. Nested connections are never paged — that would fan a scan out
- * into hundreds of round trips — so the client refuses an issue that overflows
- * one rather than recording half its blockers.
+ * How many labels or relations one issue's page carries inline. Asking for
+ * more multiplies Linear's complexity cost by every issue in the page, so an
+ * issue that overflows this is finished with its own follow-up request instead:
+ * the common issue costs nothing extra, and the hub ticket with sixty links
+ * still comes back whole.
  */
 export const NESTED_PAGE_SIZE = 50;
 
@@ -26,15 +27,47 @@ export const ISSUE_FIELDS = `fragment IssueFields on Issue {
   projectMilestone { id }
   labels(first: ${String(NESTED_PAGE_SIZE)}) {
     nodes { name }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage endCursor }
   }
   relations(first: ${String(NESTED_PAGE_SIZE)}) {
     nodes { type relatedIssue { identifier } }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage endCursor }
   }
   inverseRelations(first: ${String(NESTED_PAGE_SIZE)}) {
     nodes { type issue { identifier } }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+/**
+ * The rest of one issue's nested connection, by UUID and cursor. Reached only
+ * when an issue overflowed its inline page, which is why the client keeps the
+ * UUID: `issue(id:)` takes it, and nothing else can resume a nested connection.
+ */
+export const ISSUE_LABELS_QUERY = `query DispatchIssueLabels($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    labels(first: $first, after: $after) {
+      nodes { name }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+export const ISSUE_RELATIONS_QUERY = `query DispatchIssueRelations($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    relations(first: $first, after: $after) {
+      nodes { type relatedIssue { identifier } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+export const ISSUE_INVERSE_RELATIONS_QUERY = `query DispatchIssueInverseRelations($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    inverseRelations(first: $first, after: $after) {
+      nodes { type issue { identifier } }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 }`;
 

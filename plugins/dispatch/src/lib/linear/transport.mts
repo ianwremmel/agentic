@@ -17,7 +17,7 @@ export interface ExecuteInput {
   readonly query: string;
   readonly variables?: Record<string, unknown>;
   /** Caller's own cancellation, combined with the per-request timeout. */
-  readonly signal?: AbortSignal;
+  readonly signal?: AbortSignal | undefined;
 }
 
 /** One GraphQL round trip. The client talks to this, so tests need no HTTP. */
@@ -35,9 +35,10 @@ interface GraphqlError {
   readonly extensions?: {readonly type?: string; readonly code?: string};
 }
 
-interface GraphqlBody<TData> {
-  readonly data?: TData | null;
-  readonly errors?: readonly GraphqlError[];
+/** The envelope as it arrives: a parsed object whose fields are still unknown. */
+interface GraphqlEnvelope {
+  readonly data?: unknown;
+  readonly errors?: unknown;
 }
 
 const BEARER = /^Bearer\s+/iu;
@@ -55,23 +56,30 @@ export function authorization(token: string): string {
   return bare.startsWith('lin_api_') ? bare : trimmed;
 }
 
+type Fault = 'ratelimited' | 'auth' | 'schema' | 'input' | 'unknown';
+
+const BY_CODE = new Map<string, Fault>([
+  ['RATELIMITED', 'ratelimited'],
+  ['AUTHENTICATION_ERROR', 'auth'],
+  ['GRAPHQL_VALIDATION_FAILED', 'schema'],
+  ['INPUT_ERROR', 'input'],
+]);
+
+const BY_TYPE = new Map<string, Fault>([
+  ['ratelimited', 'ratelimited'],
+  ['authentication error', 'auth'],
+  ['graphql error', 'schema'],
+  ['invalid input', 'input'],
+]);
+
 /**
- * What each Linear error is. `code` is the stable discriminator;
- * `extensions.type` is prose that has changed before, so it is only a fallback.
+ * What one Linear error is. `code` decides on its own; `extensions.type` is
+ * prose that has changed before, so it is read only where the code says
+ * nothing. An error carrying both is classified by its code, or the two
+ * disagreeing would send the reader after whichever the prose named.
  */
-function faultOf(
-  code: string,
-  type: string
-): 'ratelimited' | 'auth' | 'schema' | 'input' | 'unknown' {
-  if (code === 'RATELIMITED' || type === 'ratelimited') return 'ratelimited';
-  if (code === 'AUTHENTICATION_ERROR' || type === 'authentication error') {
-    return 'auth';
-  }
-  if (code === 'GRAPHQL_VALIDATION_FAILED' || type === 'graphql error') {
-    return 'schema';
-  }
-  if (code === 'INPUT_ERROR' || type === 'invalid input') return 'input';
-  return 'unknown';
+function faultOf(code: string, type: string): Fault {
+  return BY_CODE.get(code) ?? BY_TYPE.get(type) ?? 'unknown';
 }
 
 /** Most explanatory first: the one worth telling the caller about. */
@@ -140,6 +148,38 @@ function throwForStatus(status: number): never {
   throw new EnvironmentError(`linear answered HTTP ${String(status)}`, {
     hint: 'check https://linearstatus.com; the next refresh retries.',
   });
+}
+
+/** A GraphQL response is a JSON object; a bare literal or a list is not one. */
+function envelopeOf(payload: unknown): GraphqlEnvelope | null {
+  return typeof payload === 'object' &&
+    payload !== null &&
+    !Array.isArray(payload)
+    ? payload
+    : null;
+}
+
+/**
+ * The envelope's `errors`, checked rather than trusted: the response is parsed
+ * JSON, so `errors` can be any shape at all, and reading `.length` off the
+ * wrong one would crash past the taxonomy instead of reporting the bad answer.
+ * Entries that are not objects carry nothing to classify and are dropped.
+ */
+function errorsOf(raw: unknown): readonly GraphqlError[] {
+  ensure(
+    Array.isArray(raw),
+    () =>
+      new EnvironmentError(
+        'linear answered with an `errors` field that is not a list',
+        {
+          hint: 'a proxy is probably answering in its place; check the endpoint.',
+        }
+      )
+  );
+  return raw.filter(
+    (entry): entry is GraphqlError =>
+      typeof entry === 'object' && entry !== null
+  );
 }
 
 /**
@@ -217,38 +257,46 @@ export function createTransport(options: TransportOptions): GraphqlExecutor {
       return rethrow(error);
     }
 
-    let body: GraphqlBody<TData> | null = null;
+    let payload: unknown;
+    let json = true;
     try {
-      body = JSON.parse(text) as GraphqlBody<TData>;
+      payload = JSON.parse(text);
     } catch {
-      // Left null: an unparseable body on an error status is better reported
-      // as that status, and only an unparseable 200 is a broken payload.
+      // Left unparsed: an unreadable body on an error status is better reported
+      // as that status, and only an unreadable 200 is a broken payload.
+      json = false;
     }
+    const envelope = json ? envelopeOf(payload) : null;
 
-    if (body?.errors !== undefined && body.errors.length > 0) {
-      throwForGraphqlErrors(body.errors);
+    const errors = envelope?.errors;
+    if (errors !== undefined) {
+      const classifiable = errorsOf(errors);
+      if (classifiable.length > 0) throwForGraphqlErrors(classifiable);
     }
     if (!response.ok) {
       throwForStatus(response.status);
     }
     ensure(
-      body !== null,
+      envelope !== null,
       () =>
         new EnvironmentError(
-          'linear answered with something that is not JSON',
+          json
+            ? 'linear answered with JSON that is not a GraphQL response'
+            : 'linear answered with something that is not JSON',
           {
             hint: 'a proxy is probably answering in its place; check the endpoint.',
           }
         )
     );
+    const data = envelope.data;
     ensure(
-      body.data !== undefined && body.data !== null,
+      data !== undefined && data !== null,
       () =>
         new EnvironmentError('linear answered with neither data nor errors', {
           hint: 'retry; if it persists, check https://linearstatus.com.',
         })
     );
-    return body.data;
+    return data as TData;
   };
 }
 

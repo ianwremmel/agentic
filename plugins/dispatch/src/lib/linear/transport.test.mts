@@ -289,6 +289,69 @@ describe('createTransport', () => {
         error instanceof EnvironmentError && error.message.includes('not JSON')
     );
   });
+
+  it('classifies by the error code even where the prose type disagrees', async () => {
+    const {fetch} = stub(
+      json({
+        errors: [
+          {
+            message: 'Entity not found: Project',
+            extensions: {type: 'graphql error', code: 'INPUT_ERROR'},
+          },
+        ],
+      })
+    );
+    const execute = createTransport({token: 'k', fetch});
+
+    await assert.rejects(
+      execute({query: 'q'}),
+      (error: unknown) =>
+        error instanceof DataError &&
+        error.hint?.includes('does not exist on Linear') === true
+    );
+  });
+
+  it('still classifies an error carrying only the prose type', async () => {
+    const {fetch} = stub(
+      json({
+        errors: [{message: 'nope', extensions: {type: 'ratelimited'}}],
+      })
+    );
+    const execute = createTransport({token: 'k', fetch});
+
+    await assert.rejects(
+      execute({query: 'q'}),
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('rate-limited')
+    );
+  });
+
+  it('reports an errors field that is not a list instead of crashing on it', async () => {
+    for (const errors of [null, 'oops']) {
+      const {fetch} = stub(json({errors}));
+      const execute = createTransport({token: 'k', fetch});
+
+      await assert.rejects(
+        execute({query: 'q'}),
+        (error: unknown) =>
+          error instanceof EnvironmentError &&
+          error.message.includes('not a list')
+      );
+    }
+  });
+
+  it('reports JSON that is not a GraphQL response as such, not as unparseable', async () => {
+    const {fetch} = stub(json(null));
+    const execute = createTransport({token: 'k', fetch});
+
+    await assert.rejects(
+      execute({query: 'q'}),
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('not a GraphQL response')
+    );
+  });
 });
 
 /**

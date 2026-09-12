@@ -39,11 +39,15 @@ describe('linear live queries', {skip: !enabled}, () => {
 
     const issue = issues[0];
     assert.ok(issue);
+    // Non-empty, not merely a string: `parseIssue` substitutes '' for a field
+    // that did not come back, so `typeof` would pass a dropped selection.
     assert.match(issue.identifier, /^[A-Za-z0-9]+-\d+$/u);
-    assert.equal(typeof issue.state.name, 'string');
-    assert.equal(typeof issue.state.type, 'string');
-    assert.equal(typeof issue.branchName, 'string');
-    assert.equal(typeof issue.updatedAt, 'string');
+    assert.match(issue.id, /^[0-9a-f-]{36}$/u);
+    assert.match(issue.url, /^https:\/\/linear\.app\//u);
+    assert.notEqual(issue.state.name, '');
+    assert.notEqual(issue.state.type, '');
+    assert.notEqual(issue.branchName, '');
+    assert.match(issue.updatedAt, /^\d{4}-\d{2}-\d{2}T/u);
 
     const identifiers = await client.listIssueIdentifiers(projectId);
     assert.ok(identifiers.includes(issue.identifier));
@@ -57,6 +61,13 @@ describe('linear live queries', {skip: !enabled}, () => {
       updatedSince: issue.updatedAt,
     });
     assert.ok(delta.some((found) => found.identifier === issue.identifier));
+
+    // And it is applied at all: nothing was edited after this call started.
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    assert.deepEqual(
+      await client.listIssues({project: projectId, updatedSince: future}),
+      []
+    );
   });
 });
 

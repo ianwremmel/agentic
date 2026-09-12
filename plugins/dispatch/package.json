@@ -29,6 +29,7 @@
   "files": [
     ".claude-plugin/",
     ".mcp.json",
+    "npm-shrinkwrap.json",
     "agents/",
     "bin/",
     "commands/",
@@ -39,6 +40,17 @@
   ],
   "engines": {
     "node": ">=24.18.0"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/api-logs": "^0.222.0",
+    "@opentelemetry/core": "^2.11.0",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-logs": "^0.222.0",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0"
   },
   "publishConfig": {
     "access": "public"

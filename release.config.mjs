@@ -58,14 +58,20 @@ export default {
     // sources ./plugins/dispatch), and Claude Code decides whether an install
     // is stale by comparing that version — so leaving it behind in git would
     // freeze every marketplace consumer on whatever they first installed.
-    // `[skip ci]` in the message, and GitHub's own rule that a GITHUB_TOKEN
-    // push triggers no workflow, both stop this from retriggering the release.
+    // `[skip ci]` in the message is what stops this retriggering the release.
+    // The push runs on a GitHub App token, and unlike a GITHUB_TOKEN push it
+    // does trigger workflows, so the marker carries that on its own. Losing it
+    // costs one extra CI run rather than a loop: the retriggered run sees only
+    // `chore(release):` since the tag, which the conventionalcommits preset
+    // maps to no release.
     //
     // The push is `git push --tags <url> HEAD:main`, so it needs `main`'s
-    // ruleset to let it through: the rule requiring a pull request rejects it
-    // unless GitHub Actions is on that ruleset's bypass list. A rejection here
-    // fails the run during `prepare`, before the release tag exists and before
-    // anything publishes, so it costs a red job and nothing more.
+    // ruleset to let it through. The rule requiring a pull request is bypassed
+    // for the release app's bot user — GitHub will not grant a bypass to a
+    // GitHub App itself on a user-owned repo, so the workflow authenticates as
+    // the bot rather than as the app. A rejection here fails the run during
+    // `prepare`, before the release tag exists and before anything publishes,
+    // so it costs a red job and nothing more.
     [
       '@semantic-release/git',
       {

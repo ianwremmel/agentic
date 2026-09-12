@@ -96,22 +96,38 @@ jobs:
       group: release
       cancel-in-progress: false
     permissions:
-      # Push the release tag and create the GitHub release.
-      contents: write
-      # @semantic-release/github comments on the issues and PRs a release
-      # closes.
-      issues: write
-      pull-requests: write
+      # Everything semantic-release does against the API — the tag, the release,
+      # the comments on closed issues and PRs — runs on the app token minted
+      # below rather than GITHUB_TOKEN, so GITHUB_TOKEN needs nothing but OIDC.
+      #
       # Mint the OIDC token npm exchanges for publish credentials. Without it
       # there is no way to authenticate at all — nothing else here carries a
       # registry credential.
       id-token: write
     steps:
+      # main's ruleset requires a pull request, and @semantic-release/git pushes
+      # the version manifests straight to it. That bypass is granted to this
+      # app's bot user, npm-publisher-ianwremmel[bot]: GitHub refuses to grant
+      # one to a GitHub App itself on a user-owned repo ("must be part of the
+      # ruleset source or owner organization"), and GITHUB_TOKEN authenticates
+      # as the Actions app, which matches no actor. This token authenticates as
+      # the bot user and expires in an hour.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       # semantic-release reads the whole history back to the last release tag
       # to decide the next version.
+      #
+      # `token` is load-bearing. checkout persists whatever token it is given as
+      # an auth header, and git sends that header on every push regardless of
+      # the URL semantic-release builds — so leaving the default here would send
+      # the manifest push out as the Actions app and get it rejected.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
       - uses: actions/setup-node@v7.0.0
         with:
           node-version-file: package.json
@@ -119,4 +135,4 @@ jobs:
       - run: npm ci
       - run: npx semantic-release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

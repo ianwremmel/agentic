@@ -30,21 +30,18 @@ const options = {
     description: 'Ticket title.',
     positional: false,
     required: false,
-    default: '',
   },
   url: {
     type: 'string',
     description: 'Ticket URL.',
     positional: false,
     required: false,
-    default: '',
   },
   'target-kind': {
     type: 'string',
     description: 'What finishing this ticket produces.',
     positional: false,
     required: false,
-    default: 'pr',
     choices: TARGET_KINDS,
   },
   'requires-human': {
@@ -70,7 +67,6 @@ const options = {
     description: 'Comma-separated tracker labels, passed through as-is.',
     positional: false,
     required: false,
-    default: '',
   },
   'branch-hint': {
     type: 'string',
@@ -97,25 +93,39 @@ export class Command extends AbstractCommand {
     parsed: ParsedOptions<typeof options>,
     ctx: CommandContext
   ): Promise<void> {
-    const labels = parsed.labels
-      .split(',')
-      .map((label) => label.trim())
-      .filter((label) => label !== '');
+    const labels =
+      parsed.labels === undefined
+        ? undefined
+        : parsed.labels
+            .split(',')
+            .map((label) => label.trim())
+            .filter((label) => label !== '');
 
     await withDatabase(parsed.db, ctx.env, async (db) => {
-      await new TicketStore(db).upsertTicket({
+      // Only what the caller named. A re-read reports the fields it was asked
+      // about and says nothing about the rest, so absent must mean "leave it"
+      // — otherwise answering a refresh blanks the ticket's title and labels.
+      // `injected` and `requires-human` are carried only when set: the parser
+      // cannot tell an absent boolean from a false one.
+      await new TicketStore(db).patchTicket({
         id: parsed.id,
         project: parsed.project,
-        url: parsed.url,
-        title: parsed.title,
         status: parsed.status,
-        targetKind: parsed['target-kind'],
-        requiresHuman: parsed['requires-human'],
-        injected: parsed.injected,
-        priority: parsed.priority ?? null,
-        branchHint: parsed['branch-hint'] ?? null,
-        labels,
-        updatedAt: parsed['updated-at'] ?? null,
+        ...(parsed.url === undefined ? {} : {url: parsed.url}),
+        ...(parsed.title === undefined ? {} : {title: parsed.title}),
+        ...(parsed['target-kind'] === undefined
+          ? {}
+          : {targetKind: parsed['target-kind']}),
+        ...(parsed['requires-human'] ? {requiresHuman: true} : {}),
+        ...(parsed.injected ? {injected: true} : {}),
+        ...(parsed.priority === undefined ? {} : {priority: parsed.priority}),
+        ...(parsed['branch-hint'] === undefined
+          ? {}
+          : {branchHint: parsed['branch-hint']}),
+        ...(labels === undefined ? {} : {labels}),
+        ...(parsed['updated-at'] === undefined
+          ? {}
+          : {updatedAt: parsed['updated-at']}),
       });
       await new RefreshService(db).reconcile();
       ctx.io.write(`ticket ${parsed.id}\n`);

@@ -283,15 +283,23 @@ export class FetchRequestStore {
   }
 
   /**
-   * Forget every request for a source except the `missing` tombstones. Those
-   * are what stop a ticket the tracker does not have from being requested
-   * again, so a refresh that closes must leave them behind; only an explicit
-   * new scan forgets them.
+   * Forget a closing refresh's own requests, except the `missing` tombstones.
+   * Those are what stop a ticket the tracker does not have from being
+   * requested again, so a refresh that closes must leave them behind; only an
+   * explicit new scan forgets them.
+   *
+   * Scoped to the kinds a refresh owns, the same pair `redeliver` scopes to.
+   * A `refresh_ticket` row belongs to the cadence, not to any one refresh: it
+   * carries the only record of when its ticket was last asked about, and
+   * deleting it reads as "never asked", which re-asks on the next tick and
+   * every tick after. That history prunes itself — `enqueueTicketRefresh`
+   * drops the resolved row it replaces — so nothing here needs to.
    */
   async clearExceptMissing(source: string): Promise<number> {
     return this.#db.run(
       `DELETE FROM fetch_request
-       WHERE source = ? AND (resolution IS NULL OR resolution <> 'missing')`,
+       WHERE source = ? AND (resolution IS NULL OR resolution <> 'missing')
+         AND kind IN ('scan_project','fetch_ticket')`,
       [source]
     );
   }

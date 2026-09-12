@@ -3,6 +3,7 @@ import {withDatabase} from '../db/index.mts';
 import type {Logger} from '../logger/index.mts';
 import type {ChannelWriter} from '../mcp/channel.mts';
 import {
+  CoordinationStore,
   PrEventStore,
   PrStore,
   SessionStore,
@@ -178,6 +179,24 @@ export async function pushObservations(
     const prs = new PrStore(db);
     const watches = new WatchStore(db);
     const workers = new WorkerStore(db);
+    const coordination = new CoordinationStore(db);
+    // An address only relays while its claim actually goes to this session;
+    // otherwise the event falls through to cold re-dispatch, which claims.
+    const relayTarget = async (
+      ref: string | null,
+      node: string
+    ): Promise<string | null> => {
+      if (ref === null) return null;
+      const claimed = await coordination.claim({
+        node,
+        session,
+        claimedAt: at,
+      });
+      return claimed.outcome === 'claimed' || claimed.outcome === 'refreshed'
+        ? ref
+        : null;
+    };
+
     for (const event of await events.undelivered(session)) {
       try {
         // Every fallible step — the snapshot's JSON parse, the render, the
@@ -188,7 +207,22 @@ export async function pushObservations(
         const pr = await prs.getPr(event.node);
         // When a live worker holds this node, its address rides the event and
         // the session relays instead of letting the item cold-start.
-        const agent = await workers.refFor(event.node, session);
+        //
+        // Re-take the claim as part of relaying. The worker gave its own back
+        // at `pr yield` so the watch could arm, and its terminal act — the
+        // outcome — requires one; a relayed event is the instruction to
+        // perform that act, so the address and the authority to use it have to
+        // travel together. Without this a terminal event always lands one
+        // dispatch short of being recorded, and the item wedges: the worker
+        // row suppresses re-dispatch, and the relay is already spent.
+        //
+        // Unbounded deliberately. The agent is running already, so this is
+        // work that was admitted once, not a second admission — and capacity
+        // is exactly what the yield handed back.
+        const agent = await relayTarget(
+          await workers.refFor(event.node, session),
+          event.node
+        );
         // A ticket event has no PR payload; the session re-reads the ticket
         // through the tracker adapter. A PR event renders from the snapshot
         // the poll already stored — no subprocess, so no per-tick push cap.

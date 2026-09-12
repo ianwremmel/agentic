@@ -52,4 +52,80 @@ describe('PrStore', () => {
     );
     await db.close();
   });
+
+  it('patch leaves fields the caller did not name alone', async () => {
+    // The documented pr-worker call keeps "URL and PR number" current and
+    // names nothing else. Assigning every column from such a write is how a
+    // ticket-backed item loses its ticket link, its title, and its origin.
+    const {db, store} = await fresh();
+    await store.upsertPr({
+      id: 'o/r#feat',
+      ticket: 'T-1',
+      origin: 'ticket',
+      repo: 'o/r',
+      prNumber: null,
+      url: null,
+      branch: 'feat',
+      title: 'build the thing',
+      injected: false,
+      priority: 2,
+      updatedAt: null,
+    });
+
+    await store.patchPr({
+      id: 'o/r#feat',
+      url: 'https://example.test/pr/7',
+      prNumber: 7,
+    });
+
+    const pr = await store.getPr('o/r#feat');
+    assert(pr !== null);
+    assert.equal(pr.url, 'https://example.test/pr/7');
+    assert.equal(pr.prNumber, 7);
+    assert.equal(pr.ticket, 'T-1');
+    assert.equal(pr.title, 'build the thing');
+    assert.equal(pr.origin, 'ticket');
+    assert.equal(pr.priority, 2);
+    assert.equal(pr.branch, 'feat');
+    await db.close();
+  });
+
+  it('patch creates the row when the id is new, defaulting what it was not given', async () => {
+    const {db, store} = await fresh();
+    await store.patchPr({id: 'o/r#8', repo: 'o/r', prNumber: 8});
+
+    const pr = await store.getPr('o/r#8');
+    assert(pr !== null);
+    assert.equal(pr.repo, 'o/r');
+    assert.equal(pr.prNumber, 8);
+    assert.equal(pr.origin, 'prompt');
+    assert.equal(pr.title, '');
+    assert.equal(pr.ticket, null);
+    await db.close();
+  });
+
+  it('patch clears a field given an explicit empty value', async () => {
+    const {db, store} = await fresh();
+    await store.upsertPr({
+      id: 'o/r#9',
+      ticket: 'T-1',
+      origin: 'ticket',
+      repo: 'o/r',
+      prNumber: 9,
+      url: null,
+      branch: null,
+      title: 'x',
+      injected: false,
+      priority: null,
+      updatedAt: null,
+    });
+
+    await store.patchPr({id: 'o/r#9', ticket: null});
+
+    const pr = await store.getPr('o/r#9');
+    assert(pr !== null);
+    assert.equal(pr.ticket, null);
+    assert.equal(pr.title, 'x');
+    await db.close();
+  });
 });

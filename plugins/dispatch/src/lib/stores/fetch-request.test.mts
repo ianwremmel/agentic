@@ -206,4 +206,28 @@ describe('FetchRequestStore', () => {
     );
     await db.close();
   });
+
+  it('keeps the refresh cadence history when a scan closes', async () => {
+    // `clearExceptMissing` forgets a closing scan's own requests. The
+    // refresh_ticket rows are not its to forget: they carry the only record of
+    // when a ticket was last asked about, and losing them reads as "never
+    // asked", which re-asks on the next tick and every tick after.
+    const {db, store} = await fresh();
+    await store.enqueueScan({
+      source: 'linear',
+      projects: ['P1'],
+      cursor: null,
+      at: AT,
+    });
+    await store.enqueueTicketRefresh({
+      source: 'linear',
+      ticket: 'T-1',
+      at: AT,
+    });
+
+    await store.clearExceptMissing('linear');
+
+    assert.equal(await store.lastTicketRefreshAt('T-1'), AT);
+    await db.close();
+  });
 });

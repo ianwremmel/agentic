@@ -23,7 +23,6 @@ const options = {
     description: 'How the item entered the graph.',
     positional: false,
     required: false,
-    default: 'prompt',
     choices: PR_ORIGINS,
   },
   repo: {
@@ -55,7 +54,6 @@ const options = {
     description: 'One-line description of the work.',
     positional: false,
     required: false,
-    default: '',
   },
   injected: {
     type: 'boolean',
@@ -83,18 +81,27 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
-      await new PrStore(db).upsertPr({
+      // Only what the caller named. A worker keeping the URL and PR number
+      // current names nothing else, and must not thereby unlink the item from
+      // its ticket or blank its title. An explicit empty string still clears a
+      // field — omission is what preserves. `injected` is the exception the
+      // parser forces: an absent boolean is indistinguishable from `--no`, so
+      // it is carried only when set.
+      await new PrStore(db).patchPr({
         id: parsed.id,
-        ticket: parsed.ticket ?? null,
-        origin: parsed.origin,
-        repo: parsed.repo ?? null,
-        prNumber: parsed['pr-number'] ?? null,
-        url: parsed.url ?? null,
-        branch: parsed.branch ?? null,
-        title: parsed.title,
-        injected: parsed.injected,
-        priority: parsed.priority ?? null,
-        updatedAt: null,
+        ...(parsed.ticket === undefined
+          ? {}
+          : {ticket: parsed.ticket === '' ? null : parsed.ticket}),
+        ...(parsed.origin === undefined ? {} : {origin: parsed.origin}),
+        ...(parsed.repo === undefined ? {} : {repo: parsed.repo}),
+        ...(parsed['pr-number'] === undefined
+          ? {}
+          : {prNumber: parsed['pr-number']}),
+        ...(parsed.url === undefined ? {} : {url: parsed.url}),
+        ...(parsed.branch === undefined ? {} : {branch: parsed.branch}),
+        ...(parsed.title === undefined ? {} : {title: parsed.title}),
+        ...(parsed.injected ? {injected: true} : {}),
+        ...(parsed.priority === undefined ? {} : {priority: parsed.priority}),
       });
       await new RefreshService(db).reconcile();
       ctx.io.write(`pr ${parsed.id}\n`);

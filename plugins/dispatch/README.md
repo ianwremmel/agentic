@@ -12,7 +12,7 @@ From inside Claude Code, after adding the `agentic` marketplace:
 /plugin install dispatch@agentic
 ```
 
-See the [root README](/README.md#install) for marketplace setup.
+See the [root README](../../README.md#install) for marketplace setup.
 
 ## Usage
 
@@ -86,8 +86,8 @@ invocation path, and discovery needs no registry.
 
 ## Contributing
 
-See the [root README](/README.md#contributing) for branch and commit conventions.
+See the [root README](../../README.md#contributing) for branch and commit conventions.
 
 ## License
 
-[MIT](/LICENSE) © Ian Remmel
+[MIT](./LICENSE) © Ian Remmel

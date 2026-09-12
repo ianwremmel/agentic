@@ -21,13 +21,31 @@ agent session. `@linear/sdk` is the GraphQL client.
   unless `DISPATCH_LIVE_TESTS=1` and `LINEAR_API_KEY` are both set, because it
   is the only thing that catches a field the schema no longer has.
 
-The SDK's generated operations are not used, only its GraphQL client. Its
-models fetch relations lazily — `issue.state`, `issue.labels()`,
-`issue.relations()` and `issue.inverseRelations()` are four more round trips
-per issue — so a scan of a few hundred issues would be a few thousand requests
-against an API that rate-limits on complexity. The documents here ask for all
-of it in one page, which is the whole reason to hold a GraphQL client rather
-than drive the MCP tools.
+The SDK's generated operations are not used, only its GraphQL client and its
+generated input types. `LinearDocument.IssuesDocument` selects the generated
+`Issue` fragment: 63 selections, most of which this module never reads, and it
+still carries no `labels`, `relations` or `inverseRelations`, and `state { id }`
+rather than the state's name — so the nested reads are separate documents
+(`Issue_LabelsDocument` and friends), three or more extra round trips per
+issue, against an API that rate-limits on complexity. Its lazy models
+(`issue.labels()`, `issue.state`) are the same round trips by another route.
+The documents here ask for all of it in one page, which is the whole reason to
+hold a GraphQL client rather than drive the MCP tools.
+
+Filter variables are typed `LinearDocument.IssueFilter` and
+`LinearDocument.ProjectFilter`. That catches an unknown filter field or a
+comparator given the wrong kind of value at `tsc`, and it catches Linear
+renaming or retyping one of them on the next SDK bump — which is the drift
+that otherwise lands as a runtime rejection. It says nothing about the query
+documents, which only `live.test.mts` checks, and nothing about whether a
+filter means what the caller intended: every field is optional, so an empty
+filter typechecks.
+
+The delta cursor goes over the wire as the string it was stored as.
+`DateComparator` takes `DateTimeOrDuration`, which is wider than an ISO
+timestamp — `2021` is that midnight, `-P2W1D` a date two weeks and a day ago —
+and parsing it to a `Date` first would refuse those, drop sub-millisecond
+precision, and roll a date that does not exist over into one that does.
 
 Two things the SDK does not decide for itself are decided here. A rejection is
 classified by `extensions.code` where Linear sent one — the SDK reads only the

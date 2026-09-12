@@ -345,6 +345,25 @@ describe('LinearClient.listIssues', () => {
     });
   });
 
+  // `DateTimeOrDuration` takes these, and parsing the cursor here before
+  // sending it would refuse them — or, for a date that does not exist, roll it
+  // over into one that does and scan from the wrong boundary.
+  it('sends the cursor as written, duration and rollover alike', async () => {
+    for (const cursor of ['-P2W1D', '2021', '2026-02-30T00:00:00.000Z']) {
+      const {execute, calls} = scripted([{issues: connection([])}]);
+
+      await new LinearClient(execute).listIssues({
+        project: 'proj-1',
+        updatedSince: cursor,
+      });
+
+      assert.deepEqual(calls[0]?.variables.filter, {
+        project: {id: {eq: 'proj-1'}},
+        updatedAt: {gte: cursor},
+      });
+    }
+  });
+
   it('leaves the filter unfiltered for an empty cursor', async () => {
     const {execute, calls} = scripted([{issues: connection([])}]);
 

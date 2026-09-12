@@ -1,3 +1,5 @@
+import type {LinearDocument} from '@linear/sdk';
+
 import {DataError, EnvironmentError, ensure} from '../errors/index.mts';
 import {
   ISSUES_QUERY,
@@ -381,9 +383,17 @@ async function parseIssue(
   };
 }
 
-function issueFilter(project: string, updatedSince?: string | null): object {
-  const filter: Record<string, unknown> = {project: {id: {eq: project}}};
+function issueFilter(
+  project: string,
+  updatedSince?: string | null
+): LinearDocument.IssueFilter {
+  const filter: LinearDocument.IssueFilter = {project: {id: {eq: project}}};
   if (updatedSince != null && updatedSince !== '') {
+    // The cursor goes over the wire as written. `DateTimeOrDuration` takes more
+    // than an ISO timestamp — `2021` is that midnight, `-P2W1D` is two weeks
+    // and a day ago — and parsing it to a `Date` first would refuse those, drop
+    // sub-millisecond precision, and roll a date like Feb 30 into March.
+    //
     // Inclusive: two issues saved in the same millisecond can straddle a page
     // boundary, and `ticket set` is idempotent, so re-reading the boundary
     // costs a write while skipping it loses the ticket for good.
@@ -422,7 +432,7 @@ export class LinearClient {
     select: {readonly id?: string; readonly name?: string} = {},
     options: ReadOptions = {}
   ): Promise<LinearProject[]> {
-    const filter: Record<string, unknown> = {};
+    const filter: LinearDocument.ProjectFilter = {};
     if (select.id !== undefined) filter.id = {eq: select.id};
     if (select.name !== undefined) filter.name = {eq: select.name};
     const nodes = await collect<RawProject>(async (after) => {
@@ -580,16 +590,15 @@ export class LinearClient {
           }
         )
     );
+    const filter: LinearDocument.IssueFilter = {
+      team: {key: {eqIgnoreCase: key}},
+      number: {eq: issueNumber},
+    };
     const data = await this.#execute<{
       issues?: {nodes?: RawIssue[] | null} | null;
     }>({
       query: ISSUE_QUERY,
-      variables: {
-        filter: {
-          team: {key: {eqIgnoreCase: key}},
-          number: {eq: issueNumber},
-        },
-      },
+      variables: {filter},
       signal: options.signal,
     });
     const nodes = data.issues?.nodes;

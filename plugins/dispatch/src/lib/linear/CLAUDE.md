@@ -59,6 +59,23 @@ exactly like one with none. An issue whose labels or relations overflow the
 inline page is finished with a follow-up request keyed on its UUID, so only
 that issue pays for it.
 
+The same refusal covers every field whose default would be a wrong answer
+rather than a blank one: the ids and identifiers nothing would match, a
+milestone's `sortOrder` (0 sorts it first), an issue's workflow state, its
+`priority` (0 is Linear's "No priority", not "unknown"), its `updatedAt` (the
+delta cursor, and the input to the SQL deciding whether a review went stale),
+a relation's `type` (dropped, every relation filters out and the issue looks
+unblocked), and a label's name. An issue's `project` and `projectMilestone`
+are refused only when the object came back without its id: `null` there is
+Linear saying the issue is in neither, while `{}` is a dropped selection that
+would quietly shrink the milestone whose gate is computed over whoever is left.
+
+`title`, `url` and `branchName` still default to `''`, because a blank one is
+visibly blank to whoever reads it. A display *name* is refused only when
+absent, never when blank — an oddly named row is still a real row, and one
+malformed row fails the whole list, so the line is drawn at values something
+is matched on.
+
 The module is Linear's vocabulary, not dispatch's: it returns workflow-state
 names and Linear priorities. Mapping those onto dispatch statuses belongs to
 the caller, next to the rest of the tracker binding.

@@ -40,28 +40,44 @@ interface RawPage<TNode> {
   pageInfo?: {hasNextPage?: boolean; endCursor?: string | null} | null;
 }
 
+/**
+ * Every scalar is nullable, because GraphQL says "this did not come back" with
+ * `null` rather than by dropping the key. Typing them as merely optional is
+ * what lets a `null` slip past a guard that only asks about `undefined`.
+ */
 interface RawRelation {
-  type?: string;
-  relatedIssue?: {identifier?: string} | null;
-  issue?: {identifier?: string} | null;
+  type?: string | null;
+  relatedIssue?: {identifier?: string | null} | null;
+  issue?: {identifier?: string | null} | null;
 }
 
 interface RawLabel {
-  name?: string;
+  name?: string | null;
+}
+
+interface RawProject {
+  id?: string | null;
+  name?: string | null;
+}
+
+interface RawMilestone {
+  id?: string | null;
+  name?: string | null;
+  sortOrder?: number | null;
 }
 
 interface RawIssue {
-  id?: string;
-  identifier?: string;
-  title?: string;
-  url?: string;
-  priority?: number;
-  branchName?: string;
-  updatedAt?: string;
+  id?: string | null;
+  identifier?: string | null;
+  title?: string | null;
+  url?: string | null;
+  priority?: number | null;
+  branchName?: string | null;
+  updatedAt?: string | null;
   archivedAt?: string | null;
-  state?: {name?: string; type?: string} | null;
-  project?: {id?: string} | null;
-  projectMilestone?: {id?: string} | null;
+  state?: {name?: string | null; type?: string | null} | null;
+  project?: {id?: string | null} | null;
+  projectMilestone?: {id?: string | null} | null;
   labels?: RawPage<RawLabel> | null;
   relations?: RawPage<RawRelation> | null;
   inverseRelations?: RawPage<RawRelation> | null;
@@ -102,6 +118,66 @@ function malformed(connection: string): EnvironmentError {
       hint: "retry the scan; if it repeats, either something is answering in Linear's place or the query names a connection Linear no longer has.",
     }
   );
+}
+
+/**
+ * How an error names the row it is about: whichever identifying field did come
+ * back, so a hundred-row page says which one failed rather than only that one
+ * did. Blank counts as absent — a blank label names nothing.
+ */
+function rowLabel(...candidates: (string | null | undefined)[]): string {
+  return (
+    candidates.find((value) => value != null && value !== '') ??
+    '(unidentified)'
+  );
+}
+
+function dropped(field: string, of: string): EnvironmentError {
+  return new EnvironmentError(
+    `linear answered without the ${field} of ${of} it was asked for`,
+    {
+      hint: "retry the scan; if it repeats, either something is answering in Linear's place or the query no longer selects that field.",
+    }
+  );
+}
+
+/**
+ * A field the query selects, refused when it did not come back rather than
+ * defaulted. GraphQL reports an absent field as `null` rather than by dropping
+ * the key, so both are refused — asking only about `undefined` would pass the
+ * shape Linear actually sends.
+ */
+function present<TValue>(
+  value: TValue | null | undefined,
+  field: string,
+  of: string
+): TValue {
+  ensure(value !== null && value !== undefined, () => dropped(field, of));
+  return value;
+}
+
+/**
+ * A field something is matched on: an id, an identifier, a workflow state.
+ * Empty is refused as well as absent, because `''` reaches the graph as a
+ * project nothing matches, which reads exactly like a project with no work in
+ * it. A display name is deliberately not this — an oddly named row is still a
+ * real row, and refusing it would fail the whole scan over one of them.
+ */
+function matched(
+  value: string | null | undefined,
+  field: string,
+  of: string
+): string {
+  const found = present(value, field, of);
+  ensure(found !== '', () => dropped(field, of));
+  return found;
+}
+
+/** Linear orders milestones by this, so a value that cannot be compared is not one. */
+function ordered(value: number | null | undefined, of: string): number {
+  const found = present(value, 'sortOrder', of);
+  ensure(Number.isFinite(found), () => dropped('sortOrder', of));
+  return found;
 }
 
 /**
@@ -192,16 +268,6 @@ async function wholeNested<TNode>(
   const label = `${connection.field} of ${issue.identifier}`;
   const first = page(inline, label);
   if (!first.pageInfo.hasNextPage) return first.nodes;
-  ensure(
-    issue.id !== '',
-    () =>
-      new EnvironmentError(
-        `${issue.identifier} has more ${connection.field} than one page, and linear did not answer with the id needed to read the rest`,
-        {
-          hint: 'retry the scan; the issue query selects the id this resumes from.',
-        }
-      )
-  );
   return collect<TNode>(async (after) => {
     const data = await more.execute<NestedData<TNode>>({
       query: connection.query,
@@ -235,7 +301,12 @@ function related(
   issue: string
 ): string[] {
   const found = nodes
-    .filter((node) => node.type === 'blocks')
+    // The type is read before it is compared: dropped, every relation would
+    // filter out and the issue would look like it has no blockers at all.
+    .filter(
+      (node) =>
+        present(node.type, 'type', `a relation on ${issue}`) === 'blocks'
+    )
     .map((node) => {
       const identifier = node[side]?.identifier ?? '';
       // Dropping this would record an issue as having fewer blockers than it
@@ -259,8 +330,21 @@ async function parseIssue(
   raw: RawIssue,
   more: Continuation
 ): Promise<LinearIssue> {
-  const identifier = raw.identifier ?? '';
-  const issue = {id: raw.id ?? '', identifier};
+  // The identifier is how every caller names this ticket, the id is what
+  // resumes an overflowing nested connection, the state decides whether the
+  // ticket is schedulable, the priority orders the queue, and `updatedAt` is
+  // the delta cursor and the milestone-review staleness input. None of them
+  // has a safe default, so all of them are read before the nested walks —
+  // paying for three of those and then refusing the issue is wasted work.
+  const identifier = matched(raw.identifier, 'identifier', 'an issue');
+  const state = {
+    name: matched(raw.state?.name, 'state name', identifier),
+    type: matched(raw.state?.type, 'state type', identifier),
+  };
+  const priority = present(raw.priority, 'priority', identifier);
+  const updatedAt = matched(raw.updatedAt, 'updatedAt', identifier);
+  const issue = {id: matched(raw.id, 'id', identifier), identifier};
+
   const labels = await wholeNested(raw.labels, LABELS, issue, more);
   const blocks = await wholeNested(raw.relations, RELATIONS, issue, more);
   const blockedBy = await wholeNested(
@@ -274,14 +358,24 @@ async function parseIssue(
     identifier,
     title: raw.title ?? '',
     url: raw.url ?? '',
-    state: {name: raw.state?.name ?? '', type: raw.state?.type ?? ''},
-    priority: raw.priority ?? 0,
-    labels: labels.map((node) => node.name ?? '').filter((name) => name !== ''),
+    state,
+    priority,
+    labels: labels.map((node) =>
+      present(node.name, 'name', `a label of ${identifier}`)
+    ),
     branchName: raw.branchName ?? '',
-    updatedAt: raw.updatedAt ?? '',
+    updatedAt,
     archivedAt: raw.archivedAt ?? null,
-    projectId: raw.project?.id ?? null,
-    milestoneId: raw.projectMilestone?.id ?? null,
+    // A null project or milestone is Linear saying the issue is in neither.
+    // One that came back as an object without its id is a dropped selection,
+    // and read as "no milestone" it would quietly shrink a milestone's
+    // membership — the gate is computed over whoever is left.
+    projectId: raw.project
+      ? matched(raw.project.id, 'project id', identifier)
+      : null,
+    milestoneId: raw.projectMilestone
+      ? matched(raw.projectMilestone.id, 'milestone id', identifier)
+      : null,
     blocks: related(blocks, 'relatedIssue', identifier),
     blockedBy: related(blockedBy, 'issue', identifier),
   };
@@ -331,9 +425,9 @@ export class LinearClient {
     const filter: Record<string, unknown> = {};
     if (select.id !== undefined) filter.id = {eq: select.id};
     if (select.name !== undefined) filter.name = {eq: select.name};
-    const nodes = await collect<{id?: string; name?: string}>(async (after) => {
+    const nodes = await collect<RawProject>(async (after) => {
       const data = await this.#execute<{
-        projects?: RawPage<{id?: string; name?: string}> | null;
+        projects?: RawPage<RawProject> | null;
       }>({
         query: PROJECTS_QUERY,
         variables: {
@@ -345,10 +439,13 @@ export class LinearClient {
       });
       return page(data.projects, 'projects');
     });
-    return nodes.map((project) => ({
-      id: project.id ?? '',
-      name: project.name ?? '',
-    }));
+    return nodes.map((project) => {
+      const of = `project ${rowLabel(project.id, project.name)}`;
+      return {
+        id: matched(project.id, 'id', of),
+        name: present(project.name, 'name', of),
+      };
+    });
   }
 
   /** A project's milestones, ascending by the order Linear keeps them in. */
@@ -356,19 +453,9 @@ export class LinearClient {
     projectId: string,
     options: ReadOptions = {}
   ): Promise<LinearMilestone[]> {
-    const nodes = await collect<{
-      id?: string;
-      name?: string;
-      sortOrder?: number;
-    }>(async (after) => {
+    const nodes = await collect<RawMilestone>(async (after) => {
       const data = await this.#execute<{
-        project?: {
-          projectMilestones?: RawPage<{
-            id?: string;
-            name?: string;
-            sortOrder?: number;
-          }> | null;
-        } | null;
+        project?: {projectMilestones?: RawPage<RawMilestone> | null} | null;
       }>({
         query: MILESTONES_QUERY,
         variables: {project: projectId, first: PAGE_SIZE, after},
@@ -387,11 +474,16 @@ export class LinearClient {
       return page(project.projectMilestones, `milestones of ${projectId}`);
     });
     return nodes
-      .map((milestone) => ({
-        id: milestone.id ?? '',
-        name: milestone.name ?? '',
-        sortOrder: milestone.sortOrder ?? 0,
-      }))
+      .map((milestone) => {
+        const of = `milestone ${rowLabel(milestone.id, milestone.name)} of ${projectId}`;
+        return {
+          id: matched(milestone.id, 'id', of),
+          name: present(milestone.name, 'name', of),
+          // Defaulting this to 0 would sort an unordered milestone first,
+          // which is a different milestone sequence, not a missing field.
+          sortOrder: ordered(milestone.sortOrder, of),
+        };
+      })
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }
 
@@ -440,9 +532,9 @@ export class LinearClient {
     projectId: string,
     options: ReadOptions = {}
   ): Promise<string[]> {
-    const nodes = await collect<{identifier?: string}>(async (after) => {
+    const nodes = await collect<{identifier?: string | null}>(async (after) => {
       const data = await this.#execute<{
-        issues?: RawPage<{identifier?: string}> | null;
+        issues?: RawPage<{identifier?: string | null}> | null;
       }>({
         query: ISSUE_IDENTIFIERS_QUERY,
         variables: {
@@ -454,9 +546,13 @@ export class LinearClient {
       });
       return page(data.issues, `issues of ${projectId}`);
     });
-    return nodes
-      .map((node) => node.identifier ?? '')
-      .filter((identifier) => identifier !== '');
+    // Dropped rather than refused, a missing identifier shortens this list,
+    // and a ticket missing from it does not read as a broken answer — it reads
+    // as a ticket that left the project, which the caller removes from the
+    // graph along with its edges.
+    return nodes.map((node) =>
+      matched(node.identifier, 'identifier', `an issue of ${projectId}`)
+    );
   }
 
   /** One issue by identifier, or `null` when the workspace has no such issue. */

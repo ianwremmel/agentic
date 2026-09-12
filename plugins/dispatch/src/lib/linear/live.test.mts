@@ -27,11 +27,19 @@ describe('linear live queries', {skip: !enabled}, () => {
     );
     const project = projects[0];
     assert.ok(project);
-    assert.equal(typeof project.id, 'string');
-    assert.equal(typeof project.name, 'string');
+    // Shapes, not types. The client refuses an absent id outright, so what is
+    // left to catch here is a selection that answers with the wrong thing.
+    assert.match(project.id, /^[0-9a-f-]{36}$/u);
 
-    // Milestones are optional on a project; the query answering is the point.
-    await client.listMilestones(project.id);
+    const milestones = await findMilestones(client, projects);
+    assert.ok(milestones, 'no project the key can see has any milestone');
+    for (const milestone of milestones) {
+      assert.match(milestone.id, /^[0-9a-f-]{36}$/u);
+      // `ordered` refuses a non-finite value but not a non-number, and a
+      // sortOrder that arrives as a string sorts nothing.
+      assert.ok(Number.isFinite(milestone.sortOrder));
+      assert.equal(typeof milestone.sortOrder, 'number');
+    }
 
     const withIssues = await findProjectWithIssues(client, projects);
     assert.ok(withIssues, 'no project the key can see has any issue');
@@ -39,15 +47,16 @@ describe('linear live queries', {skip: !enabled}, () => {
 
     const issue = issues[0];
     assert.ok(issue);
-    // Non-empty, not merely a string: `parseIssue` substitutes '' for a field
-    // that did not come back, so `typeof` would pass a dropped selection.
+    // The client refuses the identity fields when they are absent, so these
+    // check what it cannot: that the selection answered with the right shape.
+    // `url` and `branchName` still default to '', so those two also stand in
+    // for the refusal the client does not make.
     assert.match(issue.identifier, /^[A-Za-z0-9]+-\d+$/u);
     assert.match(issue.id, /^[0-9a-f-]{36}$/u);
     assert.match(issue.url, /^https:\/\/linear\.app\//u);
-    assert.notEqual(issue.state.name, '');
-    assert.notEqual(issue.state.type, '');
     assert.notEqual(issue.branchName, '');
     assert.match(issue.updatedAt, /^\d{4}-\d{2}-\d{2}T/u);
+    assert.equal(typeof issue.priority, 'number');
 
     const identifiers = await client.listIssueIdentifiers(projectId);
     assert.ok(identifiers.includes(issue.identifier));
@@ -78,6 +87,21 @@ async function findProjectWithIssues(
   for (const project of projects.slice(0, 5)) {
     const issues = await client.listIssues({project: project.id});
     if (issues.length > 0) return [project.id, issues];
+  }
+  return null;
+}
+
+/**
+ * Milestones are optional on a project, so the first one need not have any —
+ * and asserting over an empty list runs none of the assertions.
+ */
+async function findMilestones(
+  client: ReturnType<typeof createLinearClient>,
+  projects: readonly {id: string}[]
+): Promise<Awaited<ReturnType<typeof client.listMilestones>> | null> {
+  for (const project of projects.slice(0, 5)) {
+    const milestones = await client.listMilestones(project.id);
+    if (milestones.length > 0) return milestones;
   }
   return null;
 }

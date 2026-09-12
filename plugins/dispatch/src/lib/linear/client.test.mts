@@ -147,6 +147,41 @@ describe('LinearClient.listProjects', () => {
     );
   });
 
+  // Defaulted to '', a project reaches the graph as an id nothing matches,
+  // which reads exactly like a project with no work in it. GraphQL reports a
+  // dropped field as null, so that shape has to fail too.
+  it('refuses a project missing the id or name it was asked for', async () => {
+    const cases: [unknown, string][] = [
+      [{name: 'One'}, 'id of project One'],
+      [{id: null, name: 'One'}, 'id of project One'],
+      [{id: '', name: 'One'}, 'id of project One'],
+      [{id: 'p1'}, 'name of project p1'],
+      [{id: 'p1', name: null}, 'name of project p1'],
+    ];
+
+    for (const [node, expected] of cases) {
+      const {execute} = scripted([{projects: connection([node])}]);
+
+      await assert.rejects(
+        new LinearClient(execute).listProjects(),
+        (error: unknown) =>
+          error instanceof EnvironmentError && error.message.includes(expected)
+      );
+    }
+  });
+
+  // A name is a display string, not something matched on, so an oddly named
+  // row is still a real row — refusing it would fail the whole scan.
+  it('keeps a project whose name is blank but present', async () => {
+    const {execute} = scripted([
+      {projects: connection([{id: 'p1', name: ''}])},
+    ]);
+
+    assert.deepEqual(await new LinearClient(execute).listProjects(), [
+      {id: 'p1', name: ''},
+    ]);
+  });
+
   it('carries the caller cancellation into every page', async () => {
     const controller = new AbortController();
     const {execute, calls} = scripted([
@@ -238,6 +273,50 @@ describe('LinearClient.listMilestones', () => {
       (error: unknown) =>
         error instanceof DataError && error.message.includes('no project nope')
     );
+  });
+
+  // Defaulted, an unordered milestone sorts first, which is a different
+  // milestone sequence rather than a missing field.
+  it('refuses a milestone whose order did not come back', async () => {
+    for (const sortOrder of [undefined, null]) {
+      const {execute} = scripted([
+        {
+          project: {
+            projectMilestones: connection([
+              {id: 'm1', name: 'First', sortOrder},
+            ]),
+          },
+        },
+      ]);
+
+      await assert.rejects(
+        new LinearClient(execute).listMilestones('p'),
+        (error: unknown) =>
+          error instanceof EnvironmentError &&
+          error.message.includes('sortOrder of milestone m1 of p')
+      );
+    }
+  });
+
+  it('refuses a milestone missing its id or name', async () => {
+    const cases: [unknown, string][] = [
+      [{name: 'First', sortOrder: 1}, 'id of milestone First of p'],
+      [{id: null, name: 'First', sortOrder: 1}, 'id of milestone First of p'],
+      [{id: 'm1', sortOrder: 1}, 'name of milestone m1 of p'],
+      [{id: 'm1', name: null, sortOrder: 1}, 'name of milestone m1 of p'],
+    ];
+
+    for (const [node, expected] of cases) {
+      const {execute} = scripted([
+        {project: {projectMilestones: connection([node])}},
+      ]);
+
+      await assert.rejects(
+        new LinearClient(execute).listMilestones('p'),
+        (error: unknown) =>
+          error instanceof EnvironmentError && error.message.includes(expected)
+      );
+    }
   });
 });
 
@@ -420,26 +499,97 @@ describe('LinearClient.listIssues', () => {
     assert.equal(resumedAgain.variables.after, 'REL2');
   });
 
-  it('refuses an overflowing issue it cannot resume, rather than recording half its blockers', async () => {
+  // The id is what resumes an overflowing nested connection, so an issue
+  // without one cannot be finished — and half an issue's blockers schedule
+  // exactly like all of them.
+  it('refuses an issue with no id, rather than recording half its blockers', async () => {
+    for (const id of [undefined, null, '']) {
+      const {execute} = scripted([{issues: connection([issueNode({id})])}]);
+
+      await assert.rejects(
+        new LinearClient(execute).listIssues({project: 'proj-1'}),
+        (error: unknown) =>
+          error instanceof EnvironmentError &&
+          error.message.includes('id of CLC-1')
+      );
+    }
+  });
+
+  it('refuses an issue whose workflow state did not come back', async () => {
+    const cases: [unknown, string][] = [
+      [null, 'state name of CLC-1'],
+      [{type: 'started'}, 'state name of CLC-1'],
+      [{name: null, type: 'started'}, 'state name of CLC-1'],
+      [{name: 'In Progress'}, 'state type of CLC-1'],
+      [{name: 'In Progress', type: null}, 'state type of CLC-1'],
+    ];
+
+    for (const [state, expected] of cases) {
+      const {execute} = scripted([{issues: connection([issueNode({state})])}]);
+
+      await assert.rejects(
+        new LinearClient(execute).listIssues({project: 'proj-1'}),
+        (error: unknown) =>
+          error instanceof EnvironmentError && error.message.includes(expected)
+      );
+    }
+  });
+
+  // Each of these orders or dates the ticket. A default is a wrong value, not
+  // a blank one: priority 0 is Linear's "No priority", and an empty
+  // `updatedAt` reads as NULL to the SQL that decides review staleness.
+  it('refuses an issue missing the fields that rank or date it', async () => {
+    const cases: [Record<string, unknown>, string][] = [
+      [{identifier: undefined}, 'identifier of an issue'],
+      [{identifier: null}, 'identifier of an issue'],
+      [{id: null}, 'id of CLC-1'],
+      [{priority: undefined}, 'priority of CLC-1'],
+      [{priority: null}, 'priority of CLC-1'],
+      [{updatedAt: null}, 'updatedAt of CLC-1'],
+      [{updatedAt: ''}, 'updatedAt of CLC-1'],
+    ];
+
+    for (const [overrides, expected] of cases) {
+      const {execute} = scripted([
+        {issues: connection([issueNode(overrides)])},
+      ]);
+
+      await assert.rejects(
+        new LinearClient(execute).listIssues({project: 'proj-1'}),
+        (error: unknown) =>
+          error instanceof EnvironmentError && error.message.includes(expected)
+      );
+    }
+  });
+
+  // A null project is Linear saying the issue is in none. An object with no
+  // id is a dropped selection, and read as "no milestone" it would quietly
+  // shrink the milestone whose gate is computed over whoever is left.
+  it('tells an issue in no milestone from one whose milestone id was dropped', async () => {
     const {execute} = scripted([
       {
         issues: connection([
-          issueNode({
-            id: '',
-            inverseRelations: {
-              nodes: [{type: 'blocks', issue: {identifier: 'CLC-2'}}],
-              pageInfo: {hasNextPage: true, endCursor: 'REL'},
-            },
-          }),
+          issueNode({project: null, projectMilestone: null}),
         ]),
       },
     ]);
 
+    const [issue] = await new LinearClient(execute).listIssues({
+      project: 'proj-1',
+    });
+    assert.ok(issue);
+    assert.equal(issue.projectId, null);
+    assert.equal(issue.milestoneId, null);
+
+    const {execute: dropped} = scripted([
+      {issues: connection([issueNode({projectMilestone: {}})])},
+    ]);
+
     await assert.rejects(
-      new LinearClient(execute).listIssues({project: 'proj-1'}),
+      new LinearClient(dropped).listIssues({project: 'proj-1'}),
       (error: unknown) =>
         error instanceof EnvironmentError &&
-        error.message.includes('did not answer with the id')
+        error.message.includes('milestone id of CLC-1')
     );
   });
 
@@ -462,6 +612,55 @@ describe('LinearClient.listIssues', () => {
       (error: unknown) =>
         error instanceof EnvironmentError &&
         error.message.includes('without naming its other end')
+    );
+  });
+
+  // The type decides which relations are blocking ones. Dropped, every
+  // relation filters out and the issue looks like it has no blockers — the
+  // one wrong answer a scheduler cannot detect.
+  it('refuses a relation whose type did not come back', async () => {
+    for (const type of [undefined, null]) {
+      const {execute} = scripted([
+        {
+          issues: connection([
+            issueNode({
+              inverseRelations: {
+                nodes: [{type, issue: {identifier: 'CLC-2'}}],
+                pageInfo: {hasNextPage: false},
+              },
+            }),
+          ]),
+        },
+      ]);
+
+      await assert.rejects(
+        new LinearClient(execute).listIssues({project: 'proj-1'}),
+        (error: unknown) =>
+          error instanceof EnvironmentError &&
+          error.message.includes('type of a relation on CLC-1')
+      );
+    }
+  });
+
+  it('refuses a label whose name did not come back', async () => {
+    const {execute} = scripted([
+      {
+        issues: connection([
+          issueNode({
+            labels: {
+              nodes: [{name: 'infra'}, {name: null}],
+              pageInfo: {hasNextPage: false},
+            },
+          }),
+        ]),
+      },
+    ]);
+
+    await assert.rejects(
+      new LinearClient(execute).listIssues({project: 'proj-1'}),
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('name of a label of CLC-1')
     );
   });
 
@@ -516,6 +715,24 @@ describe('LinearClient.listIssueIdentifiers', () => {
     assert.deepEqual(calls[0]?.variables.filter, {
       project: {id: {eq: 'proj-1'}},
     });
+  });
+
+  // This list is what the caller reconciles membership against, so a dropped
+  // identifier does not read as a broken answer — it reads as a ticket that
+  // left the project, and the caller removes it from the graph with its edges.
+  it('refuses a row with no identifier rather than shortening the list', async () => {
+    for (const node of [{}, {identifier: null}, {identifier: ''}]) {
+      const {execute} = scripted([
+        {issues: connection([{identifier: 'CLC-1'}, node])},
+      ]);
+
+      await assert.rejects(
+        new LinearClient(execute).listIssueIdentifiers('proj-1'),
+        (error: unknown) =>
+          error instanceof EnvironmentError &&
+          error.message.includes('identifier of an issue of proj-1')
+      );
+    }
   });
 });
 

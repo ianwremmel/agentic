@@ -193,6 +193,45 @@ describe('declared dependencies', () => {
       'npm-shrinkwrap.json is stale'
     );
   });
+
+  it('lock the declared dependencies at the versions the workspace installs', async () => {
+    // The two lockfiles resolve independently: the tests run against the root
+    // package-lock's tree, users get the shrinkwrap's. A shrinkwrap
+    // regenerated against a later registry state installs a version nothing
+    // here was ever run against, and every other check still passes — the
+    // manifests agree, `npm ci` succeeds, the imports resolve.
+    //
+    // Declared dependencies only, not the whole tree. The root lockfile
+    // resolves with the repo's devDependencies in the graph and the shrinkwrap
+    // is generated `--omit=dev`, so shared transitive packages legitimately
+    // land on different versions: `yargs` is 18 at the root, where
+    // `@commitlint/cli` and `semantic-release` both ask for ^18, and 17 in the
+    // shrinkwrap, where `@grpc/proto-loader` asking for ^17.7.2 is the only
+    // one asking. Those are npm's to reconcile per tree; what has to agree is
+    // the code this plugin imports directly.
+    const {dependencies} = await manifest();
+    const read = async (path: string) =>
+      JSON.parse(await readFile(path, 'utf8')) as {
+        packages?: Record<string, Manifest>;
+      };
+    const lock = await read(join(PLUGIN_ROOT, 'npm-shrinkwrap.json'));
+    const root = await read(join(REPO_ROOT, 'package-lock.json'));
+
+    const names = Object.keys(dependencies ?? {});
+    assert.ok(names.length > 0, 'expected the plugin to declare a dependency');
+    for (const name of names) {
+      const at = `node_modules/${name}`;
+      const shipped = lock.packages?.[at]?.version;
+      // Both absent compares equal, which would pass this test for a
+      // dependency neither lockfile resolves at all.
+      assert.ok(shipped, `${name} is declared but absent from the shrinkwrap`);
+      assert.equal(
+        shipped,
+        root.packages?.[at]?.version,
+        `${name} is locked at a different version than the workspace installs`
+      );
+    }
+  });
 });
 
 describe('installed plugin', () => {

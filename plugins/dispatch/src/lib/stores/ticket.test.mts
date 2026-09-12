@@ -77,4 +77,35 @@ describe('TicketStore', () => {
     assert.equal(Number(db.get('SELECT COUNT(*) AS n FROM edge')?.n), 0);
     await db.close();
   });
+
+  it('patch leaves fields the caller did not name alone', async () => {
+    const {db, store} = await fresh();
+    await store.upsertTicket(BASE);
+
+    // What answering a re-read looks like: the id, its project, its status.
+    await store.patchTicket({
+      id: 'CLC-1',
+      project: 'P1',
+      status: 'in-progress',
+    });
+
+    const ticket = await store.getTicket('CLC-1');
+    assert(ticket !== null);
+    assert.equal(ticket.status, 'in-progress');
+    assert.equal(ticket.title, BASE.title);
+    assert.equal(ticket.url, BASE.url);
+    assert.equal(ticket.priority, BASE.priority);
+    assert.deepEqual(ticket.labels, BASE.labels);
+    assert.equal(ticket.branchHint, BASE.branchHint);
+    await db.close();
+  });
+
+  it('patch refuses a new ticket it cannot fill in', async () => {
+    const {db, store} = await fresh();
+    await assert.rejects(
+      store.patchTicket({id: 'CLC-NEW', status: 'available'}),
+      (err: unknown) => err instanceof UsageError
+    );
+    await db.close();
+  });
 });

@@ -13,6 +13,9 @@ import {findNode, materialize} from './materialize.mts';
 /* eslint-disable @typescript-eslint/require-await --
  * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
 
+/** A partial write: `id` names the ticket, every other key is optional. */
+export type TicketPatch = Partial<Omit<Ticket, 'id'>> & {id: string};
+
 export class TicketStore {
   readonly #db: Database;
 
@@ -21,23 +24,58 @@ export class TicketStore {
   }
 
   async upsertTicket(ticket: Ticket): Promise<void> {
-    ensure(
-      isStatus(ticket.status),
-      () =>
-        new DataError(`"${ticket.status}" is not a status`, {
-          hint: `use one of: ${STATUS_LIST}.`,
-        })
-    );
-    ensure(
-      isTargetKind(ticket.targetKind),
-      () =>
-        new DataError(`"${ticket.targetKind}" is not a target kind`, {
-          hint: `use one of: ${TARGET_KIND_LIST}.`,
-        })
-    );
-    if (ticket.updatedAt !== null) assertInstant(ticket.updatedAt, 'updatedAt');
-
+    this.#validate(ticket);
     await this.#db.transaction(() => {
+      this.#apply(ticket, false);
+    });
+  }
+
+  /**
+   * Write only the fields the caller named, leaving the rest as they are.
+   *
+   * A re-read answers with what the tracker returned for the fields it was
+   * asked about; it is not a declaration that everything absent is now empty.
+   * Assigning every column from a partial write blanks the title, url, and
+   * labels of a ticket the graph already knew, which is how a ranked, labelled
+   * ticket turns into an untitled one nobody can act on.
+   *
+   * Omitting a field preserves it; passing an explicit value sets it. A ticket
+   * the graph has never seen still needs `project` and `status`, since there is
+   * nothing to fall back to.
+   */
+  async patchTicket(patch: TicketPatch): Promise<void> {
+    this.#validate(patch);
+    await this.#db.transaction(() => {
+      this.#apply(patch, true);
+    });
+  }
+
+  #validate(input: TicketPatch): void {
+    const {status, targetKind} = input;
+    if (status !== undefined) {
+      ensure(
+        isStatus(status),
+        () =>
+          new DataError(`"${status}" is not a status`, {
+            hint: `use one of: ${STATUS_LIST}.`,
+          })
+      );
+    }
+    if (targetKind !== undefined) {
+      ensure(
+        isTargetKind(targetKind),
+        () =>
+          new DataError(`"${targetKind}" is not a target kind`, {
+            hint: `use one of: ${TARGET_KIND_LIST}.`,
+          })
+      );
+    }
+    if (input.updatedAt != null) assertInstant(input.updatedAt, 'updatedAt');
+  }
+
+  #apply(input: TicketPatch, merge: boolean): void {
+    const ticket = merge ? this.#merge(input) : (input as Ticket);
+    {
       // The project must already be recorded: silently materializing a
       // placeholder here re-parents the ticket onto an unknown-kind node the
       // refresh cadence's project join can never see, so a session passing
@@ -111,7 +149,51 @@ export class TicketStore {
           ]
         );
       }
-    });
+    }
+  }
+
+  /**
+   * Fill a partial write from the row already stored. A ticket with no row
+   * needs `project` and `status` from the caller — nothing else can supply
+   * them — and takes the same defaults a fresh registration would.
+   */
+  #merge(patch: TicketPatch): Ticket {
+    const existing = this.#read(patch.id);
+    const need = <K extends keyof Ticket>(key: K): Ticket[K] => {
+      const given = patch[key];
+      if (given !== undefined) return given as Ticket[K];
+      ensure(
+        existing !== null,
+        () =>
+          new UsageError(`"${patch.id}" is new, so --${key} is required`, {
+            hint: 'a partial write fills gaps from the stored row; there is none yet for this id.',
+          })
+      );
+      return existing[key];
+    };
+    return {
+      id: patch.id,
+      project: need('project'),
+      status: need('status'),
+      url: patch.url ?? existing?.url ?? '',
+      title: patch.title ?? existing?.title ?? '',
+      targetKind: patch.targetKind ?? existing?.targetKind ?? 'pr',
+      requiresHuman: patch.requiresHuman ?? existing?.requiresHuman ?? false,
+      injected: patch.injected ?? existing?.injected ?? false,
+      priority:
+        patch.priority === undefined
+          ? (existing?.priority ?? null)
+          : patch.priority,
+      branchHint:
+        patch.branchHint === undefined
+          ? (existing?.branchHint ?? null)
+          : patch.branchHint,
+      labels: patch.labels ?? existing?.labels ?? [],
+      updatedAt:
+        patch.updatedAt === undefined
+          ? (existing?.updatedAt ?? null)
+          : patch.updatedAt,
+    };
   }
 
   /** Remove a ticket; its satellite, edges, claim, and outcome cascade. */
@@ -125,6 +207,10 @@ export class TicketStore {
   }
 
   async getTicket(id: string): Promise<Ticket | null> {
+    return this.#read(id);
+  }
+
+  #read(id: string): Ticket | null {
     const row = this.#db.get(
       `SELECT n.external_id AS id, pn.external_id AS project, t.url, t.title,
               t.status, t.target_kind, t.requires_human, t.injected, t.priority,

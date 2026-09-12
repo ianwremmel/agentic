@@ -1,0 +1,46 @@
+{
+  "name": "@ianwremmel/dispatch",
+  "version": "0.32.0",
+  "description": "Dispatch engineering work end-to-end: pull request lifecycle (drafting, review, CI triage, merge) and ticket-tracker project orchestration (triage, planning, status, cross-team sync) — Linear bundled, other trackers added by writing an adapter skill.",
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "github",
+    "pull-requests",
+    "ci",
+    "code-review",
+    "linear",
+    "project-management",
+    "issues",
+    "planning"
+  ],
+  "homepage": "https://github.com/ianwremmel/agentic/tree/main/plugins/dispatch#readme",
+  "bugs": "https://github.com/ianwremmel/agentic/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ianwremmel/agentic.git",
+    "directory": "plugins/dispatch"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Ian Remmel"
+  },
+  "type": "module",
+  "files": [
+    ".claude-plugin/",
+    ".mcp.json",
+    "agents/",
+    "bin/",
+    "commands/",
+    "hooks/",
+    "skills/",
+    "src/",
+    "!**/*.test.mts"
+  ],
+  "engines": {
+    "node": ">=24.18.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

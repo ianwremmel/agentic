@@ -20,6 +20,7 @@ The `.claude-plugin/marketplace.json` catalog lists the plugins under
 ├── plugins/                          # Claude Code plugins
 │   └── dispatch/
 │       ├── bin/dispatch              # CLI entry point (bash wrapper)
+│       ├── package.json              # npm manifest; `files` lists every top-level dir
 │       └── src/                      # CLI sources + colocated tests (.mts)
 ├── scripts/                          # repo tooling (git hook bodies)
 └── docs/                             # spec + design docs
@@ -64,7 +65,8 @@ Plugins currently published:
   across `marketplace.json` and `plugin.json` unless you explicitly need
   `strict: false`.
 - **Versioning.** Bump `version` in the individual plugin's `plugin.json`
-  whenever its behavior changes. Semantic versioning.
+  whenever its behavior changes. Semantic versioning. Where the plugin also
+  has a `package.json`, bump both — nothing checks that they agree.
 - **Markdown tables.** Use aligned source-level column widths. Pad every
   cell (and the separator row's dashes) to the max width of its column
   so tables are easy to scan in the raw source. New/edited tables should

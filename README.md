@@ -76,6 +76,25 @@ npm run lint:fix    # also formats — Prettier runs as an ESLint rule
 npm run typecheck
 ```
 
+Releases are automatic: a push to `main` runs semantic-release, which reads the
+conventional-commit messages since the last `dispatch-v*` tag, writes the new
+number into the plugin's two manifests and commits them back to `main`, tags
+that commit, and then publishes `@ianwremmel/dispatch` to npm — in that order,
+which is what makes a failed publish recoverable. `fix:`, `perf:` and `revert:`
+are a patch, `feat:` a minor, `feat!:` or a `BREAKING CHANGE:` footer a major;
+every other type — `chore:`, `docs:`, `refactor:`, `style:`, `test:`,
+`build:`, `ci:` — publishes nothing. Never hand-edit a `version` field: the
+release owns it.
+
+Publishing authenticates with [npm trusted
+publishing](https://docs.npmjs.com/trusted-publishers), so there is no npm
+token to rotate — the job mints an OIDC token instead, which is what
+`id-token: write` is for. Two things live outside this repo and have to match
+it: `@ianwremmel/dispatch` must have a trusted publisher registered on npmjs.com
+naming this repository and the workflow file `ci.yml`, and that registration
+must leave the environment field empty unless the release job is given a
+matching `environment:`.
+
 Layout:
 
 ```text

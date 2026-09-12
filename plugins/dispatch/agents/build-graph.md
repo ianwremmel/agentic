@@ -54,6 +54,21 @@ dispatch ticket missing --id CLC-944
 
 Never guess a ticket into existence to clear an instruction.
 
+## `refresh_ticket`
+
+The server asking whether one ticket it already holds has moved. It only asks
+about tickets whose tracker state can change under it — started, in review, or
+parked — so the answer is usually "the same as before".
+
+Re-read the ticket and write it with `ticket set`, exactly as in a scan. Write
+it **even when nothing changed**: the write is what closes the ask, and an ask
+left open suppresses every later one for that ticket, so the server stops
+hearing about a ticket it is specifically watching. If the tracker no longer
+has it, `dispatch ticket missing --id <id>` instead.
+
+This is a re-read, not a materialization — `fetch_ticket` is the one that fills
+in a ticket the graph has never seen.
+
 ## Writing rules
 
 - **You map the state; the CLI knows only the vocabulary.** `--status` takes

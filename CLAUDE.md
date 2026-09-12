@@ -64,9 +64,15 @@ Plugins currently published:
   marketplace entry is a pointer; don't duplicate component declarations
   across `marketplace.json` and `plugin.json` unless you explicitly need
   `strict: false`.
-- **Versioning.** Bump `version` in the individual plugin's `plugin.json`
-  whenever its behavior changes. Semantic versioning. Where the plugin also
-  has a `package.json`, bump both — nothing checks that they agree.
+- **Versioning.** Never edit a `version` field. On every push to `main`,
+  semantic-release derives the number from the conventional-commit messages
+  since the last `dispatch-v*` tag, writes it into both
+  `plugins/dispatch/package.json` and its `plugin.json`, commits those two
+  files back to `main`, tags that commit, and publishes last. A hand bump only
+  collides with that. What decides the number is your commit type: `fix:`,
+  `perf:` and `revert:` → patch, `feat:` → minor, `feat!:` or a
+  `BREAKING CHANGE:` footer → major. Every other type — `chore:`, `docs:`,
+  `refactor:`, `style:`, `test:`, `build:`, `ci:` — releases nothing.
 - **Markdown tables.** Use aligned source-level column widths. Pad every
   cell (and the separator row's dashes) to the max width of its column
   so tables are easy to scan in the raw source. New/edited tables should
@@ -89,7 +95,9 @@ Plugins currently published:
 
 1. `mkdir -p plugins/<name>/.claude-plugin`
 2. Create `plugins/<name>/.claude-plugin/plugin.json` with `name`,
-   `description`, `version`, `author`.
+   `description`, `version`, `author`. Set `version` once, here; after that a
+   release owns it, and only once `release.config.mjs` publishes this plugin
+   too.
 3. Add `skills/`, `agents/`, `commands/`, `hooks/` as needed.
 4. Register the plugin in `.claude-plugin/marketplace.json` under `plugins[]`
    with `name` and `source: "./plugins/<name>"`.

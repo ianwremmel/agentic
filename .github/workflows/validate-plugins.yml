@@ -2,6 +2,9 @@ name: Validate Plugins
 
 on:
   push:
+    # Branch pushes only; naming `branches` is what excludes the tag a
+    # release pushes, for which none of this is meaningful.
+    branches: ['**']
   pull_request:
 
 jobs:

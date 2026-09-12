@@ -106,6 +106,49 @@ describe('pushObservations meta shaping', () => {
     assert.equal(event.meta.repo, 'o/r');
   });
 
+  it('re-takes the claim when it relays to a live worker', async () => {
+    // The worker gave its claim back at `pr yield` so the watch could arm. Its
+    // terminal act — recording the outcome — needs one, and a relayed event is
+    // the instruction to perform it, so the address and the authority to use it
+    // have to travel together.
+    const env = await tempEnv();
+    await seed(env);
+    await withDatabase(undefined, env, async (db) => {
+      const coordination = new CoordinationStore(db);
+      await coordination.claim({
+        node: 'o/r#1',
+        session: SESSION,
+        claimedAt: NOW,
+      });
+      await new WorkerStore(db).set({
+        node: 'o/r#1',
+        session: SESSION,
+        agentRef: 'real-agent',
+        at: NOW,
+      });
+      // `pr yield`: the claim goes back so the watch can arm, and the worker
+      // address stays behind as the relay target.
+      await coordination.release('o/r#1', SESSION);
+      db.run(
+        "INSERT INTO pr_event (node_id, kind, summary, meta, session_id, observed_at) VALUES ((SELECT id FROM node WHERE external_id='o/r#1'), 'pr_state_change', 'The PR merged.', ?, ?, ?)",
+        [JSON.stringify({state: 'merged'}), SESSION, NOW]
+      );
+    });
+
+    const {channel, pushed} = capture();
+    await pushObservations(channel, env, SESSION, NOW);
+
+    assert.equal(pushed.length, 1);
+    assert.equal(pushed[0]?.meta.agent, 'real-agent');
+    await withDatabase(undefined, env, async (db) => {
+      const held = await new CoordinationStore(db).claims();
+      assert.deepEqual(
+        held.map((c) => [c.node, c.session]),
+        [['o/r#1', SESSION]]
+      );
+    });
+  });
+
   it('drains an event whose owning session is gone', async () => {
     const env = await tempEnv();
     await seed(env);

@@ -182,47 +182,37 @@ export async function pushObservations(
     const coordination = new CoordinationStore(db);
     // An address only relays while its claim actually goes to this session;
     // otherwise the event falls through to cold re-dispatch, which claims.
+    //
+    // Only a claim this relay actually took carries a `turn`. A refreshed one
+    // belonged to a worker that never yielded — a ticket-worker mid-run, say,
+    // whose ticket changed under it — and that agent is still executing, so
+    // naming its claim would hand the session a token for a live turn. The
+    // event still relays; there is simply nothing to hand over afterwards.
     const relayTarget = async (
       ref: string | null,
       node: string
-    ): Promise<string | null> => {
+    ): Promise<{agent: string; turn?: string} | null> => {
       if (ref === null) return null;
       const claimed = await coordination.claim({
         node,
         session,
         claimedAt: at,
       });
-      return claimed.outcome === 'claimed' || claimed.outcome === 'refreshed'
-        ? ref
-        : null;
+      if (claimed.outcome === 'claimed') return {agent: ref, turn: at};
+      return claimed.outcome === 'refreshed' ? {agent: ref} : null;
     };
 
     for (const event of await events.undelivered(session)) {
       try {
         // Every fallible step — the snapshot's JSON parse, the render, the
-        // lookups — runs before the event is claimed. A malformed snapshot
-        // then leaves the row undelivered to retry next tick instead of being
-        // marked delivered and lost, and the per-event catch keeps one bad
-        // event from aborting the whole drain.
+        // lookups — runs before the event is marked delivered. A malformed
+        // snapshot then leaves the row undelivered to retry next tick instead
+        // of being marked delivered and lost, and the per-event catch keeps
+        // one bad event from aborting the whole drain.
         const pr = await prs.getPr(event.node);
         // When a live worker holds this node, its address rides the event and
         // the session relays instead of letting the item cold-start.
-        //
-        // Re-take the claim as part of relaying. The worker gave its own back
-        // at `pr yield` so the watch could arm, and its terminal act — the
-        // outcome — requires one; a relayed event is the instruction to
-        // perform that act, so the address and the authority to use it have to
-        // travel together. Without this a terminal event always lands one
-        // dispatch short of being recorded, and the item wedges: the worker
-        // row suppresses re-dispatch, and the relay is already spent.
-        //
-        // Unbounded deliberately. The agent is running already, so this is
-        // work that was admitted once, not a second admission — and capacity
-        // is exactly what the yield handed back.
-        const agent = await relayTarget(
-          await workers.refFor(event.node, session),
-          event.node
-        );
+        const ref = await workers.refFor(event.node, session);
         // A ticket event has no PR payload; the session re-reads the ticket
         // through the tracker adapter. A PR event renders from the snapshot
         // the poll already stored — no subprocess, so no per-tick push cap.
@@ -238,22 +228,53 @@ export async function pushObservations(
             : event.kind === 'ticket_changed'
               ? `${event.summary} Re-read the ticket through the tracker adapter before acting.`
               : `${event.summary} No snapshot was stored; run \`pr-status --repo ${pr?.repo ?? '<repo>'} ${String(pr?.prNumber ?? 0)}\` yourself before acting.`;
+        // The delivery claim is conditional: with session-NULL events
+        // drainable by any server, only the one that wins it goes on to push.
+        // Losing it here costs nothing, which is why it precedes the relay
+        // claim below.
+        if (!(await events.markDelivered(event.id, at))) continue;
+
+        // Re-take the node's claim as part of relaying, and only after the
+        // step that can lose the event: the worker gave its own back at `pr
+        // yield` so the watch could arm, and its terminal act — the outcome —
+        // requires one, so the address and the authority to use it have to
+        // travel together. Without this a terminal event always lands one
+        // dispatch short of being recorded, and the item wedges: the worker
+        // row suppresses re-dispatch, and the relay is already spent.
+        //
+        // A claim taken for an event that then never goes out would name a
+        // turn nobody was told about, and the handover could never match it —
+        // so the claim is taken last, and a failure to take it degrades to a
+        // relayless push rather than costing the event. From here the only
+        // residual is a push that throws, a failed stdout write, i.e. a dying
+        // server, which a retry could not have helped.
+        //
+        // Unbounded deliberately. The agent is running already, so this is
+        // work that was admitted once, not a second admission — and capacity
+        // is exactly what the yield handed back.
+        let relay: {agent: string; turn?: string} | null = null;
+        try {
+          relay = await relayTarget(ref, event.node);
+        } catch (error) {
+          log?.error('relay claim failed; delivering without an address', {
+            node: event.node,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         const meta = {
-          // `agent` is the router's reserved key: stamped after the spread so
-          // no event producer can smuggle an address in.
           ...event.meta,
-          ...(agent === null ? {} : {agent}),
+          // `agent` and `turn` are the router's reserved keys: stamped after
+          // the spread, and explicitly nulled when there is nothing to stamp,
+          // so no event producer can smuggle either past the router. `turn`
+          // dates the claim this relay took, and the session hands it back to
+          // `dispatch worker rm` when the agent returns — that is what tells a
+          // dead turn from a later one still running.
+          agent: relay?.agent ?? null,
+          turn: relay?.turn ?? null,
           item: event.node,
           ...(pr?.repo == null ? {} : {repo: pr.repo}),
           ...(pr?.prNumber == null ? {} : {pr: String(pr.prNumber)}),
         };
-
-        // The claim is the last DB write before the push, and conditional:
-        // with session-NULL events drainable by any server, only the one that
-        // wins the claim pushes. It has to precede the push, so the single
-        // residual is a push that throws after the claim — a failed stdout
-        // write, i.e. a dying server, which a retry could not have helped.
-        if (!(await events.markDelivered(event.id, at))) continue;
         channel.push(event.kind, meta, body);
       } catch (error) {
         log?.error('event delivery failed', {

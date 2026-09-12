@@ -193,6 +193,7 @@ event producer can forge them:
 | `item`       | The graph node the event belongs to.                                                               |
 | `repo`, `pr` | The node's registered PR, when it has one.                                                         |
 | `agent`      | The recorded address of the worker on the node (`dispatch worker set`), when this session has one. |
+| `turn`       | The instant of the claim the relay took, when it took one. Never stamped without `agent`.          |
 
 `agent` names a **resumable** worker — one that has returned and holds no
 process, but whose spawner can re-invoke it by that address with its context
@@ -209,6 +210,14 @@ when more than one kind fired; its absence means the `kind` is the whole story.
 `agent` is what lets the orchestrator relay the event to the worker already
 holding the item instead of cold-starting a resume pass; an event without one
 names no reachable worker, and the session dispatches accordingly.
+
+`turn` identifies the claim the relay re-took so the woken worker can record an
+outcome. The session hands it back to `dispatch worker rm` when that agent
+returns, and only the turn it names is removable — a worker has no heartbeat of
+its own, so a return reported against a stale turn would otherwise strand the
+live one. A relay that merely refreshed a claim carries no `turn`: that claim
+belongs to a worker still executing, which nothing may hand over. Handing over
+a turn no relay dated is an operator's call, via `--force`.
 
 Bodies MUST NOT be assembled from raw external text, and MUST NOT cost a
 per-event subprocess: the server renders a PR/CI event body itself from its

@@ -57,6 +57,12 @@ export default {
     // freeze every marketplace consumer on whatever they first installed.
     // `[skip ci]` in the message, and GitHub's own rule that a GITHUB_TOKEN
     // push triggers no workflow, both stop this from retriggering the release.
+    //
+    // The push is a plain `git push HEAD:main`, so it needs `main`'s ruleset to
+    // let it through: the rule requiring a pull request rejects it unless
+    // GitHub Actions is on that ruleset's bypass list. A rejection here fails
+    // the run during `prepare`, before the tag exists and before anything
+    // publishes, so it costs a red job and nothing more.
     [
       '@semantic-release/git',
       {

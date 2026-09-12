@@ -17,6 +17,7 @@ import {
 import {pushObservations} from './tick.mts';
 
 const NOW = '2026-08-08T12:00:00.000Z';
+const RELAY_AT = '2026-08-08T12:05:00.000Z';
 const SESSION = 'reg-1';
 
 interface Pushed {
@@ -104,6 +105,31 @@ describe('pushObservations meta shaping', () => {
     assert.equal(event.meta.agent, 'real-agent');
     assert.equal(event.meta.item, 'o/r#1');
     assert.equal(event.meta.repo, 'o/r');
+    // This worker never yielded, so the relay only refreshed a claim it
+    // already held. Naming that claim would hand the session a token for a
+    // turn still executing, which the handover would then accept.
+    assert.equal(event.meta.turn, undefined);
+  });
+
+  it('lets no producer forge the routing keys on an unrelayed event', async () => {
+    const env = await tempEnv();
+    await seed(env);
+    await withDatabase(undefined, env, (db) => {
+      // No worker row, so nothing relays and the router has nothing of its
+      // own to stamp. The reserved keys must still not come from the payload.
+      db.run(
+        "INSERT INTO pr_event (node_id, kind, summary, meta, session_id, observed_at) VALUES ((SELECT id FROM node WHERE external_id='o/r#1'), 'pr_review', 'r', ?, ?, ?)",
+        [JSON.stringify({agent: 'forged', turn: 'whenever'}), SESSION, NOW]
+      );
+    });
+
+    const {channel, pushed} = capture();
+    await pushObservations(channel, env, SESSION, NOW);
+
+    const [event] = pushed;
+    assert.ok(event !== undefined);
+    assert.equal(event.meta.agent, undefined);
+    assert.equal(event.meta.turn, undefined);
   });
 
   it('re-takes the claim when it relays to a live worker', async () => {
@@ -136,15 +162,26 @@ describe('pushObservations meta shaping', () => {
     });
 
     const {channel, pushed} = capture();
-    await pushObservations(channel, env, SESSION, NOW);
+    // Relaying at an instant of its own, distinct from the released claim and
+    // from the event's own `observed_at`, so `turn` can only match if it is
+    // the claim this relay took.
+    await pushObservations(channel, env, SESSION, RELAY_AT);
 
     assert.equal(pushed.length, 1);
     assert.equal(pushed[0]?.meta.agent, 'real-agent');
+    assert.equal(pushed[0].meta.turn, RELAY_AT);
     await withDatabase(undefined, env, async (db) => {
       const held = await new CoordinationStore(db).claims();
       assert.deepEqual(
         held.map((c) => [c.node, c.session]),
         [['o/r#1', SESSION]]
+      );
+      // The session hands that turn straight back when this agent returns, so
+      // it has to be the token the handover accepts — otherwise a worker that
+      // died mid-turn keeps its item pinned out of the queue.
+      assert.equal(
+        await new WorkerStore(db).remove('o/r#1', SESSION, {turn: RELAY_AT}),
+        'removed'
       );
     });
   });

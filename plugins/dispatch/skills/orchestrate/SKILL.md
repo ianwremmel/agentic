@@ -47,9 +47,23 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `project_complete`         | Announce it. Stop once every project the operator named is complete.                             |
 
 **Relay events.** Some events carry an `agent` meta key instead of an
-instruction from the table: SendMessage the event verbatim to that ref and
-stop. If the relay fails, run `dispatch worker rm --node <id>` and move on. A
+instruction from the table: SendMessage the event verbatim to that ref, note
+its `item` and `turn` against that ref, and go back to waiting. A
 non-instruction event with no `agent` key needs nothing from you.
+
+A relay that also carries `turn` is one you owe a handover. Run
+`dispatch worker rm --node <item> --turn <turn>`, both copied verbatim from
+the meta you noted — when the relay fails, and again when that agent later
+completes. Without it, a worker that died mid-turn pins its item out of the
+queue for as long as you run.
+
+The command decides; you only report. It drops the address solely for the turn
+you name, so a worker that yielded, or one a newer relay already woke, keeps
+it. Every `removed=false` is that decision working — `kept=no-address` is the
+ordinary result after a worker reported and needs no action, and `kept=` for
+any other reason means another turn owns the node. None of them is a reason to
+retry with `--force`, which would strand a live agent. A relay carrying no
+`turn` went to a worker that never yielded; it owes no handover at all.
 
 Return to waiting after each launch. Give each worker only what the event
 carries; never ticket content. Launch every order you receive; the CLI claims

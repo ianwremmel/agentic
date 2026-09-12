@@ -2,7 +2,19 @@ name: CI
 
 on:
   push:
+    # Branch pushes only. A release pushes a tag, and re-running these jobs
+    # against it is at best wasted — commitlint's `--from origin/main --to
+    # HEAD` has no meaning on a tag ref. Naming `branches` is what excludes
+    # tags: a `push` filter that names only one ref type does not run for the
+    # other. `tags-ignore` alone would have excluded *branches* instead and
+    # stopped CI entirely.
+    branches: ['**']
   pull_request:
+  # Escape hatch. A squash merge concatenates the branch's commit messages, so
+  # a PR opened with this repo's `chore: open PR [skip ci]` commit can land on
+  # main carrying that marker, and GitHub then skips the whole run — release
+  # included. Re-run this workflow by hand to publish what that merge missed.
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -64,3 +76,50 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  release:
+    name: release
+    needs: [lint, typecheck, test]
+    if: >-
+      github.ref == 'refs/heads/main' && (github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    # One release at a time: two concurrent runs would race to read the last
+    # tag and could both resolve the same next version.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    permissions:
+      # Push the release tag and create the GitHub release.
+      contents: write
+      # @semantic-release/github comments on the issues and PRs a release
+      # closes.
+      issues: write
+      pull-requests: write
+    steps:
+      # semantic-release reads the whole history back to the last release tag
+      # to decide the next version.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      # Failing here rather than inside semantic-release keeps the reason
+      # readable: a missing token otherwise surfaces as an npm auth error.
+      - name: Check for the npm token
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is not set. Add an npm automation token" \
+              "with publish access to @ianwremmel/dispatch as a repository" \
+              "secret named NPM_TOKEN."
+            exit 1
+          fi
+      - run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

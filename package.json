@@ -22,7 +22,10 @@
     "@eslint-community/eslint-plugin-eslint-comments": "^4.7.2",
     "@eslint/js": "^10.0.1",
     "@eslint/markdown": "^8.0.3",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^11.0.1",
     "@types/node": "^26.4.1",
+    "conventional-changelog-conventionalcommits": "^9.3.1",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
@@ -30,6 +33,7 @@
     "jsonc-eslint-parser": "^3.3.0",
     "lint-staged": "^17.4.1",
     "prettier": "^3.9.6",
+    "semantic-release": "^25.0.9",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.69.0",
     "yaml-eslint-parser": "^2.1.0"

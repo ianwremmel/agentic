@@ -76,6 +76,14 @@ npm run lint:fix    # also formats — Prettier runs as an ESLint rule
 npm run typecheck
 ```
 
+Releases are automatic: a push to `main` runs semantic-release, which reads the
+conventional-commit messages since the last `dispatch-v*` tag, publishes
+`@ianwremmel/dispatch` to npm, tags the commit, and commits the new version
+back into the plugin's two manifests. `fix:` is a patch, `feat:` a minor,
+`feat!:` or a `BREAKING CHANGE:` footer a major; a push with only `chore:` or
+`docs:` commits publishes nothing. Never hand-edit a `version` field — the
+release owns it.
+
 Layout:
 
 ```text

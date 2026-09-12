@@ -71,6 +71,28 @@ describe('setVersion', () => {
     );
   });
 
+  it('ignores a "version" key quoted inside a string value', () => {
+    // A manifest may describe the thing it does. JSON escapes every quote
+    // inside a string, so the raw text reads `\"version\": \"x\"` and the
+    // matcher's literal `"version"` — which needs an unescaped quote on both
+    // sides of the word — cannot reach it. Pinning that here because the
+    // failure it would cause is a release-blocking false "found 2", and a
+    // future rewrite of the matcher is exactly what would reintroduce it.
+    const described = [
+      '{',
+      '  "name": "dispatch",',
+      '  "description": "writes \\"version\\": \\"x\\" into the manifest",',
+      '  "version": "0.32.0"',
+      '}',
+      '',
+    ].join('\n');
+
+    assert.equal(
+      setVersion(described, '1.0.0'),
+      described.replace('"0.32.0"', '"1.0.0"')
+    );
+  });
+
   it('refuses a shadowing version key the regex cannot see', () => {
     // `version` is `version` to a JSON parser and invisible to the
     // regex, so the match count looks fine and only the written-value check

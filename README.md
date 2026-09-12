@@ -84,6 +84,15 @@ back into the plugin's two manifests. `fix:` is a patch, `feat:` a minor,
 `docs:` commits publishes nothing. Never hand-edit a `version` field — the
 release owns it.
 
+Publishing authenticates with [npm trusted
+publishing](https://docs.npmjs.com/trusted-publishers), so there is no npm
+token to rotate — the job mints an OIDC token instead, which is what
+`id-token: write` is for. Two things live outside this repo and have to match
+it: `@ianwremmel/dispatch` must have a trusted publisher registered on npmjs.com
+naming this repository and the workflow file `ci.yml`, and that registration
+must leave the environment field empty unless the release job is given a
+matching `environment:`.
+
 Layout:
 
 ```text

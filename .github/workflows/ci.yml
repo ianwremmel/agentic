@@ -96,6 +96,10 @@ jobs:
       # closes.
       issues: write
       pull-requests: write
+      # Mint the OIDC token npm exchanges for publish credentials. Without it
+      # there is no way to authenticate at all — nothing else here carries a
+      # registry credential.
+      id-token: write
     steps:
       # semantic-release reads the whole history back to the last release tag
       # to decide the next version.
@@ -107,19 +111,34 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      # Failing here rather than inside semantic-release keeps the reason
-      # readable: a missing token otherwise surfaces as an npm auth error.
-      - name: Check for the npm token
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # @semantic-release/npm exchanges an OIDC token itself, but only to
+      # confirm the context is live: it discards the result and shells out to
+      # `npm publish`, which mints its own. Trusted publishing is therefore the
+      # npm CLI's feature, and an npm older than 11.5.1 fails at `publish` —
+      # after `prepare` has already pushed the manifest commit to main and
+      # tagged it, which is the half-finished state release.config.mjs
+      # describes recovering from. Check before then.
+      #
+      # Check the binary execa will pick, not the runner's: it runs npm with
+      # preferLocal, and @semantic-release/npm depends on npm itself, so
+      # node_modules/.bin/npm shadows whatever setup-node installed. That
+      # dependency range keeps the local npm well above the floor, so this
+      # should never fire; it exists to catch the day it stops being true.
+      - name: Check npm supports trusted publishing
         run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN is not set. Add an npm automation token" \
-              "with publish access to @ianwremmel/dispatch as a repository" \
-              "secret named NPM_TOKEN."
+          npm_bin=npm
+          if [ -x node_modules/.bin/npm ]; then
+            npm_bin=node_modules/.bin/npm
+          fi
+          have="$("$npm_bin" --version)"
+          need=11.5.1
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
+            echo "::error::$npm_bin is $have, but trusted publishing needs" \
+              "$need or newer. Raise the npm that @semantic-release/npm" \
+              "resolves, or the Node running this job if there is no local npm."
             exit 1
           fi
+          echo "publishing with $npm_bin $have"
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

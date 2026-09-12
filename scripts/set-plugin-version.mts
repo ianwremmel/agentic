@@ -26,6 +26,13 @@ const SEMVER =
  * lines still counts. Both looseness directions are safe here because more
  * matches mean the manifest is rejected as ambiguous; missing one is what
  * would let the wrong field be rewritten.
+ *
+ * The literal `"version"` needs a bare quote on each side of the word, which
+ * is what keeps a `"version"` written *inside* a string value from counting:
+ * JSON escapes those quotes, so the raw text reads `\"version\"` and the
+ * closing quote the pattern wants is a backslash. Keep that property when
+ * editing this — losing it turns any manifest that documents a version key
+ * into a failed release.
  */
 const VERSION_VALUE = /("version"\s*:\s*")([^"]*)(")/g;
 

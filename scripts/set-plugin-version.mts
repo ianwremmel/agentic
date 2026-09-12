@@ -27,12 +27,13 @@ const SEMVER =
  * matches mean the manifest is rejected as ambiguous; missing one is what
  * would let the wrong field be rewritten.
  *
- * The literal `"version"` needs a bare quote on each side of the word, which
- * is what keeps a `"version"` written *inside* a string value from counting:
- * JSON escapes those quotes, so the raw text reads `\"version\"` and the
- * closing quote the pattern wants is a backslash. Keep that property when
- * editing this — losing it turns any manifest that documents a version key
- * into a failed release.
+ * Both quotes around the literal `"version"` earn their place, for different
+ * reasons. The trailing one excludes a `"version"` written inside a string
+ * value: JSON escapes those quotes, so such a key reads `\"version\"` in the
+ * raw text and where the pattern wants its closing quote there is a
+ * backslash. The leading one excludes a sibling key that merely ends in the
+ * word, like `"api_version"`. Dropping either turns a real manifest into a
+ * failed release, so keep both when editing this.
  */
 const VERSION_VALUE = /("version"\s*:\s*")([^"]*)(")/g;
 

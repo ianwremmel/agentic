@@ -79,6 +79,12 @@ jobs:
 
   release:
     name: release
+    # The three jobs that can say the code is broken. `commitlint` is left out
+    # on purpose: it lints `origin/main..HEAD`, which is empty once the branch
+    # has landed, so requiring it here would gate the release on a job with
+    # nothing to check. `claude plugin validate` lives in its own workflow and
+    # cannot gate a job in this one — a plugin that fails it can still publish,
+    # which is the gap to close if this ever bites.
     needs: [lint, typecheck, test]
     if: >-
       github.ref == 'refs/heads/main' && (github.event_name == 'push' ||

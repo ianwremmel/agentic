@@ -73,11 +73,10 @@ describe('setVersion', () => {
 
   it('ignores a "version" key quoted inside a string value', () => {
     // A manifest may describe the thing it does. JSON escapes every quote
-    // inside a string, so the raw text reads `\"version\": \"x\"` and the
-    // matcher's literal `"version"` — which needs an unescaped quote on both
-    // sides of the word — cannot reach it. Pinning that here because the
-    // failure it would cause is a release-blocking false "found 2", and a
-    // future rewrite of the matcher is exactly what would reintroduce it.
+    // inside a string, so such a key reads `\"version\": \"x\"` in the raw
+    // text and the matcher's closing quote lands on a backslash. This is what
+    // holds the *trailing* quote of the literal `"version"` in place; without
+    // it the manifest fails with a false "found 2" and blocks the release.
     const described = [
       '{',
       '  "name": "dispatch",',
@@ -90,6 +89,26 @@ describe('setVersion', () => {
     assert.equal(
       setVersion(described, '1.0.0'),
       described.replace('"0.32.0"', '"1.0.0"')
+    );
+  });
+
+  it('ignores a sibling key that merely ends in "version"', () => {
+    // This is what holds the *leading* quote in place. Drop it and
+    // `"api_version"` matches too, which is again a false "found 2" — and
+    // `api_version` / `schema_version` are ordinary things to find in a
+    // manifest, so this is the likelier of the two to be hit for real.
+    const sibling = [
+      '{',
+      '  "name": "dispatch",',
+      '  "api_version": "2",',
+      '  "version": "0.32.0"',
+      '}',
+      '',
+    ].join('\n');
+
+    assert.equal(
+      setVersion(sibling, '1.0.0'),
+      sibling.replace('"0.32.0"', '"1.0.0"')
     );
   });
 
@@ -118,7 +137,10 @@ describe('setVersion', () => {
   });
 
   it('refuses input that is not a JSON object', () => {
-    assert.throws(() => setVersion('["version"]\n', '1.0.0'), /version/);
+    assert.throws(
+      () => setVersion('["version"]\n', '1.0.0'),
+      /no top-level "version" string/
+    );
     assert.throws(() => setVersion('not json', '1.0.0'), SyntaxError);
   });
 

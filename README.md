@@ -77,11 +77,13 @@ npm run typecheck
 ```
 
 Releases are automatic: a push to `main` runs semantic-release, which reads the
-conventional-commit messages since the last `dispatch-v*` tag, publishes
-`@ianwremmel/dispatch` to npm, tags the commit, and commits the new version
-back into the plugin's two manifests. `fix:` is a patch, `feat:` a minor,
-`feat!:` or a `BREAKING CHANGE:` footer a major; a push with only `chore:` or
-`docs:` commits publishes nothing. Never hand-edit a `version` field — the
+conventional-commit messages since the last `dispatch-v*` tag, writes the new
+number into the plugin's two manifests and commits them back to `main`, tags
+that commit, and then publishes `@ianwremmel/dispatch` to npm — in that order,
+which is what makes a failed publish recoverable. `fix:` and `perf:` are a
+patch, `feat:` a minor, `feat!:` or a `BREAKING CHANGE:` footer a major; every
+other type — `chore:`, `docs:`, `refactor:`, `style:`, `test:`, `build:`,
+`ci:`, `revert:` — publishes nothing. Never hand-edit a `version` field: the
 release owns it.
 
 Publishing authenticates with [npm trusted

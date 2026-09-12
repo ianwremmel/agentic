@@ -5,10 +5,14 @@
  * Tags are package-scoped (`dispatch-v1.2.3`) because this repo is a
  * marketplace: a bare `v1.2.3` would have to be shared by whatever becomes
  * publishable next, and the format cannot be changed once releases exist.
- * `dispatch-v0.32.0` is tagged on the last hand-published commit — the merge
- * *before* the one that added this file, so that commit's own `feat:` counts
- * toward the first automated release. Without that tag semantic-release would
- * start at 1.0.0 and declare a stability the plugin does not have.
+ * `dispatch-v0.32.0` is tagged on the commit that set the manifests to 0.32.0
+ * — the merge *before* the one that added this file, so that commit's own
+ * `feat:` counts toward the first automated release. Without that tag
+ * semantic-release would start at 1.0.0 and declare a stability the plugin
+ * does not have. The tag records the version, not a publish: npm has no
+ * `@ianwremmel/dispatch` yet, and the first one has to be pushed by hand
+ * because a trusted publisher can only be registered on a package that
+ * already exists.
  *
  * The `conventionalcommits` preset is not cosmetic. The default `angular`
  * preset does not read the `!` breaking-change marker, so `feat!: …` — which
@@ -58,11 +62,11 @@ export default {
     // `[skip ci]` in the message, and GitHub's own rule that a GITHUB_TOKEN
     // push triggers no workflow, both stop this from retriggering the release.
     //
-    // The push is a plain `git push HEAD:main`, so it needs `main`'s ruleset to
-    // let it through: the rule requiring a pull request rejects it unless
-    // GitHub Actions is on that ruleset's bypass list. A rejection here fails
-    // the run during `prepare`, before the tag exists and before anything
-    // publishes, so it costs a red job and nothing more.
+    // The push is `git push --tags <url> HEAD:main`, so it needs `main`'s
+    // ruleset to let it through: the rule requiring a pull request rejects it
+    // unless GitHub Actions is on that ruleset's bypass list. A rejection here
+    // fails the run during `prepare`, before the release tag exists and before
+    // anything publishes, so it costs a red job and nothing more.
     [
       '@semantic-release/git',
       {

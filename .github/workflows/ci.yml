@@ -117,19 +117,16 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      # @semantic-release/npm exchanges an OIDC token itself, but only to
-      # confirm the context is live: it discards the result and shells out to
-      # `npm publish`, which mints its own. Trusted publishing is therefore the
-      # npm CLI's feature, and an npm older than 11.5.1 fails at `publish` —
-      # after `prepare` has already pushed the manifest commit to main and
-      # tagged it, which is the half-finished state release.config.mjs
-      # describes recovering from. Check before then.
-      #
-      # Check the binary execa will pick, not the runner's: it runs npm with
-      # preferLocal, and @semantic-release/npm depends on npm itself, so
-      # node_modules/.bin/npm shadows whatever setup-node installed. That
-      # dependency range keeps the local npm well above the floor, so this
-      # should never fire; it exists to catch the day it stops being true.
+      # Trusted publishing is the npm CLI's own feature, and an npm below
+      # 11.5.1 fails at `publish` — after `prepare` has committed the manifests
+      # to main and tagged them, the half-finished state release.config.mjs
+      # describes recovering from. So check first, and check the binary that
+      # will actually publish: @semantic-release/npm depends on npm itself and
+      # runs it through execa with preferLocal, so node_modules/.bin/npm
+      # shadows whatever setup-node installed. `engines` cannot express this —
+      # it only ever sees the runner's npm. The dependency range (^11.6.2)
+      # already holds the local npm above the floor, so this is a tripwire for
+      # the day that stops being true, not a live gate.
       - name: Check npm supports trusted publishing
         run: |
           npm_bin=npm

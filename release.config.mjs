@@ -2,18 +2,6 @@
  * semantic-release owns the published version of `@ianwremmel/dispatch`. The
  * root package is private and never publishes.
  *
- * Tags are package-scoped (`dispatch-v1.2.3`) because this repo is a
- * marketplace: a bare `v1.2.3` would have to be shared by whatever becomes
- * publishable next, and the format cannot be changed once releases exist.
- * `dispatch-v0.32.0` is tagged on the commit that set the manifests to 0.32.0
- * — the merge *before* the one that added this file, so that commit's own
- * `feat:` counts toward the first automated release. Without that tag
- * semantic-release would start at 1.0.0 and declare a stability the plugin
- * does not have. The tag records the version, not a publish: npm has no
- * `@ianwremmel/dispatch` yet, and the first one has to be pushed by hand
- * because a trusted publisher can only be registered on a package that
- * already exists.
- *
  * The `conventionalcommits` preset is not cosmetic. The default `angular`
  * preset does not read the `!` breaking-change marker, so `feat!: …` — which
  * `@commitlint/config-conventional` accepts, and which this repo therefore
@@ -33,6 +21,17 @@
  */
 export default {
   branches: ['main'],
+  // Package-scoped, because this repo is a marketplace rather than one
+  // library: a bare `v1.2.3` claims the whole repo for whichever plugin
+  // releases first, and the format is painful to change once releases exist.
+  //
+  // The seed tag `dispatch-v0.32.0` sits on 85c0ad1, the merge *before* the
+  // one that added this file, so that commit's own `feat:` counts toward the
+  // first automated release. Without a tag to read back to, semantic-release
+  // starts at 1.0.0 and declares a stability the plugin does not have. The tag
+  // records a version, not a publish: npm has no `@ianwremmel/dispatch` yet,
+  // and the first version has to be pushed by hand because a trusted publisher
+  // can only be registered on a package that already exists.
   tagFormat: 'dispatch-v${version}',
   plugins: [
     ['@semantic-release/commit-analyzer', {preset: 'conventionalcommits'}],

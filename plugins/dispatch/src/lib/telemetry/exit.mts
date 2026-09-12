@@ -1,5 +1,7 @@
+import {constants} from 'node:os';
 import type {Writable} from 'node:stream';
 
+import {forgiving} from './stream.mts';
 import type {Telemetry} from './telemetry.mts';
 
 /** The signals a supervisor stops a process with. */
@@ -42,29 +44,58 @@ export function flushOnExit(
   telemetry: Telemetry,
   stream: Writable
 ): () => void {
+  // The fatal handler reports through this stream, and one of the things it
+  // reports is a broken pipe. An unguarded `error` on the stream would be an
+  // uncaught exception raised from inside the uncaught-exception handler.
+  const out = forgiving(stream);
   const installed: {off: () => void}[] = [];
 
   for (const signal of SIGNALS) {
     const handler = (): void => {
       void (async (): Promise<void> => {
-        // A failed flush must not become an unhandled rejection: that would
-        // end the process here instead of re-raising, and with the wrong code.
-        await telemetry.shutdown().catch(() => undefined);
+        try {
+          // `shutdown` belongs to the caller: it can reject, and it can throw
+          // before it ever returns a promise. Both have to stay inside this
+          // try. An escape would reach the fatal handler below, which would
+          // report a crash and exit 1 instead of re-raising — an orderly
+          // signal turned into a spurious bug report.
+          await telemetry.shutdown();
+        } catch {
+          // A flush that failed has nowhere left to be reported.
+        }
         process.removeListener(signal, handler);
-        process.kill(process.pid, signal);
+        try {
+          process.kill(process.pid, signal);
+        } catch {
+          // Re-raising is the only way to exit the way the caller asked, so
+          // if it fails the best that is left is the code it would have
+          // produced.
+          process.exit(128 + constants.signals[signal]);
+        }
       })();
     };
     process.on(signal, handler);
     installed.push({off: () => void process.removeListener(signal, handler)});
   }
 
+  // Reporting a crash must not be able to cause one. Writing to a broken
+  // stream raises `error`, and a flush can throw — either would re-enter
+  // these handlers, report that, and do it again. The latch means the second
+  // fatal event finds the first already on its way out.
+  let dying = false;
   for (const event of FATAL) {
     const handler = (reason: unknown): void => {
+      if (dying) return;
+      dying = true;
       void (async (): Promise<void> => {
-        stream.write(
-          `${event}: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}\n`
-        );
-        await telemetry.shutdown().catch(() => undefined);
+        try {
+          out.write(
+            `${event}: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}\n`
+          );
+          await telemetry.shutdown();
+        } catch {
+          // There is no third place to report a failure to report a failure.
+        }
         process.exit(1);
       })();
     };

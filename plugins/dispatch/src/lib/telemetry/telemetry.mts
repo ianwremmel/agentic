@@ -1,5 +1,7 @@
 import type {Writable} from 'node:stream';
 
+import {forgiving} from './stream.mts';
+
 export interface TelemetryOptions {
   /**
    * Where all three signals go when no collector is configured: stderr.
@@ -50,7 +52,11 @@ export async function startTelemetry(
     const {startSdk} = await import('./sdk.mts');
     return await startSdk(opts);
   } catch (error) {
-    opts.stream.write(`telemetry unavailable: ${String(error)}\n`);
+    // Guarded before the write, not after: this is the path that runs when
+    // nothing else has touched the stream, so nothing else has absorbed its
+    // errors — and a broken pipe here would crash the CLI in the middle of
+    // the code whose whole job is to keep telemetry from crashing the CLI.
+    forgiving(opts.stream).write(`telemetry unavailable: ${String(error)}\n`);
     return INERT;
   }
 }

@@ -4,9 +4,12 @@ import {once} from 'node:events';
 import {copyFile, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {Writable} from 'node:stream';
 import {pathToFileURL} from 'node:url';
 import {after, describe, it} from 'node:test';
 import {promisify} from 'node:util';
+
+import {childEnv} from './test-support.mts';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,33 +31,42 @@ after(async () => {
 });
 
 /**
- * `startTelemetry` in a process where `./sdk.mts` cannot load.
+ * A copy of `telemetry.mts` whose one dynamic import throws.
  *
- * This module is copied next to a throwing stub of its one dynamic import and
- * run out-of-process. In-process there is no way to make an already-resolvable
- * import fail, and stubbing the loader instead would only test the stub.
- * `telemetry.mts` imports nothing else at run time, so the copy is faithful.
+ * In-process there is no way to make an already-resolvable import fail, and
+ * stubbing the loader instead would only test the stub. `stream.mts` is copied
+ * alongside because `telemetry.mts` imports it statically — deliberately, it
+ * is the one sibling that reaches no OTel package — so the copy stays
+ * faithful.
  */
-async function withBrokenSdk(): Promise<{stderr: string; stdout: string}> {
+async function brokenSdkCopy(): Promise<string> {
   scratch ??= await mkdtemp(join(tmpdir(), 'dispatch-telemetry-'));
-  await copyFile(
-    new URL('./telemetry.mts', HERE),
-    join(scratch, 'telemetry.mts')
-  );
+  for (const name of ['telemetry.mts', 'stream.mts']) {
+    await copyFile(new URL(`./${name}`, HERE), join(scratch, name));
+  }
   await writeFile(
     join(scratch, 'sdk.mts'),
     'throw new Error("Cannot find package \'@opentelemetry/sdk-node\'");\n'
   );
-  const copy = pathToFileURL(join(scratch, 'telemetry.mts')).href;
+  return pathToFileURL(join(scratch, 'telemetry.mts')).href;
+}
 
-  return execFileAsync(process.execPath, [
-    '--input-type=module',
-    '-e',
-    `const {startTelemetry} = await import(${JSON.stringify(copy)});
-     const telemetry = await startTelemetry({stream: process.stderr});
-     await telemetry.shutdown();
-     process.stdout.write('survived\\n');`,
-  ]);
+/** That copy, run out-of-process so its streams are real. */
+async function withBrokenSdk(): Promise<{stderr: string; stdout: string}> {
+  const copy = await brokenSdkCopy();
+
+  return execFileAsync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `const {startTelemetry} = await import(${JSON.stringify(copy)});
+       const telemetry = await startTelemetry({stream: process.stderr});
+       await telemetry.shutdown();
+       process.stdout.write('survived\\n');`,
+    ],
+    {env: childEnv()}
+  );
 }
 
 describe('startTelemetry', () => {
@@ -71,24 +83,51 @@ describe('startTelemetry', () => {
     assert.match(stderr, /^telemetry unavailable: .*sdk-node/u);
   });
 
+  it('survives a stream that fails the write it reports on', async () => {
+    // The fallback is the one path that runs before anything else has touched
+    // the stream, so it cannot rely on an exporter having absorbed its errors
+    // already. A failing write emits `error`, and an unhandled one would crash
+    // the CLI from inside the code whose whole job is to keep telemetry from
+    // crashing the CLI — an uncaught exception here fails this test.
+    const {startTelemetry} = (await import(await brokenSdkCopy())) as {
+      startTelemetry: (opts: {stream: Writable}) => Promise<{
+        shutdown: () => Promise<void>;
+      }>;
+    };
+    const stream = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error('EPIPE'));
+      },
+    });
+
+    const telemetry = await startTelemetry({stream});
+    await telemetry.shutdown();
+
+    assert.equal(stream.listenerCount('error'), 1);
+  });
+
   it('puts every signal on the real stderr and nothing on stdout', async () => {
     // Out of process against the real streams, which is the only place the
     // routing is actually observable — an in-process test is handed a stream
     // and cannot tell that `console` was not used. It also covers the flush
     // against a real pipe, where a write is asynchronous and the buffer is
     // lost if the process ends without waiting.
-    const {stderr, stdout} = await execFileAsync(process.execPath, [
-      '--input-type=module',
-      '-e',
-      `const {startTelemetry} = await import(${JSON.stringify(INDEX)});
-       const {trace, metrics} = await import('@opentelemetry/api');
-       const {logs} = await import('@opentelemetry/api-logs');
-       const telemetry = await startTelemetry({stream: process.stderr});
-       trace.getTracer('probe').startSpan('work').end();
-       metrics.getMeter('probe').createCounter('orders').add(1);
-       logs.getLogger('probe').emit({body: 'armed', severityText: 'INFO'});
-       await telemetry.shutdown();`,
-    ]);
+    const {stderr, stdout} = await execFileAsync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const {startTelemetry} = await import(${JSON.stringify(INDEX)});
+         const {trace, metrics} = await import('@opentelemetry/api');
+         const {logs} = await import('@opentelemetry/api-logs');
+         const telemetry = await startTelemetry({stream: process.stderr});
+         trace.getTracer('probe').startSpan('work').end();
+         metrics.getMeter('probe').createCounter('orders').add(1);
+         logs.getLogger('probe').emit({body: 'armed', severityText: 'INFO'});
+         await telemetry.shutdown();`,
+      ],
+      {env: childEnv()}
+    );
 
     assert.equal(stdout, '');
     assert.deepEqual(
@@ -120,11 +159,10 @@ describe('startTelemetry', () => {
          await telemetry.shutdown();`,
       ],
       {
-        env: {
-          ...process.env,
+        env: childEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318',
           OTEL_TRACES_EXPORTER: 'console',
-        },
+        }),
       }
     );
 
@@ -164,7 +202,7 @@ describe('startTelemetry', () => {
          process.stdout.write('ready\\n');
          setInterval(() => undefined, 1_000);`,
       ],
-      {stdio: ['ignore', 'pipe', 'pipe']}
+      {env: childEnv(), stdio: ['ignore', 'pipe', 'pipe']}
     );
 
     let stderr = '';

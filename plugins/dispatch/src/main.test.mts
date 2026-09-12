@@ -8,19 +8,26 @@ import {promisify} from 'node:util';
 import {discover} from './lib/command/index.mts';
 import {runCli} from './lib/cli/index.mts';
 import {createLogger, type CoreLogger} from './lib/logger/index.mts';
+import {childEnv} from './lib/telemetry/test-support.mts';
 
 const execFileAsync = promisify(execFile);
 
 const COMMANDS = new URL('./commands/', import.meta.url);
 const MAIN = fileURLToPath(new URL('./main.mts', import.meta.url));
 
-/** `dispatch greet World` as its own process, which is the only way to see
- * which stream each byte landed on. */
+/**
+ * `dispatch greet World` as its own process, which is the only way to see
+ * which stream each byte landed on.
+ *
+ * `childEnv` drops the parent's `OTEL_*` so a host that exports any of them
+ * cannot change what the child does — these tests assert on exactly what
+ * reached each stream.
+ */
 async function greet(
-  env: NodeJS.ProcessEnv = {}
+  env: Record<string, string> = {}
 ): Promise<{stderr: string; stdout: string}> {
   return execFileAsync(process.execPath, [MAIN, 'greet', 'World'], {
-    env: {...process.env, ...env},
+    env: childEnv(env),
   });
 }
 

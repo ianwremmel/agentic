@@ -12,7 +12,7 @@ import {
   telemetryPipeline,
   wantsConsole,
 } from './sdk.mts';
-import {capture, parse} from './test-support.mts';
+import {capture, parse, withoutOtelEnv} from './test-support.mts';
 
 const ENDPOINTS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
@@ -199,37 +199,45 @@ describe('stopping', () => {
  */
 describe('startSdk', () => {
   it('puts all three signals on the stream and flushes them on shutdown', async () => {
-    const {lines, stream} = capture();
+    // `withoutOtelEnv` because `startSdk` reads `process.env` — it has to,
+    // since that is the only environment `NodeSDK` reads. A host
+    // `OTEL_LOG_LEVEL` would add diag lines to the stream under assertion and
+    // a host endpoint would switch the exporter branch, so without this the
+    // test measures the host rather than the code.
+    await withoutOtelEnv(async () => {
+      const {lines, stream} = capture();
 
-    const telemetry = await startSdk({stream});
+      const telemetry = await startSdk({stream});
 
-    trace.getTracer('probe').startSpan('work').end();
-    metrics.getMeter('probe').createCounter('orders').add(1);
-    logs.getLogger('probe').emit({body: 'armed', severityText: 'INFO'});
+      trace.getTracer('probe').startSpan('work').end();
+      metrics.getMeter('probe').createCounter('orders').add(1);
+      logs.getLogger('probe').emit({body: 'armed', severityText: 'INFO'});
 
-    // Nothing has been written yet, and not only because the metric reader
-    // runs on a timer: `hostDetector` resolves `host.id` asynchronously, and
-    // the span and log processors hold their records until the resource they
-    // carry is complete. So a command short enough to finish first emits all
-    // three signals or none, entirely on the flush below.
-    assert.deepEqual(lines(), []);
+      // Nothing has been written yet, and not only because the metric reader
+      // runs on a timer: `hostDetector` resolves `host.id` asynchronously, and
+      // the span and log processors hold their records until the resource they
+      // carry is complete. So a command short enough to finish first emits all
+      // three signals or none, entirely on the flush below.
+      assert.deepEqual(lines(), []);
 
-    // Several exit paths reach the shutdown — a signal, a fatal error, and the
-    // `finally` in `src/main.mts` — so it has to be one flush rather than
-    // several, which the SDK would refuse with `Cannot call shutdown twice`.
-    const flush = telemetry.shutdown();
-    assert.equal(telemetry.shutdown(), flush);
-    await flush;
+      // Several exit paths reach the shutdown — a signal, a fatal error, and
+      // the `finally` in `src/main.mts` — so it has to be one flush rather
+      // than several, which the SDK would refuse with `Cannot call shutdown
+      // twice`.
+      const flush = telemetry.shutdown();
+      assert.equal(telemetry.shutdown(), flush);
+      await flush;
 
-    assert.deepEqual(
-      lines()
-        .map((line) => parse(line))
-        .map(
-          ({fields, signal}) =>
-            `${signal} ${String(fields.name ?? fields.severity)}`
-        )
-        .sort(),
-      ['log INFO', 'metric orders', 'span work']
-    );
+      assert.deepEqual(
+        lines()
+          .map((line) => parse(line))
+          .map(
+            ({fields, signal}) =>
+              `${signal} ${String(fields.name ?? fields.severity)}`
+          )
+          .sort(),
+        ['log INFO', 'metric orders', 'span work']
+      );
+    });
   });
 });

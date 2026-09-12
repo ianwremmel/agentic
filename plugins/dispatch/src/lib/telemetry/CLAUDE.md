@@ -21,11 +21,13 @@ startup. Read that docblock before changing the order of anything in it.
 `main.test.mts` asserts on the CLI's real stdout, which is the only place the
 ordering is visible.
 
-**Only `telemetry.mts` and `exit.mts` may be imported statically.** Everything
-else reaches an `@opentelemetry/*` package, and `startTelemetry` loads it
-through a dynamic import so that a plugin install whose `node_modules` was
-never created loses telemetry rather than every command. That is why
-`index.mts` re-exports those two files and nothing else.
+**Only `telemetry.mts`, `exit.mts`, and `stream.mts` may be imported
+statically.** Everything else reaches an `@opentelemetry/*` package, and
+`startTelemetry` loads it through a dynamic import so that a plugin install
+whose `node_modules` was never created loses telemetry rather than every
+command. That is why `index.mts` re-exports the first two and nothing else, and
+why `stream.mts` — which both of them import, and which is what keeps a broken
+stderr from crashing the CLI — has to stay free of OTel too.
 
 **A flush is three separate things, and `sdk.shutdown()` is only one of them.**
 The metric reader exports on a timer, and the span and log processors export

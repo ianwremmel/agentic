@@ -1,8 +1,9 @@
-// Only the two modules that import no OpenTelemetry package are re-exported
-// here. Everything else in this directory reaches one, and this file is what
-// `src/main.mts` loads on every invocation — so an export added here would
-// pull the SDK back onto the static import graph and undo the fallback
-// `startTelemetry()` exists for. Import those modules by path instead; that is
+// Only modules that reach no OpenTelemetry package may be re-exported here.
+// This file is what `src/main.mts` loads on every invocation, so an export
+// that reaches one would pull the SDK back onto the static import graph and
+// undo the fallback `startTelemetry()` exists for. That leaves these two —
+// and `stream.mts`, which they import directly and which has to stay free of
+// OTel for the same reason. Everything else is imported by path, which is
 // what `sdk.mts` and the tests do.
 export {flushOnExit} from './exit.mts';
 export {startTelemetry} from './telemetry.mts';

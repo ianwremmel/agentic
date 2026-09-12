@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {Writable} from 'node:stream';
 import {describe, it} from 'node:test';
 
 import {flushOnExit} from './exit.mts';
-import {capture} from './test-support.mts';
+import {capture, childEnv} from './test-support.mts';
 
 const EXIT = new URL('./exit.mts', import.meta.url).href;
 
@@ -44,37 +45,60 @@ interface Died {
  * process goes away is the exporters' half of the contract, covered by
  * `telemetry.test.mts`.
  */
-async function died(how: 'signal' | 'throw' | 'reject'): Promise<Died> {
+async function died(
+  how: 'signal' | 'throw' | 'reject' | 'unraisable' | 'broken-report'
+): Promise<Died> {
   const child = spawn(
     process.execPath,
     [
       '--input-type=module',
       '-e',
-      `const {flushOnExit} = await import(${JSON.stringify(EXIT)});
+      `const {Writable} = await import('node:stream');
+       const {flushOnExit} = await import(${JSON.stringify(EXIT)});
+       const how = ${JSON.stringify(how)};
+       if (how === 'unraisable') {
+         process.kill = () => {
+           throw new Error('ESRCH');
+         };
+       }
+       // A stream whose every write fails, to make reporting a crash itself
+       // a source of crashes.
+       const broken = new Writable({
+         write(chunk, encoding, callback) {
+           callback(new Error('EPIPE'));
+         },
+       });
        let flushes = 0;
        flushOnExit(
          {
-           shutdown: async () => {
-             await new Promise((done) => setTimeout(done, 20));
-             process.stderr.write('flushed ' + ++flushes + '\\n');
-           },
+           // Synchronously, not as a rejection: a throw before the promise
+           // exists is the one a \`.catch()\` on the call cannot see.
+           shutdown:
+             how === 'broken-report'
+               ? () => {
+                   throw new Error('flush failed too');
+                 }
+               : async () => {
+                   await new Promise((done) => setTimeout(done, 20));
+                   process.stderr.write('flushed ' + ++flushes + '\\n');
+                 },
          },
-         process.stderr,
+         how === 'broken-report' ? broken : process.stderr,
        );
        process.stdout.write('ready\\n');
        setInterval(() => undefined, 1_000);
-       if (${JSON.stringify(how)} === 'throw') {
+       if (how === 'throw' || how === 'broken-report') {
          setTimeout(() => {
            throw new Error('from a callback nothing awaits');
          }, 50);
        }
-       if (${JSON.stringify(how)} === 'reject') {
+       if (how === 'reject') {
          setTimeout(() => {
            void Promise.reject(new Error('nothing catches this'));
          }, 50);
        }`,
     ],
-    {stdio: ['ignore', 'pipe', 'pipe']}
+    {env: childEnv(), stdio: ['ignore', 'pipe', 'pipe']}
   );
 
   let stderr = '';
@@ -89,7 +113,7 @@ async function died(how: 'signal' | 'throw' | 'reject'): Promise<Died> {
   for await (const chunk of child.stdout) {
     if (String(chunk).includes('ready')) break;
   }
-  if (how === 'signal') child.kill('SIGTERM');
+  if (how === 'signal' || how === 'unraisable') child.kill('SIGTERM');
 
   const [code, signal] = (await once(child, 'exit')) as [
     number | null,
@@ -124,6 +148,29 @@ describe('flushOnExit', () => {
     assert.deepEqual(counts(), before);
   });
 
+  it('guards the stream before a handler can write to it', () => {
+    const stream = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error('EPIPE'));
+      },
+    });
+
+    const uninstall = flushOnExit(INERT, stream);
+    uninstall();
+
+    assert.equal(stream.listenerCount('error'), 1);
+  });
+
+  it('still exits 1 when both the report and the flush fail', async () => {
+    // Reporting a crash must not be able to cause one. Here the stream errors
+    // on every write and the flush throws on top of it, so an unguarded
+    // handler re-enters itself through its own `error` and `unhandledRejection`
+    // — and either loops until the runner's timeout or exits some other way.
+    const {code, signal} = await died('broken-report');
+
+    assert.deepEqual({code, signal}, {code: 1, signal: null});
+  });
+
   it('flushes on SIGTERM and still dies from it', async () => {
     // Installing a listener suppresses the default kill, so the handler has to
     // re-raise or a signalled `dispatch mcp` would hang instead of exiting.
@@ -133,6 +180,19 @@ describe('flushOnExit', () => {
 
     assert.deepEqual({code, signal}, {code: null, signal: 'SIGTERM'});
     assert.deepEqual(flushes(stderr), ['flushed 1']);
+  });
+
+  it('still exits 143 when the re-raise itself fails', async () => {
+    // Re-raising is inside the handler's async body, so a throw from it would
+    // reject and be picked up by this same function's `unhandledRejection`
+    // handler — reporting a crash and exiting 1, turning an orderly SIGTERM
+    // into a spurious bug report. Falling back to the code the signal would
+    // have produced keeps the caller's view of the exit intact.
+    const {code, signal, stderr} = await died('unraisable');
+
+    assert.deepEqual({code, signal}, {code: 143, signal: null});
+    assert.deepEqual(flushes(stderr), ['flushed 1']);
+    assert.doesNotMatch(stderr, /unhandledRejection/u);
   });
 
   it('flushes on a throw from a callback nothing awaits, then exits 1', async () => {

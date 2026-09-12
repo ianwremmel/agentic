@@ -1,0 +1,113 @@
+import type {RepoPrLoad} from '../graph/index.mts';
+import {limitFor} from '../model/index.mts';
+import type {RepoCap, RepoCapPolicy} from '../model/index.mts';
+
+/** A cap at its limit, and how much work is waiting behind it. */
+export interface CapHold {
+  repo: string;
+  cap: RepoCap;
+  limit: number;
+  observed: number;
+  /** Queue entries this cap refused over the pass. */
+  waiting: number;
+}
+
+/** What the caps need to know about one queue entry. */
+export interface PrItemRef {
+  id: string;
+  repo: string | null;
+  prNumber: number | null;
+}
+
+/**
+ * The per-repo half of admission, run over one pass of the dispatch queue.
+ *
+ * Counts are node sets rather than integers so a reservation is idempotent:
+ * dispatching a PR that is already building must not spend a second build
+ * slot, and only an item with no PR number yet adds to the open-PR count.
+ * Reserving at all is what stops one pass overshooting a cap — every
+ * `dispatch_pr` is expected to produce a build, and each one that opens a PR
+ * to produce an open PR, neither of which the pass's own load reading can
+ * show. Past this pass the claim each order takes carries the same weight,
+ * so the next tick counts it without help from here.
+ *
+ * An item with no repo is admitted: there is nothing to attribute it to.
+ */
+export class RepoAdmission {
+  readonly #policy: RepoCapPolicy;
+  readonly #open = new Map<string, Set<string>>();
+  readonly #building = new Map<string, Set<string>>();
+  readonly #holds = new Map<string, CapHold>();
+
+  constructor(policy: RepoCapPolicy, load: readonly RepoPrLoad[]) {
+    this.#policy = policy;
+    for (const entry of load) {
+      if (entry.open) RepoAdmission.#add(this.#open, entry.repo, entry.node);
+      if (entry.building)
+        RepoAdmission.#add(this.#building, entry.repo, entry.node);
+    }
+  }
+
+  /**
+   * The cap refusing this item, or null when both admit it. A refusal is
+   * recorded, so `holds` reports what the pass left waiting.
+   *
+   * The open-PR cap gates only an item that would open a *new* PR. An item
+   * whose PR already exists is counted against that cap already, so working
+   * it adds nothing to the pool — and gating it would deadlock the cap,
+   * because nothing could finish to free a slot. The build cap gates every
+   * item; it cannot deadlock, since builds drain without an agent.
+   */
+  admit(item: PrItemRef): CapHold | null {
+    if (item.repo === null) return null;
+    if (item.prNumber === null) {
+      const hold = this.#atLimit(item.repo, 'open-prs');
+      if (hold !== null) return this.#record(hold);
+    }
+    const hold = this.#atLimit(item.repo, 'in-flight-builds');
+    return hold === null ? null : this.#record(hold);
+  }
+
+  /** Spend this item's slots for the rest of the pass. */
+  reserve(item: PrItemRef): void {
+    if (item.repo === null) return;
+    if (item.prNumber === null)
+      RepoAdmission.#add(this.#open, item.repo, item.id);
+    RepoAdmission.#add(this.#building, item.repo, item.id);
+  }
+
+  /** Every cap that refused something, repo then cap. */
+  holds(): CapHold[] {
+    return [...this.#holds.values()].sort(
+      (a, b) => a.repo.localeCompare(b.repo) || a.cap.localeCompare(b.cap)
+    );
+  }
+
+  #atLimit(repo: string, cap: RepoCap): CapHold | null {
+    const observed = (cap === 'open-prs' ? this.#open : this.#building).get(
+      repo
+    )?.size;
+    const limit = limitFor(this.#policy, repo, cap);
+    return (observed ?? 0) >= limit
+      ? {repo, cap, limit, observed: observed ?? 0, waiting: 0}
+      : null;
+  }
+
+  #record(hold: CapHold): CapHold {
+    const key = `${hold.repo} ${hold.cap}`;
+    const held = this.#holds.get(key) ?? hold;
+    held.waiting += 1;
+    this.#holds.set(key, held);
+    return held;
+  }
+
+  static #add(
+    counts: Map<string, Set<string>>,
+    repo: string,
+    node: string
+  ): void {
+    const set = counts.get(repo) ?? new Set<string>();
+    set.add(node);
+    counts.set(repo, set);
+  }
+}

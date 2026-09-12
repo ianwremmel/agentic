@@ -10,6 +10,7 @@ export * from './cursor.mts';
 export * from './refresh.mts';
 export * from './fetch-request.mts';
 export * from './notice.mts';
+export * from './policy.mts';
 export * from './review.mts';
 export {PrEventStore} from './pr-event.mts';
 export type {PendingEvent} from './pr-event.mts';

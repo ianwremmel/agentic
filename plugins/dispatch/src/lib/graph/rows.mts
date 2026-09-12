@@ -70,6 +70,11 @@ export function toClassified(row: Row): ClassifiedItem {
       // The CHECK constraints validated these on the way in; the guards keep
       // the types honest without trusting a cast.
       status: status !== null && isStatus(status) ? status : null,
+      repo: text(row.repo),
+      prNumber:
+        row.pr_number === null || row.pr_number === undefined
+          ? null
+          : integer(row.pr_number),
       targetKind:
         targetKind !== null && isTargetKind(targetKind) ? targetKind : null,
       requiresHuman: integer(row.requires_human) === 1,

@@ -55,6 +55,10 @@ export interface WorkItem {
   title: string;
   /** Null for a bare PR — its lifecycle is its outcome row. */
   status: Status | null;
+  /** `owner/name`, on a PR item that names one; null on a ticket. */
+  repo: string | null;
+  /** The forge's number, once a PR exists; null while the item is unopened. */
+  prNumber: number | null;
   targetKind: TargetKind | null;
   requiresHuman: boolean;
   injected: boolean;

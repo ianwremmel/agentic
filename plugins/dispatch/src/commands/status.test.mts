@@ -6,6 +6,8 @@ import {withDatabase} from '../lib/db/index.mts';
 import {
   EdgeStore,
   MilestoneStore,
+  PolicyStore,
+  PrStore,
   ProjectStore,
   TicketStore,
 } from '../lib/stores/index.mts';
@@ -36,5 +38,39 @@ describe('status', () => {
       /^milestone M1 project=P members=1 .*review-recorded=false/mu
     );
     assert.match(out, /^terminal=false$/mu);
+  });
+
+  it('names the cap holding queued work back', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new PolicyStore(db).setRepoCaps({
+        openPrs: 1,
+        inFlightBuilds: 9,
+        openPrsByRepo: {},
+        inFlightBuildsByRepo: {},
+      });
+      const prs = new PrStore(db);
+      for (const [id, prNumber] of [
+        ['o/r#7', 7],
+        ['o/r#new', null],
+      ] as const) {
+        await prs.upsertPr({
+          id,
+          ticket: null,
+          origin: 'prompt',
+          repo: 'o/r',
+          prNumber,
+          url: null,
+          branch: null,
+          title: id,
+          injected: false,
+          priority: null,
+          updatedAt: null,
+        });
+      }
+    });
+
+    const out = await runCommand(new Command(), {}, env);
+    assert.match(out, /^cap-hold o\/r open-prs=1\/1 waiting=1$/mu);
   });
 });

@@ -5,6 +5,9 @@
   "type": "module",
   "description": "A Claude Code plugin marketplace of agentic workflows for everyday software engineering.",
   "license": "MIT",
+  "workspaces": [
+    "plugins/*"
+  ],
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

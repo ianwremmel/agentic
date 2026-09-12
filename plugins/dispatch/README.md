@@ -72,8 +72,10 @@ own flags: `dispatch <command> --help`.
 
 `bin/dispatch` is a bash wrapper around `src/main.mts`. The wrapper checks that
 Node is present and at least 24.18 — the CLI ships as unbuilt TypeScript and
-relies on Node's native type stripping, so there is no build step and no
-runtime dependencies. `DISPATCH_NODE` picks a specific Node binary.
+relies on Node's native type stripping, so there is no build step.
+`DISPATCH_NODE` picks a specific Node binary. Its one runtime dependency is
+`@linear/sdk`, which a plugin install resolves from the shipped
+`npm-shrinkwrap.json`.
 
 Structured output goes to stdout; error messages go to stderr. A failure
 prints an `error:` line and a `hint:` line saying what to do about it, and

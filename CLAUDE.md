@@ -112,8 +112,7 @@ instead.
 ## TypeScript
 
 Plugin code is TypeScript in `.mts` files, run unbuilt on Node's native type
-stripping — there is no build step and the CLI has no runtime dependencies.
-Consequences worth remembering:
+stripping — there is no build step. Consequences worth remembering:
 
 - Import sibling modules by their real path, extension included
   (`./log/logger.mts`).
@@ -125,6 +124,28 @@ Consequences worth remembering:
   never have to change.
 - `npm run lint`, `npm run typecheck`, `npm test` before pushing; CI runs all
   three. `npm run lint:fix` also formats (Prettier runs as an ESLint rule).
+
+### Runtime dependencies
+
+A bare import in a plugin's shipped code goes in **that plugin's**
+`package.json` `dependencies` — never the root's. The root is an npm workspace,
+so a dependency declared anywhere is hoisted to the root `node_modules` and
+resolves from any plugin's sources by Node's upward walk. Declaring it at the
+root therefore looks identical in this checkout and ships a plugin that cannot
+resolve its own imports.
+
+Then regenerate the plugin's `npm-shrinkwrap.json`. An install resolves a
+plugin's dependencies from the plugin directory itself, and npm never publishes
+`package-lock.json`, so this is the only lockfile that can reach one:
+
+```sh
+d=$(mktemp -d) && cp plugins/<name>/package.json "$d" \
+  && (cd "$d" && npm install --package-lock-only --omit=dev) \
+  && mv "$d/package-lock.json" plugins/<name>/npm-shrinkwrap.json
+```
+
+It has to be generated away from the workspace: run inside `plugins/<name>`
+and npm resolves against the root lockfile instead and writes nothing usable.
 
 ### Standard library first
 

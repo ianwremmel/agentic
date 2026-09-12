@@ -122,6 +122,22 @@ describe('setVersion', () => {
     );
   });
 
+  it('still writes the effective version when a shadowed key precedes it', () => {
+    // The mirror of the case above. A duplicate the regex cannot count sits
+    // *before* the real key, so JSON honors the one that was rewritten and the
+    // manifest comes out correct. Pinned because the match-count guard alone
+    // would reject or mangle this, and the written-value check is what decides
+    // it: the two orderings have to end differently.
+    assert.equal(
+      setVersion('{"\\u0076ersion":"0.0.0","version":"1.0.0"}', '2.0.0'),
+      '{"\\u0076ersion":"0.0.0","version":"2.0.0"}'
+    );
+    assert.equal(
+      setVersion('{"version":0,"version":"1.0.0"}', '2.0.0'),
+      '{"version":0,"version":"2.0.0"}'
+    );
+  });
+
   it('refuses a file with no version key', () => {
     assert.throws(
       () => setVersion('{"name": "dispatch"}\n', '1.0.0'),

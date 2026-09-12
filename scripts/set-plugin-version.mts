@@ -41,13 +41,18 @@ const VERSION_VALUE = /("version"\s*:\s*")([^"]*)(")/g;
  * Replace a manifest's top-level version string.
  *
  * Throws unless the source is a JSON object carrying a `version` string and
- * the text contains exactly one `"version"` key. More than one is ambiguity,
- * not a nuisance: picking either would risk writing the version into a nested
- * object and leaving the real one stale. The result is then parsed back, and
- * both that its version is now the requested one and that no other field
- * moved are asserted — JSON keeps the *last* of two duplicate keys, so
- * checking only that nothing else changed would pass a substitution that hit
- * a shadowed key and left the effective version untouched.
+ * the text contains exactly one literal, string-valued `"version"` key. More
+ * than one is ambiguity, not a nuisance: picking either would risk writing the
+ * version into a nested object and leaving the real one stale.
+ *
+ * The result is then parsed back, and both that its version is now the
+ * requested one and that no other field moved are asserted — JSON keeps the
+ * *last* of two duplicate keys, so checking only that nothing else changed
+ * would pass a substitution that hit a shadowed key and left the effective
+ * version untouched. That parse-back is also what covers the duplicates the
+ * pattern cannot see, a key holding a non-string or spelled with a unicode
+ * escape: whichever one JSON honors, the version either comes out as asked or
+ * the check fails.
  */
 export function setVersion(source: string, version: string): string {
   if (!SEMVER.test(version)) {

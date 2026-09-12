@@ -94,6 +94,35 @@ CLI.
 Add a command by writing a file under `src/commands/` — the folder path is the
 invocation path, and discovery needs no registry.
 
+## Telemetry
+
+The OpenTelemetry SDK starts with every invocation of the CLI and the server,
+configured by the standard `OTEL_*` environment variables. Telemetry is always
+on; only the destination changes. Nothing emits spans or metrics yet — this is
+the SDK and its exporters, and the instrumentation lands on top of it.
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` and all three signals go to that collector,
+with the rest of the `OTEL_*` environment honored: protocol, headers,
+compression, and the per-signal endpoints, each of which overrides the generic
+one for its own signal. With no endpoint set, all three are written to
+**stderr** instead, one line per record — a signal name and a JSON object:
+
+```text
+span {"name":"scheduler.tick","time":"…","trace":"…","kind":"INTERNAL","durationMs":12.4}
+```
+
+stderr, not stdout, on every path: `dispatch mcp` owns stdout as its JSON-RPC
+channel and the CLI's stdout is the output its caller reads. The SDK's own
+diagnostics (`OTEL_LOG_LEVEL`) go to stderr for the same reason, and a signal
+whose exporter is set to `console` gets the stderr exporter above rather than
+OTel's, whose output would land on stdout. `OTEL_SDK_DISABLED=true` turns the
+whole thing off, and `OTEL_SERVICE_NAME` overrides the default `service.name`
+of `dispatch`.
+
+If the OTel packages cannot be loaded — an install whose dependencies were
+never installed — the CLI prints one `telemetry unavailable:` line to stderr
+and runs without telemetry rather than failing.
+
 ## Contributing
 
 See the [root README](../../README.md#contributing) for branch and commit conventions.

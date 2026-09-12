@@ -625,7 +625,13 @@ describe('waiting on an operator response', () => {
     // recoveries; queueing here would run both against one PR.
     assert.deepEqual(await queueOf(db), []);
 
-    await new WorkerStore(db).remove('o/r#9', 'S1');
+    // Relaying re-takes the claim and dates the turn, so the handover runs
+    // against a claimed node: the worker took the event and never reported.
+    await claim(db, 'o/r#9', 'S1');
+    assert.equal(
+      await new WorkerStore(db).remove('o/r#9', 'S1', {turn: NOW}),
+      'removed'
+    );
     assert.deepEqual(await queueOf(db), [{id: 'o/r#9', pass: 'resume'}]);
     await db.close();
   });

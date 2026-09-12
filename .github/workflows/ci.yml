@@ -117,31 +117,6 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      # Trusted publishing is the npm CLI's own feature, and an npm below
-      # 11.5.1 fails at `publish` — after `prepare` has committed the manifests
-      # to main and tagged them, the half-finished state release.config.mjs
-      # describes recovering from. So check first, and check the binary that
-      # will actually publish: @semantic-release/npm depends on npm itself and
-      # runs it through execa with preferLocal, so node_modules/.bin/npm
-      # shadows whatever setup-node installed. `engines` cannot express this —
-      # it only ever sees the runner's npm. The dependency range (^11.6.2)
-      # already holds the local npm above the floor, so this is a tripwire for
-      # the day that stops being true, not a live gate.
-      - name: Check npm supports trusted publishing
-        run: |
-          npm_bin=npm
-          if [ -x node_modules/.bin/npm ]; then
-            npm_bin=node_modules/.bin/npm
-          fi
-          have="$("$npm_bin" --version)"
-          need=11.5.1
-          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
-            echo "::error::$npm_bin is $have, but trusted publishing needs" \
-              "$need or newer. Raise the npm that @semantic-release/npm" \
-              "resolves, or the Node running this job if there is no local npm."
-            exit 1
-          fi
-          echo "publishing with $npm_bin $have"
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

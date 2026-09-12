@@ -80,10 +80,10 @@ Releases are automatic: a push to `main` runs semantic-release, which reads the
 conventional-commit messages since the last `dispatch-v*` tag, writes the new
 number into the plugin's two manifests and commits them back to `main`, tags
 that commit, and then publishes `@ianwremmel/dispatch` to npm — in that order,
-which is what makes a failed publish recoverable. `fix:` and `perf:` are a
-patch, `feat:` a minor, `feat!:` or a `BREAKING CHANGE:` footer a major; every
-other type — `chore:`, `docs:`, `refactor:`, `style:`, `test:`, `build:`,
-`ci:`, `revert:` — publishes nothing. Never hand-edit a `version` field: the
+which is what makes a failed publish recoverable. `fix:`, `perf:` and `revert:`
+are a patch, `feat:` a minor, `feat!:` or a `BREAKING CHANGE:` footer a major;
+every other type — `chore:`, `docs:`, `refactor:`, `style:`, `test:`,
+`build:`, `ci:` — publishes nothing. Never hand-edit a `version` field: the
 release owns it.
 
 Publishing authenticates with [npm trusted

@@ -69,10 +69,10 @@ Plugins currently published:
   since the last `dispatch-v*` tag, writes it into both
   `plugins/dispatch/package.json` and its `plugin.json`, commits those two
   files back to `main`, tags that commit, and publishes last. A hand bump only
-  collides with that. What decides the number is your commit type: `fix:` and
-  `perf:` → patch, `feat:` → minor, `feat!:` or a `BREAKING CHANGE:` footer →
-  major. Every other type — `chore:`, `docs:`, `refactor:`, `style:`, `test:`,
-  `build:`, `ci:`, `revert:` — releases nothing.
+  collides with that. What decides the number is your commit type: `fix:`,
+  `perf:` and `revert:` → patch, `feat:` → minor, `feat!:` or a
+  `BREAKING CHANGE:` footer → major. Every other type — `chore:`, `docs:`,
+  `refactor:`, `style:`, `test:`, `build:`, `ci:` — releases nothing.
 - **Markdown tables.** Use aligned source-level column widths. Pad every
   cell (and the separator row's dashes) to the max width of its column
   so tables are easy to scan in the raw source. New/edited tables should

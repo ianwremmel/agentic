@@ -137,14 +137,17 @@ stripping — there is no build step. Consequences worth remembering:
 
 A bare import in a plugin's shipped code goes in **that plugin's**
 `package.json` `dependencies` — never the root's. The root is an npm workspace,
-so a dependency declared anywhere is hoisted to the root `node_modules` and
-resolves from any plugin's sources by Node's upward walk. Declaring it at the
-root therefore looks identical in this checkout and ships a plugin that cannot
-resolve its own imports.
+so a dependency declared anywhere is normally hoisted to the root
+`node_modules`, where Node's upward walk reaches it from any plugin's sources.
+Declaring it at the root therefore looks identical in this checkout and ships a
+plugin that cannot resolve its own imports. Test files are exempt: they never
+ship, so their tooling imports (`typescript`) stay root devDependencies.
 
-Then regenerate the plugin's `npm-shrinkwrap.json`. An install resolves a
-plugin's dependencies from the plugin directory itself, and npm never publishes
-`package-lock.json`, so this is the only lockfile that can reach one:
+Then regenerate the plugin's `npm-shrinkwrap.json`, which is how its
+dependencies reach an install at all. Claude Code runs `npm ci
+--ignore-scripts` in the install cache, and only when that directory holds a
+lockfile; without one it skips the install rather than the plugin, so the
+plugin loads and every bare import fails at first use:
 
 ```sh
 d=$(mktemp -d) && cp plugins/<name>/package.json "$d" \
@@ -154,6 +157,9 @@ d=$(mktemp -d) && cp plugins/<name>/package.json "$d" \
 
 It has to be generated away from the workspace: run inside `plugins/<name>`
 and npm resolves against the root lockfile instead and writes nothing usable.
+`plugins/dispatch/package.test.mts` covers all of this — an undeclared
+specifier, a stale shrinkwrap, and whether the packed plugin actually installs
+and runs.
 
 ### Standard library first
 

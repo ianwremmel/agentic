@@ -73,9 +73,17 @@ own flags: `dispatch <command> --help`.
 `bin/dispatch` is a bash wrapper around `src/main.mts`. The wrapper checks that
 Node is present and at least 24.18 — the CLI ships as unbuilt TypeScript and
 relies on Node's native type stripping, so there is no build step.
-`DISPATCH_NODE` picks a specific Node binary. Its one runtime dependency is
-`@linear/sdk`, which a plugin install resolves from the shipped
-`npm-shrinkwrap.json`.
+`DISPATCH_NODE` picks a specific Node binary.
+
+Node refuses to strip types from a file under any `node_modules`, so the CLI
+runs only from a plain directory — the plugin install cache, or a checkout —
+with its dependencies installed beneath it. Claude Code does that itself:
+installing the plugin unpacks it into the cache and runs `npm ci
+--ignore-scripts` there, which is why `npm-shrinkwrap.json` ships. Without a
+lockfile it skips the install rather than the plugin, so the plugin loads and
+every bare import fails at first use instead. Changing `dependencies` therefore
+means regenerating the shrinkwrap; `package.test.mts` fails when the two
+disagree.
 
 Structured output goes to stdout; error messages go to stderr. A failure
 prints an `error:` line and a `hint:` line saying what to do about it, and

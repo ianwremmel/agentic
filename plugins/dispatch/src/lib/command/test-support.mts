@@ -2,24 +2,10 @@ import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 
-import {createLogger} from '../logger/index.mts';
-import type {CoreLogger} from '../logger/index.mts';
 import type {Ticket} from '../model/index.mts';
 import type {AbstractCommand} from './abstract-command.mts';
 import {assertEnv} from './env.mts';
 import {parseOptions} from './parse.mts';
-
-/* eslint-disable @typescript-eslint/no-empty-function --
- * A logger that discards every call, so a test's output only ever reflects `io`. */
-const SILENT: CoreLogger = {
-  error: () => {},
-  warn: () => {},
-  info: () => {},
-  debug: () => {},
-  trace: () => {},
-  log: () => {},
-};
-/* eslint-enable @typescript-eslint/no-empty-function */
 
 /**
  * Run a command the way a transport would, and return what it wrote to `io`.
@@ -38,7 +24,6 @@ export async function runCommand(
   assertEnv(command.env, env);
   let captured = '';
   await command.run(parsed, {
-    log: createLogger(SILENT),
     env,
     io: {
       write: (chunk) => {

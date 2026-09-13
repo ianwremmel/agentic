@@ -1,5 +1,3 @@
-import type {Logger} from '../logger/index.mts';
-
 export type OptionType = 'string' | 'number' | 'boolean';
 
 export interface Option {
@@ -50,19 +48,18 @@ export type ParsedOptions<O extends OptionsRecord> = {
 };
 
 /**
- * The command's response channel, distinct from `log` (diagnostics). The cli
- * writes it to stdout; the MCP server captures it as the tool result.
+ * The command's response channel, distinct from telemetry. The cli writes it to
+ * stdout; the MCP server captures it as the tool result.
  */
 export interface Io {
   write(chunk: string): void;
 }
 
 /**
- * What a command is handed at run time. The logger is injected so commands stay
- * callable outside a process; `env` is the source for `assertEnv`.
+ * What a command is handed at run time. `env` is the source for `assertEnv`;
+ * diagnostics go to `log` in `lib/telemetry`, which no transport injects.
  */
 export interface CommandContext {
-  readonly log: Logger;
   readonly env: NodeJS.ProcessEnv;
   readonly io: Io;
   /**

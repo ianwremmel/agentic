@@ -1,7 +1,7 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 
-import type {Logger} from '../logger/index.mts';
+import {log} from '../telemetry/index.mts';
 
 const run = promisify(execFile);
 
@@ -30,21 +30,19 @@ const TIMEOUT_MS = 20_000;
 export async function prStatusPayload(
   repo: string,
   prNumber: number,
-  opts: {script: string; log?: Logger | undefined}
+  script: string
 ): Promise<string | null> {
   try {
-    const {stdout} = await run(
-      opts.script,
-      ['--repo', repo, String(prNumber)],
-      {timeout: TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024}
-    );
+    const {stdout} = await run(script, ['--repo', repo, String(prNumber)], {
+      timeout: TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    });
     const payload = stdout.trim();
     return payload === '' ? null : payload;
   } catch (error) {
-    opts.log?.warn('could not read the pr-status payload', {
-      repo,
+    log.warnException('could not read the pr-status payload', error, {
       pr: prNumber,
-      error: error instanceof Error ? error.message : String(error),
+      repo,
     });
     return null;
   }

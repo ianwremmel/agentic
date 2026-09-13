@@ -4,8 +4,6 @@ import {describe, it} from 'node:test';
 
 import {runCli} from './cli.mts';
 import {discover} from '../command/index.mts';
-import {createLogger} from '../logger/index.mts';
-import type {CoreLogger} from '../logger/index.mts';
 
 const FIXTURES = new URL('../command/__fixtures__/commands/', import.meta.url);
 
@@ -20,15 +18,6 @@ function capture(): {stream: Writable; text: () => string} {
   return {stream, text: () => chunks.join('')};
 }
 
-const noopLogger: CoreLogger = {
-  error: () => undefined,
-  warn: () => undefined,
-  info: () => undefined,
-  debug: () => undefined,
-  trace: () => undefined,
-  log: () => undefined,
-};
-
 async function run(argv: string[], env: NodeJS.ProcessEnv = {}) {
   const tree = await discover(FIXTURES);
   const out = capture();
@@ -36,7 +25,6 @@ async function run(argv: string[], env: NodeJS.ProcessEnv = {}) {
   const code = await runCli({
     argv,
     tree,
-    log: createLogger(noopLogger),
     env,
     stdout: out.stream,
     stderr: err.stream,

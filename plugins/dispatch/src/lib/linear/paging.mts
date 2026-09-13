@@ -53,10 +53,16 @@ export function readPage<TNode>(
   ensure(info !== null && info !== undefined, () =>
     buildMalformedError(connection)
   );
+  // `hasNextPage` is the one field whose absence has to be refused rather than
+  // read as `false`: a page that cannot say whether more follow ends the walk
+  // and hands back whatever was collected so far as the whole answer.
+  ensure(typeof info.hasNextPage === 'boolean', () =>
+    buildMalformedError(connection)
+  );
   return {
     nodes,
     pageInfo: {
-      hasNextPage: info.hasNextPage === true,
+      hasNextPage: info.hasNextPage,
       endCursor: info.endCursor ?? null,
     },
   };

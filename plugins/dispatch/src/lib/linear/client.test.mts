@@ -138,6 +138,26 @@ describe('LinearClient.listProjects', () => {
     );
   });
 
+  // Read as `false`, this ends the walk and hands back the pages collected so
+  // far as the whole answer — a short list with nothing to mark it short.
+  it('refuses a page whose pageInfo cannot say whether another follows', async () => {
+    const {execute} = scripted([
+      {
+        projects: {
+          nodes: [{id: 'p1', name: 'One'}],
+          pageInfo: {endCursor: 'C'},
+        },
+      },
+    ]);
+
+    await assert.rejects(
+      new LinearClient(execute).listProjects(),
+      (error: unknown) =>
+        error instanceof EnvironmentError &&
+        error.message.includes('without the projects')
+    );
+  });
+
   it('refuses an answer missing the connection entirely', async () => {
     const {execute} = scripted([{}]);
 

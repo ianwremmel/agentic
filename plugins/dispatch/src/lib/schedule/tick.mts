@@ -184,10 +184,11 @@ export async function pushObservations(
     // otherwise the event falls through to cold re-dispatch, which claims.
     //
     // Only a claim this relay actually took carries a `turn`. A refreshed one
-    // belonged to a worker that never yielded — a ticket-worker mid-run, say,
-    // whose ticket changed under it — and that agent is still executing, so
-    // naming its claim would hand the session a token for a live turn. The
-    // event still relays; there is simply nothing to hand over afterwards.
+    // belongs to a worker that has not yielded since that claim began — a
+    // ticket-worker mid-run, say, whose ticket changed under it — and that
+    // agent is still executing, so minting a second token for it would hand
+    // the session two ways to settle one turn. The event still relays; the
+    // token already outstanding on that claim is what settles it.
     const relayTarget = async (
       ref: string | null,
       node: string

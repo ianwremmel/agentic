@@ -215,9 +215,10 @@ names no reachable worker, and the session dispatches accordingly.
 outcome. The session hands it back to `dispatch worker rm` when that agent
 returns, and only the turn it names is removable — a worker has no heartbeat of
 its own, so a return reported against a stale turn would otherwise strand the
-live one. A relay that merely refreshed a claim carries no `turn`: that claim
-belongs to a worker still executing, which nothing may hand over. Handing over
-a turn no relay dated is an operator's call, via `--force`.
+live one. A relay that merely refreshed a claim carries no `turn`, because it
+began none — the turn already outstanding on that claim is the one that settles
+it, so a refresh MUST NOT re-date the claim it refreshes. Handing over a turn no
+relay dated is an operator's call, via `--force`.
 
 Bodies MUST NOT be assembled from raw external text, and MUST NOT cost a
 per-event subprocess: the server renders a PR/CI event body itself from its

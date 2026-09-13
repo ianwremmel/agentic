@@ -19,10 +19,9 @@ const MANIFEST = new URL(
 /**
  * The version `plugin.json` declares, or `0.0.0` when it cannot be read.
  *
- * An unreadable manifest is not worth failing a command over, and it is not
- * hypothetical: semantic-release writes this file, so a half-finished release
- * can leave it missing or truncated. `serverInfo()` in `lib/mcp/mcp.mts` reads
- * the same file the same way for the MCP handshake.
+ * semantic-release writes this file, so a half-finished release can leave it
+ * truncated — not worth failing a command over. `serverInfo()` in
+ * `lib/mcp/mcp.mts` reads it the same way.
  */
 export async function pluginVersion(manifest: URL = MANIFEST): Promise<string> {
   try {
@@ -36,11 +35,9 @@ export async function pluginVersion(manifest: URL = MANIFEST): Promise<string> {
 }
 
 /**
- * The identity every span, metric, and log record carries.
- *
- * These are defaults rather than the final word: `NodeSDK` merges its resource
- * detectors over this one, so `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`
- * still win, and `process.*` and `host.*` are filled in by detection.
+ * The identity every record carries. Defaults only: `NodeSDK` merges its
+ * detectors over this, so `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`
+ * still win.
  */
 export async function telemetryResource(): Promise<Resource> {
   return resourceFromAttributes({

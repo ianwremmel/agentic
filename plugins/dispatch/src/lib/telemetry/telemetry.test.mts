@@ -1,117 +1,309 @@
 import assert from 'node:assert/strict';
-import {execFile, spawn} from 'node:child_process';
-import {once} from 'node:events';
-import {copyFile, mkdtemp, rm, writeFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
-import {Writable} from 'node:stream';
-import {pathToFileURL} from 'node:url';
-import {after, describe, it} from 'node:test';
+import {execFile} from 'node:child_process';
+import {describe, it} from 'node:test';
 import {promisify} from 'node:util';
 
-import {childEnv} from './test-support.mts';
+import {metrics, trace} from '@opentelemetry/api';
+import {logs} from '@opentelemetry/api-logs';
+import {emptyResource} from '@opentelemetry/resources';
+
+import {capture, childEnv, parse, withoutOtelEnv} from './test-support.mts';
+import {
+  destinationFor,
+  otlpConfigured,
+  startTelemetry,
+  stopping,
+  telemetryPipeline,
+} from './telemetry.mts';
 
 const execFileAsync = promisify(execFile);
 
-const HERE = new URL('./', import.meta.url);
-const INDEX = new URL('./index.mts', HERE).href;
+const INDEX = new URL('./index.mts', import.meta.url).href;
 
-/**
- * Enough stderr to overflow a pipe buffer several times over, so the writes
- * are queued rather than handed straight to the OS. The body is padded to
- * reach that with a record count that still runs quickly.
- */
-const RECORDS = 5_000;
-const PADDING = 'x'.repeat(400);
+const ENDPOINTS = [
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT',
+];
 
-let scratch: string | undefined;
+const COLLECTOR = {OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4318'};
 
-after(async () => {
-  if (scratch) await rm(scratch, {recursive: true, force: true});
-});
-
-/**
- * A copy of `telemetry.mts` whose one dynamic import throws.
- *
- * In-process there is no way to make an already-resolvable import fail, and
- * stubbing the loader instead would only test the stub. `stream.mts` is copied
- * alongside because `telemetry.mts` imports it statically — deliberately, it
- * is the one sibling that reaches no OTel package — so the copy stays
- * faithful.
- */
-async function brokenSdkCopy(): Promise<string> {
-  scratch ??= await mkdtemp(join(tmpdir(), 'dispatch-telemetry-'));
-  for (const name of ['telemetry.mts', 'stream.mts']) {
-    await copyFile(new URL(`./${name}`, HERE), join(scratch, name));
-  }
-  await writeFile(
-    join(scratch, 'sdk.mts'),
-    'throw new Error("Cannot find package \'@opentelemetry/sdk-node\'");\n'
-  );
-  return pathToFileURL(join(scratch, 'telemetry.mts')).href;
-}
-
-/** That copy, run out-of-process so its streams are real. */
-async function withBrokenSdk(): Promise<{stderr: string; stdout: string}> {
-  const copy = await brokenSdkCopy();
-
-  return execFileAsync(
-    process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `const {startTelemetry} = await import(${JSON.stringify(copy)});
-       const telemetry = await startTelemetry({stream: process.stderr});
-       await telemetry.shutdown();
-       process.stdout.write('survived\\n');`,
-    ],
-    {env: childEnv()}
-  );
-}
-
-describe('startTelemetry', () => {
-  it('hands back a working handle when the SDK cannot be loaded', async () => {
-    // Claude Code installs a plugin's dependencies only when the directory it
-    // unpacks into holds both a manifest and a lockfile, and it decides
-    // whether to re-unpack by comparing version strings — so a release that
-    // reuses a number leaves a payload behind whose node_modules was never
-    // created. On an install like that this is the difference between losing
-    // telemetry and losing every `dispatch` command.
-    const {stderr, stdout} = await withBrokenSdk();
-
-    assert.equal(stdout, 'survived\n');
-    assert.match(stderr, /^telemetry unavailable: .*sdk-node/u);
+describe('otlpConfigured', () => {
+  it('is false with nothing set', () => {
+    assert.equal(otlpConfigured({}), false);
   });
 
-  it('survives a stream that fails the write it reports on', async () => {
-    // The fallback is the one path that runs before anything else has touched
-    // the stream, so it cannot rely on an exporter having absorbed its errors
-    // already. A failing write emits `error`, and an unhandled one would crash
-    // the CLI from inside the code whose whole job is to keep telemetry from
-    // crashing the CLI — an uncaught exception here fails this test.
-    const {startTelemetry} = (await import(await brokenSdkCopy())) as {
-      startTelemetry: (opts: {stream: Writable}) => Promise<{
-        shutdown: () => Promise<void>;
-      }>;
-    };
-    const stream = new Writable({
-      write(_chunk, _encoding, callback) {
-        callback(new Error('EPIPE'));
+  for (const name of ENDPOINTS) {
+    it(`is true on ${name} alone`, () => {
+      // A per-signal endpoint counts: the signals without one fall back to the
+      // OTLP default, per spec. Reading only the generic variable would send
+      // the rest to stderr and ignore the endpoint that was set.
+      assert.equal(otlpConfigured({[name]: 'http://collector:4318'}), true);
+    });
+  }
+
+  it('treats an empty value as unset', () => {
+    // Unsetting an inherited variable in a shell or container spec means
+    // assigning it nothing, which has to read as "no collector".
+    assert.equal(otlpConfigured({OTEL_EXPORTER_OTLP_ENDPOINT: ''}), false);
+  });
+
+  it('treats a whitespace-only value as unset', () => {
+    // The SDK's own environment reader trims before testing for empty, so
+    // without this the module hands a signal to an endpoint the SDK will not
+    // use, and stderr never sees it.
+    assert.equal(otlpConfigured({OTEL_EXPORTER_OTLP_ENDPOINT: '  '}), false);
+  });
+});
+
+describe('destinationFor', () => {
+  it('goes to the stream with no collector and no selector', () => {
+    assert.equal(destinationFor({}, 'traces'), 'stream');
+  });
+
+  it('goes to the SDK with a collector and no selector', () => {
+    assert.equal(destinationFor(COLLECTOR, 'traces'), 'sdk');
+  });
+
+  it('turns a signal off when its selector says none', () => {
+    // `none` is how the spec disables one signal. Naming a stderr processor
+    // for it anyway would export telemetry that was explicitly switched off.
+    assert.equal(
+      destinationFor({OTEL_TRACES_EXPORTER: 'none'}, 'traces'),
+      'off'
+    );
+  });
+
+  it('serves console from the stream even with a collector configured', () => {
+    assert.equal(
+      destinationFor({...COLLECTOR, OTEL_TRACES_EXPORTER: 'console'}, 'traces'),
+      'stream'
+    );
+  });
+
+  it('keeps the real exporter when a selector pairs it with console', () => {
+    // Serving console means naming the processor, which turns off NodeSDK's
+    // environment handling for the whole signal — so `otlp,console` served
+    // from the stream would silently drop the collector.
+    assert.equal(
+      destinationFor(
+        {...COLLECTOR, OTEL_TRACES_EXPORTER: 'otlp,console'},
+        'traces'
+      ),
+      'sdk'
+    );
+  });
+
+  it('reads each signal from its own selector', () => {
+    const env = {OTEL_LOGS_EXPORTER: 'none'};
+    assert.deepEqual(
+      (['logs', 'metrics', 'traces'] as const).map((signal) =>
+        destinationFor(env, signal)
+      ),
+      ['off', 'stream', 'stream']
+    );
+  });
+
+  it('does not match a name that merely contains console', () => {
+    assert.equal(
+      destinationFor({OTEL_TRACES_EXPORTER: 'consolefoo'}, 'traces'),
+      'sdk'
+    );
+  });
+});
+
+describe('telemetryPipeline', () => {
+  const resource = emptyResource();
+
+  it('names a processor for all three signals when there is no collector', () => {
+    const {stream} = capture();
+
+    const {config} = telemetryPipeline({env: {}, resource, stream});
+
+    assert.equal(config.spanProcessors?.length, 1);
+    assert.equal(config.metricReaders?.length, 1);
+    assert.equal(config.logRecordProcessors?.length, 1);
+  });
+
+  it('names no processor at all when a collector is configured', () => {
+    // Naming one turns off NodeSDK's env handling for that signal. Leaving all
+    // three unnamed is what makes OTEL_EXPORTER_OTLP_PROTOCOL, the per-signal
+    // endpoints, headers, and compression work without this module knowing
+    // they exist.
+    const {stream} = capture();
+
+    const {config} = telemetryPipeline({env: COLLECTOR, resource, stream});
+
+    assert.deepEqual(Object.keys(config), ['resource']);
+  });
+
+  it('serves a signal that asked for console from the stream', () => {
+    // Every Console*Exporter NodeSDK builds for that selector writes through
+    // `console.dir` to stdout, which `dispatch mcp` owns. The signal gets the
+    // stream exporter; the other two still go to the collector.
+    const {stream} = capture();
+
+    const {config} = telemetryPipeline({
+      env: {...COLLECTOR, OTEL_TRACES_EXPORTER: 'console'},
+      resource,
+      stream,
+    });
+
+    assert.equal(config.spanProcessors?.length, 1);
+    assert.deepEqual(Object.keys(config).sort(), [
+      'resource',
+      'spanProcessors',
+    ]);
+  });
+
+  it('names nothing for a signal switched off', () => {
+    const {stream} = capture();
+
+    const {config} = telemetryPipeline({
+      env: {OTEL_TRACES_EXPORTER: 'none'},
+      resource,
+      stream,
+    });
+
+    assert.equal(config.spanProcessors, undefined);
+    assert.equal(config.logRecordProcessors?.length, 1);
+  });
+
+  it('takes the metric reader cadence from the environment', () => {
+    // `PeriodicExportingMetricReader`, unlike the SDK's own construction of
+    // it, does not read these — so without this, moving metrics to stderr
+    // silently resets the interval to the 60s default.
+    const {stream} = capture();
+
+    const {config} = telemetryPipeline({
+      env: {OTEL_METRIC_EXPORT_INTERVAL: '250'},
+      resource,
+      stream,
+    });
+
+    assert.equal(
+      (config.metricReaders?.[0] as unknown as {_exportInterval: number})
+        ._exportInterval,
+      250
+    );
+  });
+
+  it('lists the processors whose own shutdown does not flush them', () => {
+    // The two simple processors go straight to the exporter on shutdown
+    // without awaiting what they hold. The periodic metric reader does collect
+    // on shutdown, so it is not listed.
+    const {stream} = capture();
+
+    const {flushables} = telemetryPipeline({env: {}, resource, stream});
+
+    assert.equal(flushables.length, 2);
+  });
+});
+
+describe('stopping', () => {
+  it('flushes every processor it owns before the SDK goes down', async () => {
+    const order: string[] = [];
+    const flushable = (name: string): {forceFlush: () => Promise<void>} => ({
+      forceFlush: async () => {
+        await Promise.resolve();
+        order.push(name);
       },
     });
 
-    const telemetry = await startTelemetry({stream});
-    await telemetry.shutdown();
+    await stopping(
+      {
+        shutdown: async () => {
+          await Promise.resolve();
+          order.push('sdk');
+        },
+      },
+      [flushable('logs'), flushable('traces')],
+      1_000
+    );
 
-    assert.equal(stream.listenerCount('error'), 1);
+    assert.deepEqual(order, ['logs', 'traces', 'sdk']);
+  });
+
+  it('stops the SDK even when a flush fails', async () => {
+    // A stream that cannot be written to is no reason to leave the SDK running.
+    let stopped = false;
+
+    await stopping(
+      {
+        shutdown: async () => {
+          await Promise.resolve();
+          stopped = true;
+        },
+      },
+      [{forceFlush: () => Promise.reject(new Error('EPIPE'))}],
+      1_000
+    );
+
+    assert.equal(stopped, true);
+  });
+
+  it('gives up on a flush that never settles', async () => {
+    // Without the deadline this test hangs, which is what a command whose
+    // flush never settles would do.
+    await stopping(
+      {shutdown: () => new Promise<void>(() => undefined)},
+      [{forceFlush: () => new Promise<void>(() => undefined)}],
+      10
+    );
+  });
+});
+
+/**
+ * Starting the SDK registers the process-wide OTel globals and a second
+ * registration is refused, so the in-process case gets exactly one test. The
+ * subprocess tests below each get their own process.
+ */
+describe('startTelemetry', () => {
+  it('puts all three signals on the stream and flushes them on shutdown', async () => {
+    // `withoutOtelEnv` because `startTelemetry` reads `process.env` — the only
+    // environment NodeSDK reads. A host OTEL_LOG_LEVEL would add diag lines to
+    // the stream under assertion and a host endpoint would switch the branch.
+    await withoutOtelEnv(async () => {
+      const {lines, stream} = capture();
+
+      const telemetry = await startTelemetry({stream});
+
+      trace.getTracer('probe').startSpan('work').end();
+      metrics.getMeter('probe').createCounter('orders').add(1);
+      logs.getLogger('probe').emit({body: 'armed', severityText: 'INFO'});
+
+      // Nothing is written yet, and not only because the metric reader runs on
+      // a timer: `hostDetector` resolves `host.id` asynchronously and the span
+      // and log processors hold their records until the resource is complete.
+      // A command short enough to finish first emits all three or none.
+      assert.deepEqual(lines(), []);
+
+      // Several exit paths reach the shutdown, so it has to be one flush
+      // rather than several — the SDK refuses the second with `Cannot call
+      // shutdown twice`.
+      const flush = telemetry.shutdown();
+      assert.equal(telemetry.shutdown(), flush);
+      await flush;
+
+      assert.deepEqual(
+        lines()
+          .map((line) => parse(line))
+          .map(
+            ({fields, signal}) =>
+              `${signal} ${String(fields.name ?? fields.severity)}`
+          )
+          .sort(),
+        ['log INFO', 'metric orders', 'span work']
+      );
+    });
   });
 
   it('puts every signal on the real stderr and nothing on stdout', async () => {
     // Out of process against the real streams, which is the only place the
-    // routing is actually observable — an in-process test is handed a stream
-    // and cannot tell that `console` was not used. It also covers the flush
-    // against a real pipe, where a write is asynchronous and the buffer is
-    // lost if the process ends without waiting.
+    // routing is observable — an in-process test is handed a stream and cannot
+    // tell that `console` was not used. It also covers the flush against a
+    // real pipe, where a write is asynchronous.
     const {stderr, stdout} = await execFileAsync(
       process.execPath,
       [
@@ -141,12 +333,9 @@ describe('startTelemetry', () => {
   });
 
   it('keeps a signal that asked for console off stdout', async () => {
-    // `console` is a value NodeSDK accepts in its per-signal selectors, and
-    // every Console*Exporter it builds writes through `console.dir` to stdout
-    // — which `dispatch mcp` owns as its JSON-RPC channel. Reached here with a
-    // collector also configured, which is the case where NodeSDK is otherwise
-    // left to build the exporters from the environment: the span comes back on
-    // stderr while the other two signals go to the collector.
+    // Reached with a collector also configured, which is the case where
+    // NodeSDK is otherwise left to build the exporters from the environment:
+    // the span comes back on stderr while the other two go to the collector.
     const {stderr, stdout} = await execFileAsync(
       process.execPath,
       [
@@ -173,57 +362,6 @@ describe('startTelemetry', () => {
         .filter((line) => line.startsWith('span '))
         .map((line) => line.slice(0, 4)),
       ['span']
-    );
-  });
-
-  it('loses nothing when the process is killed the moment the flush returns', async () => {
-    // End to end over the whole chain: `flushOnExit` re-raises the signal as
-    // soon as `shutdown()` resolves, so every link between `emit()` and the
-    // bytes leaving has to have finished by then. It does not isolate which
-    // link — `stream.test.mts` pins the drain and `sdk.test.mts` pins the
-    // force-flush — but it is the only test that runs all of them against a
-    // real pipe and a real signal.
-    const child = spawn(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        `const {flushOnExit, startTelemetry} = await import(${JSON.stringify(INDEX)});
-         const {logs} = await import('@opentelemetry/api-logs');
-         const telemetry = await startTelemetry({stream: process.stderr});
-         flushOnExit(telemetry, process.stderr);
-         const logger = logs.getLogger('probe');
-         for (let i = 0; i < ${String(RECORDS)}; i++) {
-           logger.emit({
-             body: 'record ' + i + ' ' + ${JSON.stringify(PADDING)},
-             severityText: 'INFO',
-           });
-         }
-         process.stdout.write('ready\\n');
-         setInterval(() => undefined, 1_000);`,
-      ],
-      {env: childEnv(), stdio: ['ignore', 'pipe', 'pipe']}
-    );
-
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    child.stdout.setEncoding('utf8');
-    for await (const chunk of child.stdout) {
-      if (String(chunk).includes('ready')) break;
-    }
-    child.kill('SIGTERM');
-    const [code, signal] = (await once(child, 'exit')) as [
-      number | null,
-      string | null,
-    ];
-
-    assert.deepEqual({code, signal}, {code: null, signal: 'SIGTERM'});
-    assert.equal(
-      stderr.split('\n').filter((line) => line.startsWith('log ')).length,
-      RECORDS
     );
   });
 });

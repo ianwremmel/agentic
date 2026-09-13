@@ -1,19 +1,19 @@
 /**
  * Exporters that render each signal as one line on a stream — bind them to
- * stderr.
+ * stderr. A line is a signal name and one JSON object: `span {"name":"…",…}`.
+ * The name goes inside the object because a span name may contain a newline or
+ * the delimiter.
  *
- * OTel ships `ConsoleSpanExporter`, `ConsoleMetricExporter`, and
- * `ConsoleLogRecordExporter`, and none of them can be used here: they write
- * through `console.log`/`console.dir`, which go to stdout. `dispatch mcp` owns
- * stdout as its JSON-RPC channel and the CLI's stdout is the command output
- * agents read, so one line in either stream is a parse error for whatever is
- * reading it.
+ * Not subclasses of OTel's `Console*Exporter`: all three render through a
+ * method their public typings declare `private`, `ConsoleMetricExporter`
+ * dispatches to a `private static` by class name so an override is
+ * unreachable, and their `forceFlush`/`shutdown` are no-ops where these need
+ * `drained`.
  *
- * A line is a signal name and one JSON object: `span {"name":"…",…}`. The name
- * goes inside the object rather than into the prefix because a span name is
- * arbitrary text — one containing a newline would otherwise split the record
- * across two lines, and one containing the delimiter would make it ambiguous.
- * `name` is written first so it is still the first thing read.
+ * Resource attributes are not on the line. They are identical for every record
+ * in the process and are on the collector path regardless; repeating
+ * `service.name` and the whole of `OTEL_RESOURCE_ATTRIBUTES` per record would
+ * bury the record itself.
  */
 import type {Writable} from 'node:stream';
 
@@ -64,13 +64,9 @@ function line(
 const OK: ExportResult = {code: ExportResultCode.SUCCESS};
 
 /**
- * The flush and shutdown half of all three exporters.
- *
- * Nothing reports a failed write, because a stream that cannot be written to
- * has no second channel to complain on and telling the SDK the export failed
- * only buys a retry into the same stream. What both calls do owe the caller is
- * waiting for the bytes: `shutdown()` is the last thing that runs before a
- * signalled process is killed.
+ * The flush and shutdown half of all three exporters. Neither reports a failed
+ * write: a stream that cannot be written to has no second channel to complain
+ * on, and reporting the failure only buys a retry into the same stream.
  */
 function flushing(stream: Writable): {
   forceFlush(): Promise<void>;
@@ -106,6 +102,10 @@ export function stderrSpanExporter(stream: Writable): SpanExporter {
               : named(SpanStatusCode, span.status.code),
           message: span.status.message,
           attributes: present(span.attributes),
+          // `recordException` is an event, so dropping events would drop every
+          // exception attached to a span.
+          events: span.events.length === 0 ? undefined : span.events,
+          links: span.links.length === 0 ? undefined : span.links,
           scope: span.instrumentationScope.name,
         });
       }

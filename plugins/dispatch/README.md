@@ -96,32 +96,28 @@ invocation path, and discovery needs no registry.
 
 ## Telemetry
 
-The OpenTelemetry SDK starts with every invocation of the CLI and the server,
-configured by the standard `OTEL_*` environment variables. Telemetry is always
-on; only the destination changes. Nothing emits spans or metrics yet — this is
-the SDK and its exporters, and the instrumentation lands on top of it.
+The OpenTelemetry SDK starts on every CLI and server invocation, configured by
+the standard `OTEL_*` variables. Nothing is instrumented yet.
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` and all three signals go to that collector,
-with the rest of the `OTEL_*` environment honored: protocol, headers,
-compression, and the per-signal endpoints, each of which overrides the generic
-one for its own signal. With no endpoint set, all three are written to
-**stderr** instead, one line per record — a signal name and a JSON object:
+Set any OTLP endpoint — the generic `OTEL_EXPORTER_OTLP_ENDPOINT` or a
+per-signal one — and all three signals go to the SDK's own exporters, with the
+rest of the `OTEL_*` environment honored. A signal without its own endpoint
+falls back to the OTLP default, not to stderr. With no endpoint set anywhere,
+all three go to stderr, one line per record:
 
 ```text
 span {"name":"scheduler.tick","time":"…","trace":"…","kind":"INTERNAL","durationMs":12.4}
 ```
 
-stderr, not stdout, on every path: `dispatch mcp` owns stdout as its JSON-RPC
-channel and the CLI's stdout is the output its caller reads. The SDK's own
-diagnostics (`OTEL_LOG_LEVEL`) go to stderr for the same reason, and a signal
-whose exporter is set to `console` gets the stderr exporter above rather than
-OTel's, whose output would land on stdout. `OTEL_SDK_DISABLED=true` turns the
-whole thing off, and `OTEL_SERVICE_NAME` overrides the default `service.name`
-of `dispatch`.
+Per signal, `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` overrides that: `none`
+disables the signal, and `console` writes it to stderr in the form above. A
+selector that pairs `console` with a real exporter gets the real one and a
+warning — serving `console` means naming the exporter, which turns off the
+environment handling for that whole signal.
 
-If the OTel packages cannot be loaded — an install whose dependencies were
-never installed — the CLI prints one `telemetry unavailable:` line to stderr
-and runs without telemetry rather than failing.
+Never stdout, which `dispatch mcp` uses for JSON-RPC and the CLI for command
+output. That covers `OTEL_LOG_LEVEL` diagnostics and the `console` selector,
+both of which OTel would otherwise put there.
 
 ## Contributing
 

@@ -1,51 +1,27 @@
 # Telemetry
 
-`startTelemetry({stream})` in `telemetry.mts` starts the OpenTelemetry SDK and
-hands back a `shutdown()`. `src/main.mts` calls it once, before command
-discovery, shuts it down in a `finally`, and wraps both in `flushOnExit` for
-the exit paths no `finally` sees. Nothing is instrumented yet — spans,
-instruments, and log records arrive with the two PRs after this one.
-
-Four constraints shape the files here. Each is a trap rather than a preference,
-and each has a test named after it.
+`startTelemetry({stream})` starts the OTel SDK and returns `shutdown()`.
+`src/main.mts` calls it once and shuts it down in a `finally`. Nothing is
+instrumented yet.
 
 **Everything goes to stderr.** `dispatch mcp` serves JSON-RPC on stdout and the
-CLI's stdout is the output agents read back. `exporters.mts` implements
-`SpanExporter`, `PushMetricExporter`, and `LogRecordExporter` against a stream
-because OTel's own `Console*Exporter` classes write through `console` to
-stdout, and `diag.mts` exists for the same reason `DiagConsoleLogger` cannot be
-used. Two `OTEL_*` values would put the SDK's output back on stdout —
-`OTEL_LOG_LEVEL`, and `console` in a per-signal exporter selector — so
-`startReservingStdout` in `sdk.mts` keeps both from `NodeSDK` for the length of
-startup. Read that docblock before changing the order of anything in it.
-`main.test.mts` asserts on the CLI's real stdout, which is the only place the
-ordering is visible.
+CLI's stdout is what agents read back. OTel's `Console*Exporter` and
+`DiagConsoleLogger` write to stdout, so `exporters.mts` and `diag.mts` replace
+them. `OTEL_LOG_LEVEL` and a `console` exporter selector put the SDK's output
+back there, so `startReservingStdout` withholds both from `NodeSDK` during
+startup. `main.test.mts` asserts on the CLI's real stdout.
 
-**Only `telemetry.mts`, `exit.mts`, and `stream.mts` may be imported
-statically.** Everything else reaches an `@opentelemetry/*` package, and
-`startTelemetry` loads it through a dynamic import so that a plugin install
-whose `node_modules` was never created loses telemetry rather than every
-command. That is why `index.mts` re-exports the first two and nothing else, and
-why `stream.mts` — which both of them import, and which is what keeps a broken
-stderr from crashing the CLI — has to stay free of OTel too.
+**A signal is named in the config only when it goes to the stream.** Naming one
+turns off `NodeSDK`'s whole environment handling for that signal — endpoints,
+headers, protocol, `none` — which is why `destinationFor` decides per signal
+and why `console` alongside a real exporter loses to it.
 
-**A flush is three separate things, and `sdk.shutdown()` is only one of them.**
-The metric reader exports on a timer, and the span and log processors export
-each record as it arrives — but not before the resource's asynchronous
-attributes resolve, and `host.id` is a file read. Their `shutdown()` goes
-straight to the exporter without awaiting the records they are still holding;
-only `forceFlush()` waits. So `stop()` force-flushes this module's own
-processors first, and the stream exporters' flush waits for the bytes to reach
-the OS, because a signal's re-raise does not wait for a pipe.
+**`sdk.shutdown()` is not a flush.** The simple processors can still be holding
+a record whose export is waiting on the resource's asynchronous attributes;
+only `forceFlush()` waits for those, so `stopping` calls it first. Both it and
+`drained` are bounded, so a stream nobody reads costs a timeout, not a hang.
 
-**Nothing here may throw.** Exporting runs inside the caller's own `emit()` or
-`end()`, so a record carrying something `JSON.stringify` refuses would take
-down the code being observed — hence `encode.mts`. A failed write emits
-`error`, and an unhandled one ends the process — hence `forgiving` in
-`stream.mts`. And a flush that never settles would hang the command, so
-`shutdown()` is bounded.
-
-The exporter decision is two predicates: `otlpConfigured` and `wantsConsole`,
-both in `sdk.mts`. With a collector named and no `console` asked for,
-`telemetryPipeline` passes no processors at all, which is what leaves `NodeSDK`
-to honor the rest of the `OTEL_*` environment.
+**Nothing here may throw, once started.** Exporting runs inside the caller's
+`emit()` or `end()`, hence `encode.mts` and `forgiving` in `stream.mts`.
+Failing to start is the opposite: the OTel imports are static, so a broken
+install fails the CLI rather than quietly losing telemetry.

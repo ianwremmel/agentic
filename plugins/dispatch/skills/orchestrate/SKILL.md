@@ -47,31 +47,17 @@ Add `--rebuild` only when the operator asks for a rebuild from scratch.
 | `project_complete`         | Announce it. Stop once every project the operator named is complete.                             |
 
 **Relay events.** Some events carry an `agent` meta key instead of an
-instruction from the table: SendMessage the event verbatim to that ref, note
-its `item` and `turn` against that ref, and go back to waiting. Keep every turn
-you noted until you have reported it — a newer relay that carries its own
-`turn` is a second turn to report, never a replacement for one still
-outstanding, and reporting a completion under the wrong turn strands the agent
-still running under the other. A non-instruction event with no `agent` key
-needs nothing from you.
+instruction from the table: SendMessage the event verbatim to that ref, note its
+`item` and `turn` against that ref, and go back to waiting. Every noted turn
+stands until you report it — a later relay's turn is another to report, not a
+replacement. A non-instruction event with no `agent` key needs nothing from you.
 
-A relay that also carries `turn` is one you owe a handover. Run
-`dispatch worker rm --node <item> --turn <turn>`, both copied verbatim from
-the meta you noted — when the relay fails, and again when that agent later
-completes. Without it, a worker that died mid-turn pins its item out of the
-queue for as long as you run.
-
-The command decides; you only report. It drops the address solely for the turn
-you name, so a worker that yielded, or one a newer relay already woke, keeps
-it. `kept=no-address` is the ordinary result after a worker reported;
-`kept=not-this-turn` means the turn you named is over — a newer relay re-took
-the node, or the worker yielded and holds no claim at all; `kept=not-yours`
-means another session's address. All three are that decision working, and none
-is a reason to retry with `--force`, which would strand a live agent.
-`kept=no-turn` is the one that says you got it wrong: you ran the command
-without `--turn`, so nothing named a turn to match. Re-run it with the `turn`
-you noted for that relay. A relay carrying no `turn` woke a worker that has not
-yielded since its claim began; it owes no handover at all.
+Report a turn with `dispatch worker rm --node <item> --turn <turn>`, values
+verbatim: when the relay fails, and when a relayed agent completes. Skip it and
+a dead worker pins its item out of the queue; use another turn's token and you
+retire the live worker holding it. A relay carrying no `turn` owes no report. A
+`kept=` reason is the command declining on purpose, never a reason to reach for
+`--force`; only `kept=no-turn` is yours — re-run with the turn you noted.
 
 Return to waiting after each launch. Give each worker only what the event
 carries; never ticket content. Launch every order you receive; the CLI claims

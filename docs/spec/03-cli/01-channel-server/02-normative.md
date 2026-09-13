@@ -195,9 +195,9 @@ event producer can forge them:
 | `agent`      | The recorded address of the worker on the node (`dispatch worker set`), when this session has one. |
 | `turn`       | The instant of the claim the relay took, when it took one. Never stamped without `agent`.          |
 
-`agent` names a **resumable** worker — one that has returned and holds no
-process, but whose spawner can re-invoke it by that address with its context
-intact. The recording session is the only one that can, so the delivering
+`agent` names a **resumable** worker — one whose spawner can re-invoke it by
+that address with its context intact, whether it has already returned or is
+still executing. The recording session is the only one that can, so the delivering
 server stamps `agent` only from its own session's worker table; an event
 delivered by another session carries none, and that session treats it as
 informational.

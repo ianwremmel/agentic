@@ -95,6 +95,95 @@ describe('drainInstructions', () => {
     assert.equal(sent.length, 1);
   });
 
+  it('pushes nothing for an instruction that was answered in-process', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new RefreshService(db).startScan({
+        source: 'linear',
+        projects: ['P'],
+        sessionId: null,
+        rebuild: false,
+      });
+    });
+
+    const sent: Notification[] = [];
+    const channel = new ChannelWriter((payload) =>
+      sent.push(payload as Notification)
+    );
+    const answered = await drainInstructions(channel, env, {
+      answer: async ({db, request}) => {
+        await new FetchRequestStore(db).resolveScan(request.source);
+        return true;
+      },
+    });
+
+    assert.equal(answered, 0);
+    assert.equal(sent.length, 0);
+  });
+
+  it('pushes the instruction when the in-process answer declines it', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new RefreshService(db).startScan({
+        source: 'linear',
+        projects: ['P'],
+        sessionId: null,
+        rebuild: false,
+      });
+    });
+
+    const sent: Notification[] = [];
+    const channel = new ChannelWriter((payload) =>
+      sent.push(payload as Notification)
+    );
+    // A tracker with no client, an absent key, or a failed fetch all arrive
+    // here as the same `false`, and the agent path has to still be reachable.
+    assert.equal(
+      await drainInstructions(channel, env, {
+        answer: () => Promise.resolve(false),
+      }),
+      1
+    );
+    assert.equal(sent[0]?.params.meta.kind, 'scan_project');
+  });
+
+  it('drains the asks an in-process answer enqueues without waiting for another tick', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new RefreshService(db).startScan({
+        source: 'linear',
+        projects: ['P'],
+        sessionId: null,
+        rebuild: false,
+      });
+    });
+
+    const sent: Notification[] = [];
+    const channel = new ChannelWriter((payload) =>
+      sent.push(payload as Notification)
+    );
+    // The scan is answered here; the placeholder it referenced is owed in the
+    // same drain, not the next one.
+    await drainInstructions(channel, env, {
+      answer: async ({db, request}) => {
+        if (request.kind !== 'scan_project') return false;
+        const requests = new FetchRequestStore(db);
+        await requests.resolveScan(request.source);
+        await requests.enqueueTicket({
+          source: request.source,
+          ticket: 'ENG-1',
+          at: '2026-08-01T00:00:00Z',
+        });
+        return true;
+      },
+    });
+
+    assert.deepEqual(
+      sent.map((n) => n.params.meta.kind),
+      ['fetch_ticket']
+    );
+  });
+
   it('turns a fetch_ticket row into a fetch_ticket event carrying the ticket id', async () => {
     const env = await tempEnv();
     await withDatabase(undefined, env, async (db) => {

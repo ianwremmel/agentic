@@ -7,6 +7,11 @@ The CLI owns the reasoning: it decides what still needs fetching and instructs t
 agent over the channel. The agent scans and writes; it never decides what to fetch
 next.
 
+Linear is since read in-process instead, by `lib/ingest` at the drain seam. That
+changes who answers an instruction, not what an instruction is or when one is
+issued, so everything below still describes the system — read "the agent" as
+"whoever answers".
+
 ## Scope
 
 In: the graph write commands, the refresh state machine and its durable
@@ -16,8 +21,9 @@ on the receiving end (`/orchestrate` and `build-graph`).
 Out: the derived read-model (`available`/`blocked`/`counts`/`anomalies`, the
 project-graph document), the probe/ack handshake and polling fallback,
 claims/slots/work orders, and any tracker API adapter. A tracker with a code path
-of its own would fetch in-process instead of delegating; none exists yet, so
-delegation is the only implemented path.
+of its own fetches in-process instead of delegating; Linear grew one later, in
+`lib/linear` and `lib/ingest`, and delegation is what every other tracker — and
+Linear without a key — still uses.
 
 `dispatch pr` commands are also out: a tracker scan never produces a PR node. PRs
 enter the graph from delivery, so they ship with that slice.

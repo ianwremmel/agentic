@@ -121,4 +121,53 @@ describe('EdgeStore', () => {
     assert.deepEqual(blocks, ['M1', 'NEW']);
     await db.close();
   });
+
+  it('replaces a milestone membership `setEdges` deliberately leaves behind', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    const milestones = new MilestoneStore(db);
+    for (const id of ['M1', 'M2']) {
+      await milestones.upsertMilestone({id, project: 'P', name: id});
+    }
+    await store.addEdge('T', 'BLOCKED');
+    await store.setMilestone('T', 'M1');
+
+    await store.setMilestone('T', 'M2');
+
+    // Counted by two gates is the failure this exists to prevent; the blocking
+    // edge is not a membership and must survive.
+    const blocks = (await store.edges())
+      .filter((e) => e.blocker === 'T')
+      .map((e) => e.blocked)
+      .sort();
+    assert.deepEqual(blocks, ['BLOCKED', 'M2']);
+    await db.close();
+  });
+
+  it('clears every membership when a ticket is in no milestone', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    await new MilestoneStore(db).upsertMilestone({
+      id: 'M1',
+      project: 'P',
+      name: 'M1',
+    });
+    await store.setMilestone('T', 'M1');
+
+    await store.setMilestone('T', null);
+
+    assert.deepEqual(await store.edges(), []);
+    await db.close();
+  });
+
+  it('refuses an unrecorded milestone rather than minting a blocking edge to a placeholder', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    await assert.rejects(store.setMilestone('T', 'First'));
+    assert.deepEqual(await store.edges(), []);
+    await db.close();
+  });
 });

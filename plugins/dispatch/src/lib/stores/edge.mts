@@ -1,7 +1,7 @@
 import type {Database} from '../db/database.mts';
-import {DataError, ensure} from '../errors/index.mts';
+import {DataError, ensure, UsageError} from '../errors/index.mts';
 import type {Edge} from '../model/types.mts';
-import {nodeRef} from './materialize.mts';
+import {findNode, nodeRef} from './materialize.mts';
 
 /* eslint-disable @typescript-eslint/require-await --
  * Async facade over synchronous `node:sqlite`; see `../db/database.mts`. */
@@ -70,6 +70,46 @@ export class EdgeStore {
         else this.#insert(node, other);
       }
       this.#rejectIfCycle(node);
+    });
+  }
+
+  /**
+   * Put a ticket in exactly one milestone, or in none.
+   *
+   * Membership is an edge, and `setEdges` deliberately will not touch it: a
+   * tracker's relation list never mentions a milestone, so a redeclaration of
+   * blockers has no evidence about one. Nothing else replaces it either, which
+   * is how a ticket moved from one milestone to the next ends up counted by
+   * both gates. This is the write that says which one it is now.
+   *
+   * The milestone must already be recorded, for the reason a ticket's project
+   * must be: an unrecorded id materializes an `unknown` placeholder, and a
+   * ticket → placeholder edge is a blocking dependency, not a membership.
+   */
+  async setMilestone(ticket: string, milestone: string | null): Promise<void> {
+    await this.#db.transaction(() => {
+      if (milestone !== null) {
+        const node = findNode(this.#db, milestone);
+        ensure(
+          node !== null && node.kind === 'milestone',
+          () =>
+            new UsageError(`"${milestone}" is not a recorded milestone`, {
+              hint: 'record it first with `dispatch milestone set`, and pass the milestone id — a milestone name is not its id.',
+            })
+        );
+      }
+      const ticketId = nodeRef(this.#db, ticket);
+      // `external_id = NULL` matches nothing, so the coalesced sentinel is what
+      // makes a null milestone clear every membership rather than none.
+      this.#db.run(
+        `DELETE FROM edge
+         WHERE blocker = ?
+           AND blocked IN (SELECT node_id FROM milestone)
+           AND blocked <> COALESCE(
+             (SELECT id FROM node WHERE external_id = ?), -1)`,
+        [ticketId, milestone]
+      );
+      if (milestone !== null) this.#insert(ticket, milestone);
     });
   }
 

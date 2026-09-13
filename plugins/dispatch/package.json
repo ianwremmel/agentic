@@ -42,6 +42,7 @@
     "node": ">=24.18.0"
   },
   "dependencies": {
+    "@linear/sdk": "^95.0.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.222.0",
     "@opentelemetry/core": "^2.11.0",

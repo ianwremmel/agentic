@@ -162,6 +162,39 @@ describe('EdgeStore', () => {
     await db.close();
   });
 
+  it('refuses a membership that would close a cycle, as every other edge write does', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    await new MilestoneStore(db).upsertMilestone({
+      id: 'M1',
+      project: 'P',
+      name: 'M1',
+    });
+    // Membership shares the edge table with the blocking DAG, so this is a
+    // cycle even though neither write mentions the other.
+    await store.addEdge('M1', 'T');
+
+    await assert.rejects(
+      store.setMilestone('T', 'M1'),
+      (err: unknown) => err instanceof DataError
+    );
+    assert.deepEqual(await store.edges(), [{blocker: 'M1', blocked: 'T'}]);
+    await db.close();
+  });
+
+  it('leaves no placeholder behind when clearing membership for a ticket nobody wrote', async () => {
+    const {db, store} = await fresh();
+    await store.setMilestone('NEVER-WRITTEN', null);
+    assert.equal(
+      db.get('SELECT 1 AS found FROM node WHERE external_id = ?', [
+        'NEVER-WRITTEN',
+      ]),
+      undefined
+    );
+    await db.close();
+  });
+
   it('refuses an unrecorded milestone rather than minting a blocking edge to a placeholder', async () => {
     const {db, store} = await fresh();
     await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});

@@ -24,6 +24,13 @@ export const LINEAR_SOURCE = 'linear';
 /** A refresh names projects by tracker id; a human may have typed a name. */
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
 
+/**
+ * How far this host's clock is allowed to run ahead of Linear's before a delta
+ * cursor starts skipping edits. Generous on purpose: overlapping deltas cost
+ * re-reads, and a cursor past an edit loses that ticket until a full rebuild.
+ */
+const CLOCK_SKEW_MS = 5 * 60 * 1_000;
+
 interface ScannedTicket {
   readonly issue: LinearIssue;
   readonly status: Status;
@@ -81,9 +88,10 @@ async function resolveProject(
  * build-graph agent then answers it instead — and failing after half the
  * project is written leaves the graph mid-scan for no reason.
  *
- * Milestones are read after the issues, not before: an issue can only name a
- * milestone that already existed when the issue was read, so reading them
- * second is what guarantees every `projectMilestone` is one of them.
+ * Milestones are read after the issues, not before: a milestone created while
+ * the issues were paging is still in this list, where reading them first would
+ * have missed it and refused the issue that named it. A milestone *deleted* in
+ * that window is not covered either way, and fails the scan into the fallback.
  */
 async function readProject(
   selector: string,
@@ -178,6 +186,13 @@ async function writeProject(
  * `updatedAt` it saw. An issue edited while the scan was paging can land behind
  * a page already read, and a cursor drawn from the rows would step over that
  * edit forever.
+ *
+ * That start is this host's clock, and the filter it feeds compares against
+ * Linear's, so it is rolled back by `CLOCK_SKEW_MS` before being recorded. A
+ * host running ahead would otherwise write a cursor later than edits Linear had
+ * not yet timestamped, and every inclusive delta after it would skip them. The
+ * cost of the rollback is re-reading a few minutes of changes, which is a pile
+ * of idempotent upserts.
  */
 export async function ingestLinearScan(input: {
   readonly db: Database;
@@ -187,7 +202,9 @@ export async function ingestLinearScan(input: {
   readonly signal?: AbortSignal | undefined;
   readonly now?: () => string;
 }): Promise<void> {
-  const startedAt = (input.now ?? nowIso)();
+  const startedAt = new Date(
+    Date.parse((input.now ?? nowIso)()) - CLOCK_SKEW_MS
+  ).toISOString();
   const read = {client: input.client, options: readOptions(input.signal)};
   const scanned: ScannedProject[] = [];
   for (const selector of input.projects) {

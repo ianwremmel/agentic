@@ -134,10 +134,12 @@ describe('ingestLinearScan', () => {
         '2026-09-12T00:00:00.000Z'
       );
       // An issue edited mid-scan can land behind a page already read; a cursor
-      // taken from the rows would step over that edit forever.
+      // taken from the rows would step over that edit forever. The five minutes
+      // it rolls back cover this host's clock running ahead of Linear's, which
+      // would otherwise put the cursor past edits Linear had not yet stamped.
       assert.equal(
         await new CursorStore(db).getCursor('linear'),
-        '2026-09-12T00:00:00.000Z'
+        '2026-09-11T23:55:00.000Z'
       );
     });
   });
@@ -301,6 +303,16 @@ describe('ingestLinearTicket', () => {
       });
 
       assert.deepEqual(await requests.openTickets(), []);
+      // Resolved `missing`, not deleted: the tombstone is what stops the same
+      // dead reference being asked for again for the rest of the refresh.
+      assert.equal(
+        await requests.enqueueTicket({
+          source: 'linear',
+          ticket: 'CLC-404',
+          at: '2026-09-12T00:00:01.000Z',
+        }),
+        null
+      );
     });
   });
 });

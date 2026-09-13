@@ -16,7 +16,10 @@ to stderr. `index.mts` is the barrel.
 - `drain.mts` — `drainInstructions` offers each undelivered `fetch_request` row
   to `lib/ingest` and pushes whatever comes back unanswered, then pushes owed
   completions; delivery is recorded in the database. It re-reads the queue while
-  answers keep landing, because answering one instruction can enqueue the next.
+  answers keep landing, because answering one instruction can enqueue the next —
+  for a bounded number of passes, after which the rest waits for the next drain.
+  One drain runs at a time per process: the timer and the read loop both call it,
+  and an answer takes long enough for them to overlap.
 
 The loop throws `JsonRpcError` (in `lib/errors`) for protocol failures (unknown
 method, malformed request, unknown tool) and renders it into a JSON-RPC `error`.

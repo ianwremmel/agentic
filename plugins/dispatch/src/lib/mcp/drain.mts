@@ -1,7 +1,7 @@
 import {nowIso} from '../db/time.mts';
 import {withDatabase} from '../db/index.mts';
 import {answerNatively} from '../ingest/index.mts';
-import type {NativeAnswer} from '../ingest/index.mts';
+import type {NativeAnswer, NativeAnswerInput} from '../ingest/index.mts';
 import type {Logger} from '../logger/index.mts';
 import {FetchRequestStore, RefreshStore} from '../stores/index.mts';
 import type {
@@ -14,10 +14,19 @@ import type {ChannelWriter} from './channel.mts';
 /**
  * The bound on answering instructions that enqueue further instructions. A
  * scan's placeholders are asked for as a batch, and each batch can reference
- * one more, so the depth is the dependency chain's — never this deep, and
- * bounded anyway so a pathological graph cannot hold the read loop.
+ * one more, so the depth is the dependency chain's. A queue still growing at
+ * this depth is left for the next drain rather than held onto.
  */
 const MAX_PASSES = 10;
+
+/**
+ * The bound on answering one instruction in-process. The transport times out a
+ * request, not a walk, and this runs inside the JSON-RPC read loop — so a
+ * tracker that answers every page slowly, forever, would stall every other tool
+ * call. Past this the instruction goes to an agent instead, which is what the
+ * fallback is for.
+ */
+const NATIVE_DEADLINE_MS = 120_000;
 
 export interface DrainOptions {
   readonly now?: () => string;
@@ -30,19 +39,41 @@ export interface DrainOptions {
 }
 
 /**
+ * One drain at a time in this process. The timer and the read loop both call
+ * this, and answering an instruction in-process takes long enough for them to
+ * overlap — which would run one scan twice. Several dispatch processes on one
+ * database are still only serialized by the request rows themselves, as they
+ * were before anything was answered here.
+ */
+let inFlight: Promise<unknown> = Promise.resolve();
+
+/**
  * Push every instruction the graph owes the session, then every completion.
  * Returns how many events went out. Delivery is recorded in the database, so a
  * restart re-derives what is still owed rather than assuming a push landed.
  *
  * An instruction the server can answer itself — a tracker it holds a client for,
  * with the credentials to use it — is answered here instead of pushed, and
- * nothing goes out for it. Everything else, that path's failures included, is
- * pushed to the session for an agent to answer.
+ * nothing goes out for it. Everything else is pushed to the session for an agent
+ * to answer: another tracker, an absent key, a failed fetch, and an answer that
+ * returned without settling its own request.
  */
 export async function drainInstructions(
   channel: ChannelWriter,
   env: NodeJS.ProcessEnv,
   options: DrainOptions = {}
+): Promise<number> {
+  const run = inFlight
+    .catch(() => undefined)
+    .then(async () => drainOnce(channel, env, options));
+  inFlight = run.catch(() => undefined);
+  return run;
+}
+
+async function drainOnce(
+  channel: ChannelWriter,
+  env: NodeJS.ProcessEnv,
+  options: DrainOptions
 ): Promise<number> {
   const now = options.now ?? nowIso;
   const answer = options.answer ?? answerNatively;
@@ -58,9 +89,30 @@ export async function drainInstructions(
       if (pending.length === 0) break;
       let answered = 0;
       for (const request of pending) {
-        if (await answer({db, request, env, log: options.log})) {
-          answered += 1;
-          continue;
+        if (
+          await answerWithDeadline(answer, {
+            db,
+            request,
+            env,
+            log: options.log,
+          })
+        ) {
+          const after = await requests.get(request.id);
+          // An answer that left its own request open is not an answer: the
+          // queue would hand the same row back next pass, and the instruction
+          // would never reach anyone. Push it and let an agent settle it.
+          // A row that is gone entirely is settled — there is nothing to push.
+          if (after?.resolution !== null) {
+            answered += 1;
+            continue;
+          }
+          options.log?.warn(
+            'an answered instruction settled nothing; pushing it',
+            {
+              source: request.source,
+              kind: request.kind,
+            }
+          );
         }
         channel.push(...instruction(request));
         await requests.markDelivered(request.id, now());
@@ -83,6 +135,25 @@ export async function drainInstructions(
 
     return sent;
   });
+}
+
+/** One in-process attempt, bounded so it cannot hold the read loop for good. */
+async function answerWithDeadline(
+  answer: NativeAnswer,
+  input: Omit<NativeAnswerInput, 'signal'>
+): Promise<boolean> {
+  const deadline = new AbortController();
+  // A cleared timer rather than `AbortSignal.timeout`, whose timer stays live
+  // for the whole window however fast the answer came back.
+  const timer = setTimeout(() => {
+    deadline.abort();
+  }, NATIVE_DEADLINE_MS);
+  timer.unref();
+  try {
+    return await answer({...input, signal: deadline.signal});
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** One request as the event that asks an agent to answer it. */

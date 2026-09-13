@@ -84,33 +84,47 @@ export class EdgeStore {
    *
    * The milestone must already be recorded, for the reason a ticket's project
    * must be: an unrecorded id materializes an `unknown` placeholder, and a
-   * ticket → placeholder edge is a blocking dependency, not a membership.
+   * ticket → placeholder edge is a blocking dependency, not a membership. The
+   * other end is not checked, the way no edge write here checks one.
    */
   async setMilestone(ticket: string, milestone: string | null): Promise<void> {
     await this.#db.transaction(() => {
-      if (milestone !== null) {
-        const node = findNode(this.#db, milestone);
-        ensure(
-          node !== null && node.kind === 'milestone',
-          () =>
-            new UsageError(`"${milestone}" is not a recorded milestone`, {
-              hint: 'record it first with `dispatch milestone set`, and pass the milestone id — a milestone name is not its id.',
-            })
-        );
+      if (milestone === null) {
+        // Nothing to clear, and nothing to declare: materializing the node here
+        // would leave a placeholder behind for a ticket that was never written.
+        const node = findNode(this.#db, ticket);
+        if (node === null) return;
+        this.#clearMembership(node.id, null);
+        return;
       }
-      const ticketId = nodeRef(this.#db, ticket);
-      // `external_id = NULL` matches nothing, so the coalesced sentinel is what
-      // makes a null milestone clear every membership rather than none.
-      this.#db.run(
-        `DELETE FROM edge
-         WHERE blocker = ?
-           AND blocked IN (SELECT node_id FROM milestone)
-           AND blocked <> COALESCE(
-             (SELECT id FROM node WHERE external_id = ?), -1)`,
-        [ticketId, milestone]
+      const node = findNode(this.#db, milestone);
+      ensure(
+        node !== null && node.kind === 'milestone',
+        () =>
+          new UsageError(`"${milestone}" is not a recorded milestone`, {
+            hint: 'record it first with `dispatch milestone set`, and pass the milestone id — a milestone name is not its id.',
+          })
       );
-      if (milestone !== null) this.#insert(ticket, milestone);
+      this.#clearMembership(nodeRef(this.#db, ticket), milestone);
+      this.#insert(ticket, milestone);
+      // Membership shares the edge table with the blocking DAG, so a milestone
+      // that already reaches back to this ticket makes the insert a cycle.
+      this.#rejectIfCycle(ticket);
     });
+  }
+
+  /** Every milestone edge out of a node but the one it is keeping. */
+  #clearMembership(nodeId: number, keep: string | null): void {
+    // `external_id = NULL` matches nothing, so the coalesced sentinel is what
+    // makes a null milestone clear every membership rather than none.
+    this.#db.run(
+      `DELETE FROM edge
+       WHERE blocker = ?
+         AND blocked IN (SELECT node_id FROM milestone)
+         AND blocked <> COALESCE(
+           (SELECT id FROM node WHERE external_id = ?), -1)`,
+      [nodeId, keep]
+    );
   }
 
   async edges(): Promise<Edge[]> {

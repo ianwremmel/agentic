@@ -16,7 +16,11 @@ const BY_NAME: ReadonlyMap<string, Status> = new Map<string, Status>([
 
 /**
  * Groups that mean one thing however the team named the substate — a completed
- * state is verified whether it reads Done, Shipped, or Merged.
+ * state is verified whether it reads Done, Shipped, or Merged. A team that
+ * means `delivered` by "Merged" files it under `started`, where it lands in the
+ * refusal below rather than here; `backlog` likewise absorbs a custom parked
+ * substate, which is what the default role map already says a park looks like
+ * until a team maps one.
  */
 const BY_TYPE: ReadonlyMap<string, Status> = new Map<string, Status>([
   ['triage', 'backlog'],

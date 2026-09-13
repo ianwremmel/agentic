@@ -110,15 +110,74 @@ describe('drainInstructions', () => {
     const channel = new ChannelWriter((payload) =>
       sent.push(payload as Notification)
     );
+    let offered = 0;
     const answered = await drainInstructions(channel, env, {
       answer: async ({db, request}) => {
+        offered += 1;
         await new FetchRequestStore(db).resolveScan(request.source);
         return true;
       },
     });
 
+    assert.equal(offered, 1);
     assert.equal(answered, 0);
     assert.equal(sent.length, 0);
+  });
+
+  it('pushes an answer that returned true without settling its own request', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new RefreshService(db).startScan({
+        source: 'linear',
+        projects: ['P'],
+        sessionId: null,
+        rebuild: false,
+      });
+    });
+
+    const sent: Notification[] = [];
+    const channel = new ChannelWriter((payload) =>
+      sent.push(payload as Notification)
+    );
+    // Claiming an answer while leaving the row open would hand the same row
+    // back every pass and push it to nobody: the instruction would be lost and
+    // the refresh could never close.
+    let offered = 0;
+    assert.equal(
+      await drainInstructions(channel, env, {
+        answer: () => {
+          offered += 1;
+          return Promise.resolve(true);
+        },
+      }),
+      1
+    );
+    assert.equal(offered, 1);
+    assert.equal(sent[0]?.params.meta.kind, 'scan_project');
+  });
+
+  it('bounds one in-process answer so a hung tracker cannot hold the read loop', async () => {
+    const env = await tempEnv();
+    await withDatabase(undefined, env, async (db) => {
+      await new RefreshService(db).startScan({
+        source: 'linear',
+        projects: ['P'],
+        sessionId: null,
+        rebuild: false,
+      });
+    });
+
+    const channel = new ChannelWriter(() => undefined);
+    let signal: AbortSignal | undefined;
+    await drainInstructions(channel, env, {
+      answer: (input) => {
+        signal = input.signal;
+        return Promise.resolve(false);
+      },
+    });
+
+    assert.ok(signal, 'the answer must be handed a cancellation to honour');
+    assert.equal(signal.aborted, false);
   });
 
   it('pushes the instruction when the in-process answer declines it', async () => {

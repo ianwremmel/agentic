@@ -156,7 +156,7 @@ describe('drainInstructions', () => {
     assert.equal(sent[0]?.params.meta.kind, 'scan_project');
   });
 
-  it('bounds one in-process answer so a hung tracker cannot hold the read loop', async () => {
+  it('hands the answer a cancellation to honour rather than running it unbounded', async () => {
     const env = await tempEnv();
     await withDatabase(undefined, env, async (db) => {
       await new RefreshService(db).startScan({

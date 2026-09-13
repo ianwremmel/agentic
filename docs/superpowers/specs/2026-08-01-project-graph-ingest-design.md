@@ -7,7 +7,7 @@ The CLI owns the reasoning: it decides what still needs fetching and instructs t
 agent over the channel. The agent scans and writes; it never decides what to fetch
 next.
 
-Linear is since read in-process instead, by `lib/ingest` at the drain seam. That
+Linear is now read in-process instead, by `lib/ingest` at the drain seam. That
 changes who answers an instruction, not what an instruction is or when one is
 issued, so everything below still describes the system — read "the agent" as
 "whoever answers".

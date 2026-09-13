@@ -20,11 +20,11 @@ import type {ChannelWriter} from './channel.mts';
 const MAX_PASSES = 10;
 
 /**
- * The bound on answering one instruction in-process. The transport times out a
+ * When one in-process answer is asked to give up. The transport times out a
  * request, not a walk, and this runs inside the JSON-RPC read loop — so a
  * tracker that answers every page slowly, forever, would stall every other tool
- * call. Past this the instruction goes to an agent instead, which is what the
- * fallback is for.
+ * call. The answer is handed a signal, not interrupted: an answer that honours
+ * it fails into the agent fallback, and one that does not still holds the loop.
  */
 const NATIVE_DEADLINE_MS = 120_000;
 
@@ -137,7 +137,7 @@ async function drainOnce(
   });
 }
 
-/** One in-process attempt, bounded so it cannot hold the read loop for good. */
+/** One in-process attempt, carrying the deadline it is asked to give up at. */
 async function answerWithDeadline(
   answer: NativeAnswer,
   input: Omit<NativeAnswerInput, 'signal'>

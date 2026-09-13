@@ -134,6 +134,51 @@ describe('log', () => {
       );
     });
 
+    it('reads the thrown value once, so the SDK cannot run its getters', () => {
+      // The SDK re-reads `code`/`message`/`name`/`stack` off whatever it is
+      // handed, outside this module's guard. Handing it the thrown object would
+      // put a second read of every getter beyond reach of the `catch`.
+      let reads = 0;
+      const oneShot = {
+        get message(): string {
+          reads += 1;
+          if (reads > 1) throw new Error('read twice');
+          return 'gh: 502';
+        },
+      };
+      log.errorException('watch poll failed', oneShot);
+
+      assert.equal(only().attributes['exception.message'], 'gh: 502');
+      assert.equal(reads, 1);
+    });
+
+    it('keeps the properties it could read when one of them throws', () => {
+      // One hostile getter costs its own field, not the record: the message is
+      // still the most useful thing this failure has to say.
+      log.errorException('watch poll failed', {
+        message: 'gh: 502',
+        get stack(): never {
+          throw new Error('nope');
+        },
+      });
+
+      const {attributes} = only();
+      assert.equal(attributes['exception.message'], 'gh: 502');
+      assert.equal(attributes['exception.stacktrace'], undefined);
+    });
+
+    it('survives a `code` whose own toString throws', () => {
+      // The SDK calls `code.toString()` to derive `exception.type`.
+      log.errorException('watch poll failed', {
+        code: Object.create(null) as object,
+        message: 'gh: 502',
+      });
+
+      const {attributes} = only();
+      assert.equal(attributes['exception.message'], 'gh: 502');
+      assert.equal(attributes['exception.type'], undefined);
+    });
+
     it('survives a value String() itself refuses', () => {
       log.errorException('watch poll failed', Object.create(null));
 

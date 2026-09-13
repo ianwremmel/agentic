@@ -26,6 +26,49 @@ export interface Log {
   errorException(message: string, thrown: unknown, fields?: LogFields): void;
 }
 
+/** The four properties the SDK derives `exception.*` from. */
+type ExceptionKey = 'code' | 'message' | 'name' | 'stack';
+const EXCEPTION_KEYS: readonly ExceptionKey[] = [
+  'code',
+  'message',
+  'name',
+  'stack',
+];
+
+/** What a record says when the thrown value yielded nothing legible. */
+const UNREADABLE = 'a thrown value that could not be read';
+
+/**
+ * Stringify the four properties the SDK reads, each under its own guard, so one
+ * hostile getter costs its own field rather than the other three.
+ *
+ * `threw` separates a property that was absent from one whose read failed: a
+ * value none of whose properties could be read still has to produce a record
+ * saying so, and `String()` on it will not be the thing to say it.
+ */
+function snapshot(thrown: object): {
+  fields: Partial<Record<ExceptionKey, string>>;
+  threw: boolean;
+} {
+  const fields: Partial<Record<ExceptionKey, string>> = {};
+  let threw = false;
+  for (const key of EXCEPTION_KEYS) {
+    try {
+      const value: unknown = (thrown as Partial<Record<ExceptionKey, unknown>>)[
+        key
+      ];
+      /* eslint-disable-next-line @typescript-eslint/no-base-to-string --
+         whatever the value's own `toString` produces is the best description of
+         it available, and even `[object Object]` beats dropping the only thing
+         the record was reporting. */
+      if (value) fields[key] = String(value);
+    } catch {
+      threw = true;
+    }
+  }
+  return {fields, threw};
+}
+
 /**
  * Narrow a thrown value to something the SDK will actually record.
  *
@@ -38,22 +81,21 @@ export interface Log {
  * Total by construction, because every caller is inside a `catch` that is
  * recovering from something. `String()` throws on a null-prototype object, and
  * reading a property can run a getter that throws; either would replace the
- * failure being reported with a failure to report it. Destructuring runs all
- * four getters under the guard, so a value that gets past here cannot throw when
- * the SDK reads it.
+ * failure being reported with a failure to report it. So every read happens here
+ * under a guard, and what goes back is a plain object of strings — the SDK reads
+ * those same four properties again, and on this one no read of them runs code.
  */
 function recordable(thrown: unknown): unknown {
   try {
     if (typeof thrown === 'string' || typeof thrown === 'number') return thrown;
     if (typeof thrown === 'object' && thrown !== null) {
-      const {code, message, name, stack} = thrown as Partial<
-        Record<'code' | 'message' | 'name' | 'stack', unknown>
-      >;
-      if (code || message || name || stack) return thrown;
+      const {fields, threw} = snapshot(thrown);
+      if (Object.keys(fields).length > 0) return fields;
+      if (threw) return UNREADABLE;
     }
     return String(thrown);
   } catch {
-    return 'a thrown value that could not be read';
+    return UNREADABLE;
   }
 }
 

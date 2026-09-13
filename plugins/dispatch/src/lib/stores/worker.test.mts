@@ -281,6 +281,41 @@ describe('worker rows arbitrate warm relay vs cold resume', () => {
     await db.close();
   });
 
+  it('still unpins a dead turn a later relay only refreshed', async () => {
+    const db = await fixture();
+    const coordination = new CoordinationStore(db);
+    const store = new WorkerStore(db);
+    await coordination.claim({node: 'o/r#1', session: 'S1', claimedAt: NOW});
+    await store.set({node: 'o/r#1', session: 'S1', agentRef: 'a', at: NOW});
+    await coordination.release('o/r#1', 'S1');
+
+    // The relay takes the claim and hands out NOW as the turn.
+    assert.equal(
+      (await coordination.claim({node: 'o/r#1', session: 'S1', claimedAt: NOW}))
+        .outcome,
+      'claimed'
+    );
+    // A second event for the same node arrives while that worker is still
+    // running, so this relay only refreshes — it begins no turn and hands out
+    // no token. Moving the claim's date here would orphan the only token that
+    // can ever settle this node, and the worker's death would pin it for good.
+    assert.equal(
+      (
+        await coordination.claim({
+          node: 'o/r#1',
+          session: 'S1',
+          claimedAt: LATER,
+        })
+      ).outcome,
+      'refreshed'
+    );
+
+    assert.equal(await store.remove('o/r#1', 'S1', {turn: NOW}), 'removed');
+    assert.equal(await store.refFor('o/r#1', 'S1'), null);
+    assert.deepEqual(await coordination.claims(), []);
+    await db.close();
+  });
+
   it('rejects an empty address', async () => {
     const db = await fixture();
     await new CoordinationStore(db).claim({

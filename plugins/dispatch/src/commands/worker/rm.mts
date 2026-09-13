@@ -47,12 +47,16 @@ export class Command extends AbstractCommand {
     ctx: CommandContext
   ): Promise<void> {
     await withDatabase(parsed.db, ctx.env, async (db) => {
+      // No `--session` escape hatch here, unlike its siblings: this command
+      // deletes a claim and an address, so an explicit id would let any caller
+      // retire another session's live worker and let cold recovery race it.
+      // The address is revocable only from the session that recorded it.
       const session = await correlateSession(db, ctx.env, undefined);
       ensure(
         session !== null,
         () =>
           new DataError('no live server correlates to this session', {
-            hint: 'only the session that recorded the address can revoke it.',
+            hint: 'only the session that recorded the address can revoke it; run this from that session.',
           })
       );
       const outcome = await new WorkerStore(db).remove(parsed.node, session, {

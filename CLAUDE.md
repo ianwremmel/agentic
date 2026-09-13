@@ -157,6 +157,9 @@ d=$(mktemp -d) && cp plugins/<name>/package.json "$d" \
 
 It has to be generated away from the workspace: run inside `plugins/<name>`
 and npm resolves against the root lockfile instead and writes nothing usable.
+Nor with `--legacy-peer-deps`, however tempting a peer that never loads looks
+(`@linear/sdk` pulls ~12MB of `graphql` this way): it drops the peer from the
+lock, and `npm ci` then refuses the lock it wrote.
 `plugins/dispatch/package.test.mts` covers all of this — an undeclared
 specifier, a stale shrinkwrap, and whether the packed plugin actually installs
 and runs.

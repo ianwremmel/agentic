@@ -11,7 +11,7 @@ import {
   ISSUE_RELATIONS_QUERY,
   MILESTONES_QUERY,
   PROJECTS_QUERY,
-} from './queries.mts';
+} from './index.mts';
 
 /**
  * The query documents, tested directly. A mocked executor answers whatever the

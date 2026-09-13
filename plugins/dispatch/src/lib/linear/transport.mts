@@ -1,19 +1,14 @@
 import {
   LinearClient as LinearSdk,
   LinearError,
-  LinearErrorType,
   LinearGraphQLClient,
 } from '@linear/sdk';
 
-import {
-  DataError,
-  DefinitionError,
-  EnvironmentError,
-  ensure,
-} from '../errors/index.mts';
+import {EnvironmentError} from '../errors/index.mts';
+import {throwForLinearError} from './faults.mts';
+import {LINEAR_TOKEN_VAR, resolveCredentials} from './token.mts';
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql';
-export const LINEAR_TOKEN_VAR = 'LINEAR_API_KEY';
 
 /** Long enough for a page of issues, short enough that a hung call cannot stall a server tick. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -33,181 +28,6 @@ export interface TransportOptions {
   /** Must be https, or a localhost url; the SDK refuses anything else. */
   readonly endpoint?: string;
   readonly timeoutMs?: number;
-}
-
-const BEARER = /^Bearer\s+/iu;
-
-/**
- * Which credential slot the token goes in. The SDK sends an `apiKey` bare and
- * prefixes an `accessToken` with `Bearer`, which is the distinction Linear's
- * API draws — a personal key with a `Bearer` prefix is answered with HTTP 400.
- * `LINEAR_API_KEY` can hold either kind, so the `lin_api_` prefix Linear puts
- * on a personal key decides. Either way the token is handed over bare: the
- * SDK's own prefix check is case-sensitive against `Bearer `, so passing one
- * written `bearer x` straight through would be sent `Bearer bearer x`.
- */
-export function credentials(
-  token: string
-): {apiKey: string} | {accessToken: string} {
-  const bare = token.trim().replace(BEARER, '');
-  return bare.startsWith('lin_api_') ? {apiKey: bare} : {accessToken: bare};
-}
-
-type Fault =
-  'ratelimited' | 'auth' | 'schema' | 'input' | 'empty' | 'garbled' | 'remote';
-
-/**
- * `extensions.code` names the fault on its own. The SDK reads only the sibling
- * `extensions.type`, which is prose that has changed before, so the code is
- * read here from the payload the SDK kept and the parsed type is the fallback
- * for an error carrying no code.
- */
-const BY_CODE = new Map<string, Fault>([
-  ['RATELIMITED', 'ratelimited'],
-  ['AUTHENTICATION_ERROR', 'auth'],
-  ['GRAPHQL_VALIDATION_FAILED', 'schema'],
-  ['INPUT_ERROR', 'input'],
-]);
-
-const BY_TYPE = new Map<LinearErrorType, Fault>([
-  [LinearErrorType.Ratelimited, 'ratelimited'],
-  [LinearErrorType.UsageLimitExceeded, 'ratelimited'],
-  [LinearErrorType.AuthenticationError, 'auth'],
-  [LinearErrorType.Forbidden, 'auth'],
-  [LinearErrorType.FeatureNotAccessible, 'auth'],
-  [LinearErrorType.InvalidInput, 'input'],
-  [LinearErrorType.UserError, 'input'],
-]);
-// `graphql error` is deliberately absent. It is the label Linear puts on
-// anything raised in the GraphQL layer, and the fault it maps to is terminal —
-// nothing retries past it — so only `GRAPHQL_VALIDATION_FAILED`, which names a
-// query the schema will refuse every time, takes that route. Verified against
-// the live API that a validation failure carries the code.
-
-/** Most explanatory first: the one worth telling the caller about. */
-const FAULT_ORDER = ['ratelimited', 'auth', 'schema', 'input'] as const;
-
-/** `extensions.code`, which the SDK's own typings do not name. */
-interface RawGraphqlError {
-  readonly extensions?: {readonly code?: string};
-}
-
-/** Whether the SDK had a body it could not read as JSON, which it keeps as text. */
-function answeredWithText(error: LinearError): boolean {
-  return typeof error.raw?.response?.error === 'string';
-}
-
-/**
- * The payload as Linear sent it, kept by the SDK alongside its parse. Entries
- * line up with `error.errors` one for one, which is what lets a code and a
- * parsed type be read for the same error.
- */
-function rawErrors(error: LinearError): readonly RawGraphqlError[] {
-  const raw: unknown = error.raw?.response?.errors;
-  return Array.isArray(raw) ? (raw as RawGraphqlError[]) : [];
-}
-
-/**
- * What a rejected request is, weighing every error Linear listed rather than
- * the first. The SDK types itself from the first entry alone, so a response
- * whose first error is a bad id and whose second is an authentication failure
- * would arrive as the bad id and send the reader after the wrong thing.
- */
-function weigh(error: LinearError): Fault {
-  const parsed = error.errors ?? [];
-  if (parsed.length === 0) return forAnswer(error);
-  const raw = rawErrors(error);
-  const found = new Set(
-    parsed.map((entry, index) => {
-      const code = raw[index]?.extensions?.code ?? '';
-      return BY_CODE.get(code) ?? BY_TYPE.get(entry.type) ?? 'remote';
-    })
-  );
-  return FAULT_ORDER.find((candidate) => found.has(candidate)) ?? 'remote';
-}
-
-/**
- * A rejection with nothing in `errors[]` to read, which leaves the status and
- * the body. The SDK reads any bare 4xx as an authentication failure; only the
- * two statuses that mean that are taken as such here, or a bad request would
- * send the reader off to rotate a key that works.
- */
-function forAnswer(error: LinearError): Fault {
-  const status = error.status;
-  if (status === 401 || status === 403) return 'auth';
-  if (status === 429) return 'ratelimited';
-  if (status !== undefined && status >= 200 && status < 300) {
-    // A success that is not a GraphQL answer at all is someone else answering;
-    // one that is, but carries neither half, is Linear answering nothing.
-    return answeredWithText(error) ? 'garbled' : 'empty';
-  }
-  return 'remote';
-}
-
-/**
- * Every message Linear sent, not the first. The SDK builds `error.message` from
- * `errors[0]` alone, so on the response the classification above exists for —
- * a bad id followed by an authentication failure — the text would name the one
- * the class does not.
- */
-function messageOf(error: LinearError): string {
-  const messages = (error.errors ?? [])
-    .map((entry) => entry.message)
-    .filter((message) => message !== '');
-  return messages.length > 0 ? messages.join('; ') : error.message;
-}
-
-/** A rejection Linear explained, rethrown on the taxonomy with what to do about it. */
-function throwForLinearError(error: LinearError): never {
-  const message = messageOf(error);
-  switch (weigh(error)) {
-    case 'ratelimited':
-      throw new EnvironmentError(
-        `linear rate-limited the request: ${message}`,
-        {
-          hint: 'wait for the rate-limit window to reset; the next refresh retries.',
-          cause: error,
-        }
-      );
-    case 'auth':
-      throw new EnvironmentError(`linear rejected the api key: ${message}`, {
-        hint: `set ${LINEAR_TOKEN_VAR} to a key that can read the workspace.`,
-        cause: error,
-      });
-    // A field this module asks for that the schema does not have. No amount of
-    // retrying or data-fixing clears it; someone edits the query.
-    case 'schema':
-      throw new DefinitionError(`linear refused the query: ${message}`, {
-        hint: 'the query asks for something the Linear schema does not have; fix the query document in the dispatch Linear client.',
-        cause: error,
-      });
-    case 'input':
-      throw new DataError(`linear rejected the query: ${message}`, {
-        hint: 'the project, milestone, or ticket named does not exist on Linear, or the key cannot see it.',
-        cause: error,
-      });
-    case 'empty':
-      throw new EnvironmentError(
-        'linear answered with neither data nor errors',
-        {
-          hint: 'retry; if it persists, check https://linearstatus.com.',
-          cause: error,
-        }
-      );
-    case 'garbled':
-      throw new EnvironmentError(
-        `linear answered with something that is not a GraphQL response: ${message}`,
-        {
-          hint: 'a proxy is probably answering in its place; check the endpoint.',
-          cause: error,
-        }
-      );
-    default:
-      throw new EnvironmentError(`linear returned an error: ${message}`, {
-        hint: 'check https://linearstatus.com; the next refresh retries.',
-        cause: error,
-      });
-  }
 }
 
 /**
@@ -241,7 +61,7 @@ export function createTransport(options: TransportOptions): GraphqlExecutor {
   let parsed;
   try {
     parsed = new LinearSdk({
-      ...credentials(options.token),
+      ...resolveCredentials(options.token),
       apiUrl: options.endpoint ?? LINEAR_API_URL,
     }).options;
   } catch (error) {
@@ -318,23 +138,4 @@ export function createTransport(options: TransportOptions): GraphqlExecutor {
     // the shape of its return type, not a case that reaches this line.
     return answer.data as TData;
   };
-}
-
-/** Whether the environment can drive Linear directly, without deciding anything else. */
-export function hasLinearToken(env: NodeJS.ProcessEnv): boolean {
-  const token = env[LINEAR_TOKEN_VAR];
-  return typeof token === 'string' && token.trim() !== '';
-}
-
-/** The key, or an `EnvironmentError` naming the variable that is missing. */
-export function requireLinearToken(env: NodeJS.ProcessEnv): string {
-  const token = env[LINEAR_TOKEN_VAR]?.trim() ?? '';
-  ensure(
-    token !== '',
-    () =>
-      new EnvironmentError(`${LINEAR_TOKEN_VAR} is not set`, {
-        hint: `export ${LINEAR_TOKEN_VAR}=<linear api key> to let dispatch read Linear itself, or leave it unset to fetch through an agent session.`,
-      })
-  );
-  return token;
 }

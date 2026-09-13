@@ -35,10 +35,9 @@ describe('linear live queries', {skip: !enabled}, () => {
     assert.ok(milestones, 'no project the key can see has any milestone');
     for (const milestone of milestones) {
       assert.match(milestone.id, /^[0-9a-f-]{36}$/u);
-      // `ordered` refuses a non-finite value but not a non-number, and a
-      // sortOrder that arrives as a string sorts nothing.
+      // A sortOrder that arrives as a string or a NaN sorts nothing;
+      // `Number.isFinite` refuses both.
       assert.ok(Number.isFinite(milestone.sortOrder));
-      assert.equal(typeof milestone.sortOrder, 'number');
     }
 
     const withIssues = await findProjectWithIssues(client, projects);

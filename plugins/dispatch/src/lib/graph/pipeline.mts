@@ -56,7 +56,11 @@ export const DEFAULT_STALE_AFTER_SECONDS = 300;
  *   that agent by relaying the event. While one exists the item never queues
  *   as `resume` — warm relay and cold re-dispatch are competing recoveries,
  *   and racing them puts two agents on one node. `dispatch worker rm` is the
- *   explicit handover from the first to the second.
+ *   explicit handover from the first to the second, and the session runs it
+ *   every time an agent it relayed to comes back — otherwise a worker that
+ *   died mid-turn would pin its item here for as long as that session lives.
+ *   A worker that died on a turn no relay carried is not covered: nothing
+ *   names that turn, so only an operator can hand it over.
  * - A `watch` row is a worker's PR wait handed to the server: the item reads
  *   as in-flight while it exists, is never queued while `watching`, and once
  *   the server fires it (the PR changed in a way the worker would act on)

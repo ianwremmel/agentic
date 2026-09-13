@@ -74,13 +74,17 @@ export class CoordinationStore {
         );
         if (live >= input.capacity.max) return {outcome: 'full'};
       }
+      // `claimed_at` dates the turn, so only a claim that begins one sets it.
+      // A refresh continues the turn already standing — moving the date would
+      // orphan the `turn` token the relay handed out for it, and the handover
+      // that token exists for could then never match: the worker's address
+      // would outlive it and pin the item out of the queue.
       this.#db.run(
         `INSERT INTO claim (node_id, session_id, actor, worktree, branch, claimed_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(node_id) DO UPDATE SET
            session_id = excluded.session_id, actor = excluded.actor,
-           worktree = excluded.worktree, branch = excluded.branch,
-           claimed_at = excluded.claimed_at`,
+           worktree = excluded.worktree, branch = excluded.branch`,
         [
           node.id,
           input.session,

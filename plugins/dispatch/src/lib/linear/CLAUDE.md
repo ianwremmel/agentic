@@ -12,8 +12,8 @@ rate-limits on complexity.
 - `transport.mts` — `createTransport`: one endpoint and key, a per-request
   timeout, the SDK's rejection restated on the dispatch error taxonomy.
 - `faults.mts` — which taxonomy class a rejection lands on.
-- `queries/` — one query document per file. `queries/index.test.mts` asserts
-  the two rules they encode against the documents themselves.
+- `queries/` — one query document per file. Nothing mocked can check these; a
+  selection Linear no longer answers only shows up in `live.test.mts`.
 - `paging.mts`, `fields.mts` — walk a connection to its end; refuse a field
   that did not come back rather than default it.
 - `parse-issue.mts` — one raw issue into a `LinearIssue`, finishing any nested

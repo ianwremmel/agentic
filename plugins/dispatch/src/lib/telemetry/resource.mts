@@ -17,13 +17,14 @@ const MANIFEST = new URL(
 );
 
 /**
- * The version `plugin.json` declares, or `0.0.0` when it cannot be read.
- *
- * semantic-release writes this file, so a half-finished release can leave it
- * truncated — not worth failing a command over. `serverInfo()` in
+ * The version `plugin.json` declares, or `0.0.0` when it is missing, truncated,
+ * or not a string — semantic-release writes this file, and a half-finished
+ * release is not worth failing a command over. `serverInfo()` in
  * `lib/mcp/mcp.mts` reads it the same way.
  */
-export async function pluginVersion(manifest: URL = MANIFEST): Promise<string> {
+export async function readPluginVersion(
+  manifest: URL = MANIFEST
+): Promise<string> {
   try {
     const parsed = JSON.parse(await readFile(manifest, 'utf8')) as {
       version?: unknown;
@@ -36,12 +37,11 @@ export async function pluginVersion(manifest: URL = MANIFEST): Promise<string> {
 
 /**
  * The identity every record carries. Defaults only: `NodeSDK` merges its
- * detectors over this, so `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`
- * still win.
+ * detectors over this, so `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` win.
  */
-export async function telemetryResource(): Promise<Resource> {
+export async function buildResource(): Promise<Resource> {
   return resourceFromAttributes({
     [ATTR_SERVICE_NAME]: SERVICE_NAME,
-    [ATTR_SERVICE_VERSION]: await pluginVersion(),
+    [ATTR_SERVICE_VERSION]: await readPluginVersion(),
   });
 }

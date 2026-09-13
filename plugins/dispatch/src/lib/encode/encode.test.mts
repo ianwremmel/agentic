@@ -5,14 +5,14 @@ import {encode} from './encode.mts';
 
 describe('encode', () => {
   it('omits a field with nothing in it', () => {
-    // This is what keeps a line short: every exporter sets the fields a record
+    // What keeps a telemetry line short: an exporter sets the fields a record
     // has nothing to say about to `undefined`.
     assert.equal(encode({a: 1, b: undefined}), '{"a":1}');
   });
 
   it('keeps the message and stack of an Error', () => {
-    // `JSON.stringify` renders an Error as `{}`. The SDK hands `diag` real
-    // Errors, and losing them leaves a diagnostic line saying nothing.
+    // `JSON.stringify` alone renders an Error as `{}`, and the OTel SDK hands
+    // `diag` real Errors.
     const parsed = JSON.parse(encode({error: new TypeError('bad input')})) as {
       error: {message: string; name: string; stack: string};
     };
@@ -34,8 +34,6 @@ describe('encode', () => {
   });
 
   it('survives a value that references itself', () => {
-    // Exporting runs inside the caller's own `emit()`, so a throw takes down
-    // the code being observed.
     const loop: Record<string, unknown> = {name: 'tick'};
     loop.self = loop;
 

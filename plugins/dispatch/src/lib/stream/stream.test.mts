@@ -2,47 +2,43 @@ import assert from 'node:assert/strict';
 import {Writable} from 'node:stream';
 import {describe, it} from 'node:test';
 
-import {drained, forgiving} from './stream.mts';
+import {drain, ignoreWriteErrors} from './stream.mts';
 
-describe('forgiving', () => {
+describe('ignoreWriteErrors', () => {
   it('keeps a stream error from becoming an uncaught exception', () => {
-    // A write that fails emits `error` as well as calling back, and an
-    // unhandled `error` on a stream ends the process. Telemetry must not be
-    // able to take down the command it is observing over a closed pipe, which
-    // `dispatch … | head` produces as a matter of course.
+    // A failed write emits `error` as well as calling back, and an unhandled
+    // `error` on a stream ends the process.
     const stream = new Writable({
       write(_chunk, _encoding, callback) {
         callback(new Error('EPIPE'));
       },
     });
 
-    forgiving(stream).write('anything\n');
+    ignoreWriteErrors(stream).write('anything\n');
 
     assert.equal(stream.listenerCount('error'), 1);
   });
 
-  it('guards a stream once however many exporters share it', () => {
-    // All three exporters are handed the same stderr; three no-op listeners
-    // would be two too many and would trip Node's max-listeners warning as
-    // soon as anything else listened.
+  it('guards a stream once however many writers share it', () => {
+    // All three telemetry exporters are handed the same stderr, and one
+    // listener per exporter would trip Node's max-listeners warning.
     const stream = new Writable({
       write(_chunk, _encoding, callback) {
         callback();
       },
     });
 
-    forgiving(stream);
-    forgiving(stream);
-    forgiving(stream);
+    ignoreWriteErrors(stream);
+    ignoreWriteErrors(stream);
+    ignoreWriteErrors(stream);
 
     assert.equal(stream.listenerCount('error'), 1);
   });
 });
 
-describe('drained', () => {
+describe('drain', () => {
   it('resolves only after the writes queued before it', async () => {
-    // This is the guarantee a signal's immediate re-raise needs: the handler
-    // has to know the bytes left, not just that `write()` returned.
+    // A flush needs to know the bytes left, not just that `write()` returned.
     const written: string[] = [];
     const slow = new Writable({
       write(chunk, _encoding, callback) {
@@ -55,7 +51,7 @@ describe('drained', () => {
 
     slow.write('first\n');
     slow.write('second\n');
-    const waiting = drained(slow);
+    const waiting = drain(slow);
     assert.deepEqual(written, [], 'nothing has been written yet');
 
     await waiting;
@@ -72,6 +68,6 @@ describe('drained', () => {
       },
     });
 
-    await drained(wedged, 10);
+    await drain(wedged, 10);
   });
 });

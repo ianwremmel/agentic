@@ -1,18 +1,14 @@
 /**
- * JSON for one line of telemetry.
+ * JSON that cannot throw, for a caller with nowhere to report a failure —
+ * telemetry exporting runs inside the observed code's own `emit()` or `end()`.
  *
- * Exporting runs inside the caller's own `emit()` or `end()`, so a throw here
- * takes down the code being observed. Bare `JSON.stringify` throws on a
- * `BigInt` and on a self-referencing record, and renders an `Error` — which
- * `diag` is handed routinely — as `{}`.
+ * Bare `JSON.stringify` throws on a `BigInt` and on a self-referencing value, and
+ * renders an `Error` as `{}`. The circular check tracks every object already
+ * written rather than the ancestor chain, so a shared reference also reads as
+ * `[circular]`.
  *
- * The circular check tracks every object already written rather than the
- * ancestor chain, so a shared reference reads as `[circular]` on its second
- * appearance. Cosmetic, in a record that is already pathological.
- *
- * The outer catch is what makes the no-throw guarantee total: a value can
- * still refuse to serialize from a throwing getter or `toJSON()`, which the
- * replacer never gets to see.
+ * The outer catch is what makes the guarantee total: a throwing getter or
+ * `toJSON()` fails where the replacer never sees it.
  */
 export function encode(value: unknown): string {
   const seen = new WeakSet<object>();

@@ -94,6 +94,31 @@ CLI.
 Add a command by writing a file under `src/commands/` — the folder path is the
 invocation path, and discovery needs no registry.
 
+## Telemetry
+
+The OpenTelemetry SDK starts on every CLI and server invocation, configured by
+the standard `OTEL_*` variables. Nothing is instrumented yet.
+
+Set any OTLP endpoint — the generic `OTEL_EXPORTER_OTLP_ENDPOINT` or a
+per-signal one — and all three signals go to the SDK's own exporters, with the
+rest of the `OTEL_*` environment honored. A signal without its own endpoint
+falls back to the OTLP default, not to stderr. With no endpoint set anywhere,
+all three go to stderr, one line per record:
+
+```text
+span {"name":"scheduler.tick","time":"…","trace":"…","kind":"INTERNAL","durationMs":12.4}
+```
+
+Per signal, `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` overrides that: `none`
+disables the signal, and `console` writes it to stderr in the form above. A
+selector that pairs `console` with a real exporter gets the real one and a
+warning — serving `console` means naming the exporter, which turns off the
+environment handling for that whole signal.
+
+Never stdout, which `dispatch mcp` uses for JSON-RPC and the CLI for command
+output. That covers `OTEL_LOG_LEVEL` diagnostics and the `console` selector,
+both of which OTel would otherwise put there.
+
 ## Contributing
 
 See the [root README](../../README.md#contributing) for branch and commit conventions.

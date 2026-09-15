@@ -1,12 +1,26 @@
 # Telemetry
 
 `startTelemetry({stream})` starts the OTel SDK and returns `shutdown()`.
-`src/main.mts` calls it once and shuts it down in a `finally`. Nothing is
-instrumented yet.
+`src/main.mts` calls it once and shuts it down in a `finally`.
+
+`log` in `log.mts` is how the rest of the CLI emits: `debug`/`info`/`warn`/
+`error`, plus `warnException`/`errorException`, which take the thrown value and
+record it under the `exception.*` conventions rather than flattening it to its
+message. Two of them because severity is what a backend routes on, and a
+failure a caller absorbed is not a failure that stopped it. Nothing threads a
+logger through its arguments — the Logs API is a process-wide registry, and a
+record picks up the active span from context.
 
 `destination.mts` routes each signal, `pipeline.mts` turns that into `NodeSDK`
 config, `telemetry.mts` starts and stops the SDK, `exporters/` writes one line
 per record. `encode` and `drain` come from `lib/encode` and `lib/stream`.
+
+**`log` resolves its logger at import, before the SDK exists.** The API hands
+back a proxy that drops records until `startTelemetry` registers a provider and
+follows it after, which is what lets a module imported at startup log at all.
+That proxy then keeps the provider it resolved, so a later registration reaches
+new loggers but never `log` — which is why `captureLogs` in `test-support.mts`
+is memoized and offers `reset` instead of handing out a second provider.
 
 **Nothing goes to stdout.** `dispatch mcp` serves JSON-RPC there and the CLI's
 stdout is what agents read back, so this module's own output goes to stderr and a

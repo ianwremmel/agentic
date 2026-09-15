@@ -123,7 +123,7 @@ Plugin code is TypeScript in `.mts` files, run unbuilt on Node's native type
 stripping — there is no build step. Consequences worth remembering:
 
 - Import sibling modules by their real path, extension included
-  (`./log/logger.mts`).
+  (`./lib/telemetry/log.mts`).
 - Anything a skill invokes at run time lives inside the plugin directory.
 - Tests are colocated with the code they cover: `args.mts` → `args.test.mts`.
 - Prefer promise-based APIs over callbacks and sync calls, even where sync

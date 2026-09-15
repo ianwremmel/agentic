@@ -3,8 +3,7 @@ import readline from 'node:readline';
 import type {Readable, Writable} from 'node:stream';
 
 import type {CommandNode} from '../command/index.mts';
-import {createLogger, streamSink} from '../logger/index.mts';
-import type {Logger} from '../logger/index.mts';
+import {log} from '../telemetry/index.mts';
 import {buildTools} from './tools.mts';
 import type {BuiltTools} from './tools.mts';
 import {callTool} from './dispatch.mts';
@@ -47,7 +46,6 @@ interface JsonRpcRequest {
 interface RequestContext {
   readonly tools: BuiltTools;
   readonly env: NodeJS.ProcessEnv;
-  readonly log: Logger;
   readonly serverInfo: {name: string; version: string};
   readonly channel: ChannelWriter;
 }
@@ -66,7 +64,6 @@ export async function runMcpServer(opts: {
   tree: CommandNode;
   stdin: Readable;
   stdout: Writable;
-  stderr: Writable;
   env: NodeJS.ProcessEnv;
   tick?: {
     intervalMs: number;
@@ -80,7 +77,6 @@ export async function runMcpServer(opts: {
   const ctx: RequestContext = {
     tools: buildTools(opts.tree),
     env: opts.env,
-    log: createLogger(streamSink(opts.stderr)),
     serverInfo: await serverInfo(),
     channel,
   };
@@ -102,9 +98,7 @@ export async function runMcpServer(opts: {
         try {
           await opts.tick.run(channel);
         } catch (error) {
-          ctx.log.error('scheduler tick failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
+          log.errorException('scheduler tick failed', error);
         }
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the await above can re-enter tickQuietly, which sets `requested`; the analyzer cannot see that mutation
       } while (tickState.requested);
@@ -160,9 +154,7 @@ async function drainQuietly(
   try {
     await drainInstructions(channel, ctx.env);
   } catch (error) {
-    ctx.log.error('channel drain failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    log.errorException('channel drain failed', error);
   }
 }
 
@@ -246,7 +238,6 @@ async function dispatch(
         (params.arguments as Record<string, unknown> | undefined) ?? {};
       return callTool(command, args, {
         env: ctx.env,
-        log: ctx.log,
         channel: ctx.channel,
       });
     }

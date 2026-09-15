@@ -121,4 +121,86 @@ describe('EdgeStore', () => {
     assert.deepEqual(blocks, ['M1', 'NEW']);
     await db.close();
   });
+
+  it('replaces a milestone membership `setEdges` deliberately leaves behind', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    const milestones = new MilestoneStore(db);
+    for (const id of ['M1', 'M2']) {
+      await milestones.upsertMilestone({id, project: 'P', name: id});
+    }
+    await store.addEdge('T', 'BLOCKED');
+    await store.setMilestone('T', 'M1');
+
+    await store.setMilestone('T', 'M2');
+
+    // Counted by two gates is the failure this exists to prevent; the blocking
+    // edge is not a membership and must survive.
+    const blocks = (await store.edges())
+      .filter((e) => e.blocker === 'T')
+      .map((e) => e.blocked)
+      .sort();
+    assert.deepEqual(blocks, ['BLOCKED', 'M2']);
+    await db.close();
+  });
+
+  it('clears every membership when a ticket is in no milestone', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    await new MilestoneStore(db).upsertMilestone({
+      id: 'M1',
+      project: 'P',
+      name: 'M1',
+    });
+    await store.setMilestone('T', 'M1');
+
+    await store.setMilestone('T', null);
+
+    assert.deepEqual(await store.edges(), []);
+    await db.close();
+  });
+
+  it('refuses a membership that would close a cycle, as every other edge write does', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    await new MilestoneStore(db).upsertMilestone({
+      id: 'M1',
+      project: 'P',
+      name: 'M1',
+    });
+    // Membership shares the edge table with the blocking DAG, so this is a
+    // cycle even though neither write mentions the other.
+    await store.addEdge('M1', 'T');
+
+    await assert.rejects(
+      store.setMilestone('T', 'M1'),
+      (err: unknown) => err instanceof DataError
+    );
+    assert.deepEqual(await store.edges(), [{blocker: 'M1', blocked: 'T'}]);
+    await db.close();
+  });
+
+  it('leaves no placeholder behind when clearing membership for a ticket nobody wrote', async () => {
+    const {db, store} = await fresh();
+    await store.setMilestone('NEVER-WRITTEN', null);
+    assert.equal(
+      db.get('SELECT 1 AS found FROM node WHERE external_id = ?', [
+        'NEVER-WRITTEN',
+      ]),
+      undefined
+    );
+    await db.close();
+  });
+
+  it('refuses an unrecorded milestone rather than minting a blocking edge to a placeholder', async () => {
+    const {db, store} = await fresh();
+    await new ProjectStore(db).upsertProject({id: 'P', name: 'P'});
+    await new TicketStore(db).upsertTicket(baseTicket('T', 'P'));
+    await assert.rejects(store.setMilestone('T', 'First'));
+    assert.deepEqual(await store.edges(), []);
+    await db.close();
+  });
 });

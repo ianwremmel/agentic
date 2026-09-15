@@ -169,6 +169,15 @@ export class FetchRequestStore {
     return typeof row?.at === 'string' ? row.at : null;
   }
 
+  /** One request by id, or null once something cleared the row. */
+  async get(id: number): Promise<FetchRequest | null> {
+    const row = this.#db.get(
+      `SELECT ${COLUMNS} FROM fetch_request WHERE id = ?`,
+      [id]
+    );
+    return row === undefined ? null : toRequest(row);
+  }
+
   async undelivered(): Promise<FetchRequest[]> {
     return this.#db
       .all(

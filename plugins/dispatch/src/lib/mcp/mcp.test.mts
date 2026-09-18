@@ -8,6 +8,7 @@ import {describe, it} from 'node:test';
 import {discover} from '../command/index.mts';
 import {withDatabase} from '../db/index.mts';
 import {FetchRequestStore} from '../stores/index.mts';
+import {captureLogs} from '../telemetry/test-support.mts';
 import {runMcpServer} from './mcp.mts';
 
 const FIXTURES = new URL('../command/__fixtures__/commands/', import.meta.url);
@@ -19,13 +20,6 @@ function feed(messages: unknown[]): Readable {
 function feedRaw(lines: string[]): Readable {
   return Readable.from(lines.map((l) => `${l}\n`));
 }
-
-const nullStream = () =>
-  new Writable({
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
 
 interface RpcResult {
   protocolVersion?: string;
@@ -61,7 +55,6 @@ async function serve(
     tree: await discover(FIXTURES),
     stdin,
     stdout,
-    stderr: nullStream(),
     env: resolved,
   });
   return chunks
@@ -200,7 +193,7 @@ describe('runMcpServer', () => {
     // throws EnvironmentError on — the same failure mode as an unwritable
     // state dir or, after an upgrade, a schema-version mismatch.
     const env = {DISPATCH_DB: '/dev/null/graph.db'};
-    const stderrChunks: string[] = [];
+    const recorded = captureLogs();
     const stdoutChunks: string[] = [];
     await runMcpServer({
       tree: await discover(FIXTURES),
@@ -219,12 +212,6 @@ describe('runMcpServer', () => {
           callback();
         },
       }),
-      stderr: new Writable({
-        write(chunk, _encoding, callback) {
-          stderrChunks.push(String(chunk));
-          callback();
-        },
-      }),
       env,
     });
 
@@ -240,7 +227,17 @@ describe('runMcpServer', () => {
     assert.equal(greeted.id, 1);
     assert.equal(listed.id, 2);
     assert.ok(listed.result?.tools);
-    assert.match(stderrChunks.join(''), /channel drain failed/);
+
+    // The failure is swallowed as far as the protocol is concerned, so the
+    // record is the only thing that says it happened at all — and it has to
+    // carry the cause, or it says only that something did.
+    const drain = recorded
+      .read()
+      .find((record) => record.body === 'channel drain failed');
+    assert.ok(drain, 'the drain failure was recorded');
+    const reason = drain.attributes['exception.message'];
+    assert.ok(typeof reason === 'string');
+    assert.match(reason, /dispatch database/u);
   });
 
   it("drains a queued instruction after a tool call, after that call's own response", async () => {
@@ -306,7 +303,6 @@ describe('runMcpServer', () => {
       tree: await discover(FIXTURES),
       stdin,
       stdout,
-      stderr: nullStream(),
       env,
       tick: {intervalMs: 20, run: () => Promise.resolve()},
     });

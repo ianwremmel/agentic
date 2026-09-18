@@ -3,24 +3,7 @@ import {describe, it} from 'node:test';
 
 import {AbstractCommand} from '../command/index.mts';
 import type {ParsedOptions, CommandContext} from '../command/index.mts';
-import {createLogger, type CoreLogger} from '../logger/index.mts';
 import {callTool} from './dispatch.mts';
-
-const nullLog = () => {
-  const noop = () => undefined;
-  const sink = {} as CoreLogger;
-  for (const level of [
-    'error',
-    'warn',
-    'info',
-    'debug',
-    'trace',
-    'log',
-  ] as const) {
-    sink[level] = noop;
-  }
-  return createLogger(sink);
-};
 
 const echoOptions = {
   msg: {type: 'string', description: 'd', positional: false, required: true},
@@ -56,11 +39,7 @@ class NeedsEnv extends AbstractCommand {
 
 describe('callTool', () => {
   it('returns the command io output as text', async () => {
-    const result = await callTool(
-      new Echo(),
-      {msg: 'hi'},
-      {env: {}, log: nullLog()}
-    );
+    const result = await callTool(new Echo(), {msg: 'hi'}, {env: {}});
     assert.equal(result.isError, undefined);
     const [first] = result.content;
     assert.ok(first);
@@ -68,7 +47,7 @@ describe('callTool', () => {
   });
 
   it('returns isError when a required option is missing', async () => {
-    const result = await callTool(new Echo(), {}, {env: {}, log: nullLog()});
+    const result = await callTool(new Echo(), {}, {env: {}});
     assert.equal(result.isError, true);
     const [first] = result.content;
     assert.ok(first);
@@ -76,11 +55,7 @@ describe('callTool', () => {
   });
 
   it('returns isError when a declared env var is missing', async () => {
-    const result = await callTool(
-      new NeedsEnv(),
-      {},
-      {env: {}, log: nullLog()}
-    );
+    const result = await callTool(new NeedsEnv(), {}, {env: {}});
     assert.equal(result.isError, true);
     const [first] = result.content;
     assert.ok(first);

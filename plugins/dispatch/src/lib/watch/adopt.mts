@@ -3,9 +3,9 @@ import {promisify} from 'node:util';
 
 import {withDatabase} from '../db/index.mts';
 import {nowIso} from '../db/time.mts';
-import type {Logger} from '../logger/index.mts';
 import {PrStore} from '../stores/index.mts';
 import {findNode} from '../stores/materialize.mts';
+import {log} from '../telemetry/index.mts';
 
 const run = promisify(execFile);
 
@@ -57,7 +57,6 @@ export async function adoptOrphans(
   opts: {
     list?: PrLister;
     dbPath?: string | undefined;
-    log?: Logger | undefined;
   } = {}
 ): Promise<number> {
   const list = opts.list ?? githubLister;
@@ -72,10 +71,7 @@ export async function adoptOrphans(
       try {
         open = await list(repo);
       } catch (error) {
-        opts.log?.warn('adoption listing failed', {
-          repo,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        log.warnException('adoption listing failed', error, {repo});
         continue;
       }
       // What "known" means, and why numbers and branches are scoped

@@ -158,7 +158,7 @@ async function drainQuietly(
   ctx: RequestContext
 ): Promise<void> {
   try {
-    await drainInstructions(channel, ctx.env);
+    await drainInstructions(channel, ctx.env, {log: ctx.log});
   } catch (error) {
     ctx.log.error('channel drain failed', {
       error: error instanceof Error ? error.message : String(error),

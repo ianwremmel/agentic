@@ -64,10 +64,26 @@ A substate this table doesn't name is handled per consumer:
 | ticket comment     | `save_comment(issueId, body)`                                                                                  |
 | read comments      | `list_comments(issueId)` — match the alert sentinel; replies carry `parentId`                                  |
 | react              | `unsupported` — no reaction call in the Linear MCP server; use the text tokens                                 |
-| file ticket        | `save_issue(title, team, description)` — same team as the ticket unless the brief says otherwise               |
-| subtask            | `save_issue(title, team, parentId=<parent>)`                                                                   |
+| file ticket        | `save_issue(title, team, description, project, milestone, state=<available>)` — see Filing below               |
+| subtask            | `save_issue(title, team, parentId=<parent>, project, milestone, state=<available>)` — see Filing below         |
 | blocks edge        | `save_issue(id=<blocker>, blocks=[<blocked>])` (append-only)                                                   |
 | one-edge neighbors | `get_issue(id, includeRelations=true)` → `blockedBy` / `blocks`                                                |
+
+### Filing
+
+Every ticket you create (`file ticket`, `subtask`, `file follow-up`) passes:
+
+- `state`: the destination team's substate mapping to `available` (Todo in
+  the role map). Without it Linear files into the team's default state,
+  usually Backlog; the next refresh reads that as `backlog`, a dormant role
+  the scheduler never dispatches, and a follow-up left there keeps its
+  milestone's gate closed.
+- `project` and `milestone` (name or id). `file ticket` and `subtask` copy the
+  acting ticket's, omitting any it lacks; when the brief names another
+  project, take the milestone from the brief too. `file follow-up` always
+  uses the reviewed milestone and its project.
+- `team`: the acting ticket's unless the brief says otherwise; for
+  `file follow-up`, the team of the member whose work the gap belongs to.
 
 ## Quirks
 
@@ -89,7 +105,7 @@ project-scoped, not per-milestone, so the body must carry the milestone id
 | post review artifact   | `save_status_update(type="project", project, body, health)` — `onTrack` when the goal is achieved, `atRisk` otherwise                   |
 | update review artifact | `save_status_update(id, body, health)` — same update; the pending→outcome edit when human input resolved                                |
 | artifact thread        | `list_comments(statusUpdateId)` / `save_comment(statusUpdateId)`; one thread per update — reply via `parentId`; tag with `@displayName` |
-| file follow-up         | `save_issue(title, team, description, project, milestone)` — `milestone` takes a name or id; pick the team per Quirks                   |
+| file follow-up         | `save_issue(title, team, description, project, milestone, state=<available>)` — see Filing above                                        |
 
 Member DoD comments and canceled-member rationales are ticket reads — use the
 Operations bindings above (`fetch brief`, `read comments`).

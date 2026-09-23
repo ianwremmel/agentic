@@ -71,22 +71,22 @@ A substate this table doesn't name is handled per consumer:
 
 ### Filing
 
-Every ticket you create (`file ticket`, `subtask`, `file follow-up`) passes:
+`file ticket`, `subtask`, and `file follow-up` all call `save_issue` with
+`state` set to the target team's `available` substate (Todo), and with `team`,
+`project`, and `milestone` taken from the table below. Leave out `project` or
+`milestone` when neither source has one.
 
-- `state`: the destination team's `available` substate (Todo). Omitted,
-  Linear uses the team default (usually Backlog), which the scheduler never
-  dispatches; a follow-up stuck there keeps its milestone's gate closed.
-- `project` and `milestone` (name or id). `file ticket` copies the acting
-  ticket's and `subtask` the parent's, omitting any it lacks; when the brief
-  names another project, take the milestone from the brief, or omit it.
-  `file follow-up` always uses the reviewed milestone and its project.
-- `team`: the acting ticket's unless the brief says otherwise; for
-  `file follow-up`, the team of the member whose work the gap belongs to.
+| Operation      | `team`                                        | `project` and `milestone`              |
+| -------------- | --------------------------------------------- | -------------------------------------- |
+| file ticket    | the brief's, else the acting ticket's         | the brief's, else the acting ticket's  |
+| subtask        | the parent's                                  | the parent's                           |
+| file follow-up | the team of the member ticket nearest the gap | the reviewed milestone and its project |
 
 ## Quirks
 
-- Linear tickets are per-team: read the team's substates before writing a
-  state, and don't reuse another team's substate names.
+- Linear tickets are per-team: read the acting ticket's team (or the target
+  team from Filing) before writing a state or filing into it, and don't reuse
+  another team's substate names.
 - Linear archives completed work; an archived task's `Done`/`Canceled` status
   still counts toward its milestone, so `build-graph` must not `task rm` it.
 

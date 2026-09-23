@@ -152,7 +152,7 @@ async function drainQuietly(
   ctx: RequestContext
 ): Promise<void> {
   try {
-    await drainInstructions(channel, ctx.env);
+    await drainInstructions(channel, ctx.env, {log: ctx.log});
   } catch (error) {
     log.errorException('channel drain failed', error);
   }

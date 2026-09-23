@@ -71,16 +71,17 @@ A substate this table doesn't name is handled per consumer:
 
 ### Filing
 
-`file ticket`, `subtask`, and `file follow-up` all call `save_issue` with
-`state` set to the target team's `available` substate (Todo), and with `team`,
-`project`, and `milestone` taken from the table below. Leave out `project` or
-`milestone` when neither source has one.
+`file ticket`, `subtask`, and `file follow-up` set `state` to the target team's
+`available` substate (Todo) and take `team`, `project`, and `milestone` from
+this table.
+Omit `project` or `milestone` when its cell yields none. A brief that names
+a project but no milestone yields no milestone.
 
-| Operation      | `team`                                        | `project` and `milestone`              |
-| -------------- | --------------------------------------------- | -------------------------------------- |
-| file ticket    | the brief's, else the acting ticket's         | the brief's, else the acting ticket's  |
-| subtask        | the parent's                                  | the parent's                           |
-| file follow-up | the team of the member ticket nearest the gap | the reviewed milestone and its project |
+| Operation      | `team`                                              | `project` and `milestone`                                               |
+| -------------- | --------------------------------------------------- | ----------------------------------------------------------------------- |
+| file ticket    | the acting ticket's, unless its brief names another | the pair the acting ticket's brief names, else the acting ticket's pair |
+| subtask        | the parent's                                        | the parent's                                                            |
+| file follow-up | the team of the member ticket nearest the gap       | the reviewed milestone and its project                                  |
 
 ## Quirks
 

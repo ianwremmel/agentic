@@ -22,6 +22,10 @@ updates:
       # Node.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
+      # 10.x needs conventional-changelog-writer@9; the semantic-release
+      # notes generator ships 8, so the preset throws on every release.
+      - dependency-name: 'conventional-changelog-conventionalcommits'
+        update-types: ['version-update:semver-major']
     pull-request-branch-name:
       separator: '_'
     schedule:

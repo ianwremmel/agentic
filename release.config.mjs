@@ -29,9 +29,9 @@ export default {
   // one that added this file, so that commit's own `feat:` counts toward the
   // first automated release. Without a tag to read back to, semantic-release
   // starts at 1.0.0 and declares a stability the plugin does not have. The tag
-  // records a version, not a publish: npm has no `@ianwremmel/dispatch` yet,
-  // and the first version has to be pushed by hand because a trusted publisher
-  // can only be registered on a package that already exists.
+  // records a version, not a publish: the first npm version was pushed by
+  // hand, because a trusted publisher can only be registered on a package that
+  // already exists.
   tagFormat: 'dispatch-v${version}',
   plugins: [
     ['@semantic-release/commit-analyzer', {preset: 'conventionalcommits'}],
@@ -53,11 +53,10 @@ export default {
           'node scripts/set-plugin-version.mts ${nextRelease.version} plugins/dispatch/.claude-plugin/plugin.json',
       },
     ],
-    // Commit both manifests back to main. Installing this plugin through the
-    // marketplace reads `plugin.json` straight from git (marketplace.json
-    // sources ./plugins/dispatch), and Claude Code decides whether an install
-    // is stale by comparing that version — so leaving it behind in git would
-    // freeze every marketplace consumer on whatever they first installed.
+    // Commit both manifests back to main, so the git tree at each release tag
+    // carries the version npm published from it. Marketplace installs come
+    // from the npm package; `claude --plugin-dir ./plugins/dispatch` reads the
+    // manifests from git.
     // `[skip ci]` in the message is what stops this retriggering the release.
     // The push runs on a GitHub App token, and unlike a GITHUB_TOKEN push it
     // does trigger workflows, so the marker carries that on its own. Losing it

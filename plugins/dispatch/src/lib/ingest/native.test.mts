@@ -5,7 +5,10 @@ import {Database} from '../db/database.mts';
 import {LinearClient} from '../linear/index.mts';
 import type {GraphqlExecutor} from '../linear/index.mts';
 import type {FetchRequest} from '../stores/index.mts';
+import {captureLogs} from '../telemetry/test-support.mts';
 import {answerNatively, canAnswerNatively} from './native.mts';
+
+const recorded = captureLogs();
 
 const KEY = {LINEAR_API_KEY: 'lin_api_test'};
 
@@ -64,12 +67,7 @@ describe('answerNatively', () => {
 
   it('turns a failed read into the agent fallback, carrying the hint to the log', async () => {
     const db = await Database.open(':memory:');
-    const logged: Record<string, unknown>[] = [];
-    const log = {
-      error: (_message: string, meta?: Record<string, unknown>) => {
-        logged.push(meta ?? {});
-      },
-    };
+    recorded.reset();
 
     assert.equal(
       await answerNatively({
@@ -82,13 +80,12 @@ describe('answerNatively', () => {
           Promise.resolve({
             projects: {nodes: [], pageInfo: {hasNextPage: false}},
           })) as unknown as GraphqlExecutor),
-        log: log as never,
       }),
       false
     );
     // Without the hint the agent gets a generic scan instruction and no idea
     // what the server could not do.
-    assert.equal(typeof logged[0]?.hint, 'string');
+    assert.equal(typeof recorded.read()[0]?.attributes.hint, 'string');
     await db.close();
   });
 });

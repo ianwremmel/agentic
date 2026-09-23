@@ -73,22 +73,20 @@ A substate this table doesn't name is handled per consumer:
 
 Every ticket you create (`file ticket`, `subtask`, `file follow-up`) passes:
 
-- `state`: the destination team's substate mapping to `available` (Todo in
-  the role map). Without it Linear files into the team's default state,
-  usually Backlog; the next refresh reads that as `backlog`, a dormant role
-  the scheduler never dispatches, and a follow-up left there keeps its
-  milestone's gate closed.
-- `project` and `milestone` (name or id). `file ticket` and `subtask` copy the
-  acting ticket's, omitting any it lacks; when the brief names another
-  project, take the milestone from the brief too. `file follow-up` always
-  uses the reviewed milestone and its project.
+- `state`: the destination team's `available` substate (Todo). Omitted,
+  Linear uses the team default (usually Backlog), which the scheduler never
+  dispatches; a follow-up stuck there keeps its milestone's gate closed.
+- `project` and `milestone` (name or id). `file ticket` copies the acting
+  ticket's and `subtask` the parent's, omitting any it lacks; when the brief
+  names another project, take the milestone from the brief, or omit it.
+  `file follow-up` always uses the reviewed milestone and its project.
 - `team`: the acting ticket's unless the brief says otherwise; for
   `file follow-up`, the team of the member whose work the gap belongs to.
 
 ## Quirks
 
-- Linear tickets are per-team: read the acting ticket's team before writing a
-  state or filing into it, and don't reuse another team's substate names.
+- Linear tickets are per-team: read the team's substates before writing a
+  state, and don't reuse another team's substate names.
 - Linear archives completed work; an archived task's `Done`/`Canceled` status
   still counts toward its milestone, so `build-graph` must not `task rm` it.
 

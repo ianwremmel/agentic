@@ -168,7 +168,8 @@ describe('log', () => {
     });
 
     it('survives a `code` whose own toString throws', () => {
-      // The SDK calls `code.toString()` to derive `exception.type`.
+      // The SDK calls `code.toString()` to derive `exception.type`, so what it
+      // is handed has to be a string already.
       log.errorException('watch poll failed', {
         code: Object.create(null) as object,
         message: 'gh: 502',
@@ -177,6 +178,42 @@ describe('log', () => {
       const {attributes} = only();
       assert.equal(attributes['exception.message'], 'gh: 502');
       assert.equal(attributes['exception.type'], undefined);
+    });
+
+    it('keeps the shape of a non-string property', () => {
+      // `String()` would flatten this to `[object Object]` and lose the only
+      // detail the failure carried.
+      log.errorException('watch poll failed', {
+        code: {retryable: true, status: 502},
+        message: 'gh: 502',
+      });
+
+      assert.equal(
+        only().attributes['exception.type'],
+        '{"retryable":true,"status":502}'
+      );
+    });
+
+    it('falls back to String() on the values JSON gives up on', () => {
+      // A bigint and a cycle make `JSON.stringify` throw, and an `Error`'s own
+      // properties are not enumerable — `status` alone would serialize, hiding
+      // the message. `String()` describes all three.
+      const cyclic: Record<string, unknown> = {};
+      cyclic.self = cyclic;
+      const annotated = Object.assign(new RangeError('out of range'), {
+        status: 502,
+      });
+      const cases: [unknown, string][] = [
+        [new RangeError('out of range'), 'RangeError: out of range'],
+        [annotated, 'RangeError: out of range'],
+        [502n, '502'],
+        [cyclic, '[object Object]'],
+      ];
+      for (const [code, expected] of cases) {
+        recorded.reset();
+        log.errorException('watch poll failed', {code, message: 'gh: 502'});
+        assert.equal(only().attributes['exception.type'], expected);
+      }
     });
 
     it('survives a value String() itself refuses', () => {

@@ -2,9 +2,9 @@ import {logs, SeverityNumber} from '@opentelemetry/api-logs';
 import type {AnyValueMap, Logger} from '@opentelemetry/api-logs';
 
 /**
- * The instrumentation scope on every record this CLI emits. One scope, not one
- * per module: the scope names the instrumented library, and the whole plugin is
- * one. Which module spoke is a question for the span a record sits under.
+ * The instrumentation scope on every record this CLI emits. One scope for the
+ * whole plugin, because the scope names the instrumented library rather than
+ * the module that emitted the record.
  */
 const SCOPE = 'dispatch';
 
@@ -18,8 +18,7 @@ export interface Log {
   error(message: string, fields?: LogFields): void;
   /**
    * `warn`, carrying the thrown value's type, message, and stack under the
-   * `exception.*` conventions. For a failure the caller absorbs on purpose —
-   * a degraded result it went on to use.
+   * `exception.*` conventions. For a failure the caller absorbed on purpose.
    */
   warnException(message: string, thrown: unknown, fields?: LogFields): void;
   /** `error`, carrying the thrown value the same way. */
@@ -35,16 +34,39 @@ const EXCEPTION_KEYS: readonly ExceptionKey[] = [
   'stack',
 ];
 
-/** What a record says when the thrown value yielded nothing legible. */
+/** Stands in for a thrown value whose properties could not be read. */
 const UNREADABLE = 'a thrown value that could not be read';
 
 /**
- * Stringify the four properties the SDK reads, each under its own guard, so one
- * hostile getter costs its own field rather than the other three.
+ * Render one property value as a string. These four are usually strings
+ * already; JSON is for the ones that are not, since `String()` flattens an
+ * object to `[object Object]`.
  *
- * `threw` separates a property that was absent from one whose read failed: a
- * value none of whose properties could be read still has to produce a record
- * saying so, and `String()` on it will not be the thing to say it.
+ * May throw: `String()` does on a null-prototype object. The caller guards it.
+ */
+function render(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return String(value);
+  try {
+    const json = JSON.stringify(value);
+    /* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition --
+       the lib types this `string`, but it returns `undefined` for a function,
+       a symbol, or a `toJSON` that produces one. `{}` is an object with nothing
+       enumerable. Neither says more than `String()` would. */
+    if (json !== undefined && json !== '{}') return json;
+  } catch {
+    // A cycle, a bigint, or a `toJSON` that threw.
+  }
+  return String(value);
+}
+
+/**
+ * Read the four properties the SDK derives `exception.*` from, each under its
+ * own guard so one throwing getter costs only its own field.
+ *
+ * `threw` is true when at least one property could not be turned into a string.
+ * It matters only when `fields` comes back empty: it distinguishes a value that
+ * defeated every read from one that simply had none of these properties.
  */
 function snapshot(thrown: object): {
   fields: Partial<Record<ExceptionKey, string>>;
@@ -57,12 +79,9 @@ function snapshot(thrown: object): {
       const value: unknown = (thrown as Partial<Record<ExceptionKey, unknown>>)[
         key
       ];
-      /* eslint-disable-next-line @typescript-eslint/no-base-to-string --
-         whatever the value's own `toString` produces is the best description of
-         it available, and even `[object Object]` beats dropping the only thing
-         the record was reporting. */
-      if (value) fields[key] = String(value);
+      if (value) fields[key] = render(value);
     } catch {
+      // A getter that threw, or a value whose own `toString` did.
       threw = true;
     }
   }
@@ -72,18 +91,18 @@ function snapshot(thrown: object): {
 /**
  * Narrow a thrown value to something the SDK will actually record.
  *
- * It derives `exception.*` from a string, a number, or an object with a *truthy*
- * `code`, `name`, `message`, or `stack` — so `undefined`, a bare object, a
- * thrown `false`, and `{message: ''}` alike produce no exception attributes at
- * all, and the record would say only that something failed. Stringify those: a
- * lossy exception beats a silent one.
+ * The SDK derives `exception.*` from a string, a number, or an object with a
+ * truthy `code`, `name`, `message`, or `stack`. Everything else — `undefined`,
+ * a bare object, a thrown `false`, `{message: ''}` — yields no exception
+ * attributes at all, leaving a record that says only that something failed, so
+ * those get stringified instead.
  *
- * Total by construction, because every caller is inside a `catch` that is
- * recovering from something. `String()` throws on a null-prototype object, and
- * reading a property can run a getter that throws; either would replace the
- * failure being reported with a failure to report it. So every read happens here
- * under a guard, and what goes back is a plain object of strings — the SDK reads
- * those same four properties again, and on this one no read of them runs code.
+ * This never throws, since every caller is inside a `catch` and a failure here
+ * would replace the original error with an error about reporting it. Reading a
+ * property can run a getter that throws, and `String()` throws on a
+ * null-prototype object, so every read happens here under a guard. When the
+ * return value is an object, its four properties are plain strings, so the
+ * SDK's own re-read of them runs no code either.
  */
 function recordable(thrown: unknown): unknown {
   try {
@@ -100,9 +119,8 @@ function recordable(thrown: unknown): unknown {
 }
 
 function createLog(logger: Logger): Log {
-  // `thrown` is boxed so that a caller who was handed `undefined` by a `throw`
-  // still gets an `exception.message`, rather than the record silently losing
-  // the only thing it was reporting.
+  // `thrown` is boxed so `emit` can tell "no exception" from an exception whose
+  // value happens to be `undefined`.
   const emit = (
     severityNumber: SeverityNumber,
     severityText: string,
@@ -145,9 +163,10 @@ function createLog(logger: Logger): Log {
  * The one logger the CLI emits through. Process-wide, so no module has to be
  * handed one to be able to log.
  *
- * Resolved at import, before `startTelemetry` has registered anything: the API
- * hands back a proxy that discards records until the SDK is registered and
- * follows it from then on. A module imported before startup therefore logs, and
- * a command that never starts telemetry costs nothing.
+ * Resolved at import, before `startTelemetry` registers anything: the API hands
+ * back a proxy that drops records until the SDK is registered and forwards them
+ * after. So a module imported before startup can still log, and a command that
+ * never starts telemetry emits into a logger that goes nowhere rather than
+ * failing.
  */
 export const log: Log = createLog(logs.getLogger(SCOPE));

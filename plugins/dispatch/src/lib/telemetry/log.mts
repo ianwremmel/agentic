@@ -64,9 +64,9 @@ function render(value: unknown): string {
  * Read the four properties the SDK derives `exception.*` from, each under its
  * own guard so one throwing getter costs only its own field.
  *
- * `threw` is true when at least one property could not be turned into a string.
- * It matters only when `fields` comes back empty: it distinguishes a value that
- * defeated every read from one that simply had none of these properties.
+ * `threw` matters only when `fields` comes back empty. `true` means every read
+ * failed, so the value may well be exception-like but cannot be read. `false`
+ * means it simply has none of these properties.
  */
 function snapshot(thrown: object): {
   fields: Partial<Record<ExceptionKey, string>>;

@@ -2,13 +2,13 @@ import {nowIso} from '../db/time.mts';
 import {withDatabase} from '../db/index.mts';
 import {answerNatively} from '../ingest/index.mts';
 import type {NativeAnswer, NativeAnswerInput} from '../ingest/index.mts';
-import type {Logger} from '../logger/index.mts';
 import {FetchRequestStore, RefreshStore} from '../stores/index.mts';
 import type {
   FetchRequest,
   ScanPayload,
   TicketPayload,
 } from '../stores/index.mts';
+import {log} from '../telemetry/index.mts';
 import type {ChannelWriter} from './channel.mts';
 
 /**
@@ -30,7 +30,6 @@ const NATIVE_DEADLINE_MS = 120_000;
 
 export interface DrainOptions {
   readonly now?: () => string;
-  readonly log?: Logger | undefined;
   /**
    * How an instruction is answered in-process. The drain knows nothing about
    * any tracker: it asks, and pushes whatever comes back unanswered.
@@ -94,7 +93,6 @@ async function drainOnce(
             db,
             request,
             env,
-            log: options.log,
           })
         ) {
           const after = await requests.get(request.id);
@@ -106,13 +104,10 @@ async function drainOnce(
             answered += 1;
             continue;
           }
-          options.log?.warn(
-            'an answered instruction settled nothing; pushing it',
-            {
-              source: request.source,
-              kind: request.kind,
-            }
-          );
+          log.warn('an answered instruction settled nothing; pushing it', {
+            source: request.source,
+            kind: request.kind,
+          });
         }
         channel.push(...instruction(request));
         await requests.markDelivered(request.id, now());

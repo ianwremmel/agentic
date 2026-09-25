@@ -1,6 +1,6 @@
 import type {Database} from '../db/database.mts';
 import {WatchStore} from '../stores/index.mts';
-import type {Logger} from '../logger/index.mts';
+import {log} from '../telemetry/index.mts';
 import {cadenceFor, EXPIRY_SECONDS} from './cadence.mts';
 import type {PrSnapshot, Snapshotter} from './snapshot.mts';
 
@@ -22,16 +22,14 @@ export async function armWatch(
     snapshot: Snapshotter;
     session: string | null;
     releaseClaimFor?: string | null;
-    log?: Logger | undefined;
   }
 ): Promise<void> {
   let baseline: PrSnapshot | null = null;
   try {
     baseline = await input.snapshot(input.repo, input.prNumber);
   } catch (error) {
-    input.log?.warn('watch armed without a baseline snapshot', {
+    log.warnException('watch armed without a baseline snapshot', error, {
       node: input.node,
-      error: error instanceof Error ? error.message : String(error),
     });
   }
   await new WatchStore(db).set({

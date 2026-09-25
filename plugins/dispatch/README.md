@@ -97,7 +97,8 @@ invocation path, and discovery needs no registry.
 ## Telemetry
 
 The OpenTelemetry SDK starts on every CLI and server invocation, configured by
-the standard `OTEL_*` variables. Nothing is instrumented yet.
+the standard `OTEL_*` variables. Diagnostics are emitted as log records; spans
+and metrics are not instrumented yet.
 
 Set any OTLP endpoint — the generic `OTEL_EXPORTER_OTLP_ENDPOINT` or a
 per-signal one — and all three signals go to the SDK's own exporters, with the

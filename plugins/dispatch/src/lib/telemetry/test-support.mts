@@ -1,5 +1,55 @@
 import {Writable} from 'node:stream';
 
+import {logs} from '@opentelemetry/api-logs';
+import {
+  InMemoryLogRecordExporter,
+  LoggerProvider,
+  SimpleLogRecordProcessor,
+} from '@opentelemetry/sdk-logs';
+import type {ReadableLogRecord} from '@opentelemetry/sdk-logs';
+
+export interface LogCapture {
+  /** Everything emitted since the last `reset`. */
+  read: () => ReadableLogRecord[];
+  reset: () => void;
+}
+
+let recording: LogCapture | undefined;
+
+/**
+ * Collect what `lib/telemetry`'s `log` emits, in memory.
+ *
+ * Registering the global logger provider is what makes `log` resolve to
+ * anything, and `log` keeps whichever provider it resolved first — so this is
+ * memoized rather than per-call, and a test that wants to read only its own
+ * records calls `reset` first. Node runs each test file in its own process,
+ * which is what keeps one file's registration out of another's way.
+ *
+ * Registering after something else already has yields a capture nothing writes
+ * to, so that case throws rather than returning an empty reader: a test
+ * asserting on no records would otherwise pass for the wrong reason.
+ */
+export function captureLogs(): LogCapture {
+  if (recording === undefined) {
+    const exporter = new InMemoryLogRecordExporter();
+    const provider = new LoggerProvider({
+      processors: [new SimpleLogRecordProcessor({exporter})],
+    });
+    if (logs.setGlobalLoggerProvider(provider) !== provider) {
+      throw new Error(
+        'a logger provider was already registered in this process; call captureLogs() before anything starts the SDK'
+      );
+    }
+    recording = {
+      read: () => exporter.getFinishedLogRecords(),
+      reset: () => {
+        exporter.reset();
+      },
+    };
+  }
+  return recording;
+}
+
 /**
  * The parent environment with every `OTEL_*` key removed, plus `overrides`. A
  * host or CI runner that exports one would reconfigure the SDK under test.

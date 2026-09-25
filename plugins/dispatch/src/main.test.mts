@@ -7,7 +7,6 @@ import {promisify} from 'node:util';
 
 import {discover} from './lib/command/index.mts';
 import {runCli} from './lib/cli/index.mts';
-import {createLogger, type CoreLogger} from './lib/logger/index.mts';
 import {buildChildEnv} from './lib/telemetry/test-support.mts';
 
 const execFileAsync = promisify(execFile);
@@ -30,19 +29,6 @@ async function greet(
 describe('src/commands tree', () => {
   it('discovers and runs the greet command', async () => {
     const tree = await discover(COMMANDS);
-    const sink = {} as CoreLogger;
-    for (const level of [
-      'error',
-      'warn',
-      'info',
-      'debug',
-      'trace',
-      'log',
-    ] as const) {
-      sink[level] = () => {
-        // no-op: greet's output goes to stdout via io, not the logger
-      };
-    }
     const noop = new Writable({
       write(_chunk, _encoding, callback) {
         callback();
@@ -59,7 +45,6 @@ describe('src/commands tree', () => {
     const code = await runCli({
       argv: ['greet', 'Ada', '--loud'],
       tree,
-      log: createLogger(sink),
       env: {},
       stdout: sink2,
       stderr: noop,

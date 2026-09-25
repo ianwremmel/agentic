@@ -137,7 +137,6 @@ export class Command extends AbstractCommand {
         tree,
         stdin: process.stdin,
         stdout: process.stdout,
-        stderr: process.stderr,
         env: ctx.env,
         tick: {
           intervalMs: parsed['tick-seconds'] * 1_000,

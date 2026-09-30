@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
 import type {ChannelSink} from '../../lib/command/index.mts';
-import {createLogger} from '../../lib/logger/index.mts';
-import type {CoreLogger} from '../../lib/logger/logger.mts';
 import {Command} from './ping.mts';
 
 function sink(): {
@@ -25,18 +23,10 @@ function sink(): {
   };
 }
 
-/** A logger sink that discards everything, whatever levels exist. */
-function silentSink(): CoreLogger {
-  return new Proxy({} as CoreLogger, {
-    get: () => () => undefined,
-  });
-}
-
 function context(channel?: ChannelSink) {
   let out = '';
   return {
     ctx: {
-      log: createLogger(silentSink()),
       env: {},
       io: {
         write: (chunk: string) => {

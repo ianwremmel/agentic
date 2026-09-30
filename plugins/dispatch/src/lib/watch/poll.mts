@@ -1,7 +1,7 @@
 import {nowIso} from '../db/time.mts';
 import {withDatabase} from '../db/index.mts';
-import type {Logger} from '../logger/index.mts';
 import {WatchStore} from '../stores/index.mts';
+import {log} from '../telemetry/index.mts';
 import {cadenceFor, EXPIRY_SECONDS} from './cadence.mts';
 import {diffSnapshots} from './diff.mts';
 import type {Snapshotter} from './snapshot.mts';
@@ -33,7 +33,6 @@ export async function pollWatches(
     snapshot: Snapshotter;
     dbPath?: string | undefined;
     now?: () => string;
-    log?: Logger | undefined;
   }
 ): Promise<{fired: string[]}> {
   const now = opts.now ?? nowIso;
@@ -76,10 +75,7 @@ export async function pollWatches(
         if (outcome === 'fired') fired.push(due.node);
       } catch (error) {
         await watches.touch(due.node, now(), due.createdAt);
-        opts.log?.error('watch poll failed', {
-          node: due.node,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        log.errorException('watch poll failed', error, {node: due.node});
       }
     }
     return {fired};

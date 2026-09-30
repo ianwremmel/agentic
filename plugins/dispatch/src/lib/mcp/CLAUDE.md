@@ -1,9 +1,9 @@
 # MCP
 
-`runMcpServer({tree, stdin, stdout, stderr, env})` in `mcp.mts` serves the
-command tree over newline-delimited JSON-RPC 2.0 on stdio — the sibling of
-`lib/cli` for the MCP transport. stdout is the protocol channel; diagnostics go
-to stderr. `index.mts` is the barrel.
+`runMcpServer({tree, stdin, stdout, env})` in `mcp.mts` serves the command tree
+over newline-delimited JSON-RPC 2.0 on stdio — the sibling of `lib/cli` for the
+MCP transport. stdout is the protocol channel; diagnostics go through
+`lib/telemetry`, which never writes there. `index.mts` is the barrel.
 
 - `tools.mts` — `buildTools(tree)` walks the tree into MCP tool defs (name =
   `_`-joined path, `inputSchema` from `options`) plus a name -> command map,

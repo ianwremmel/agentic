@@ -1,6 +1,5 @@
 import {nowIso} from '../db/time.mts';
 import {withDatabase} from '../db/index.mts';
-import type {Logger} from '../logger/index.mts';
 import type {ChannelWriter} from '../mcp/channel.mts';
 import {
   CoordinationStore,
@@ -17,6 +16,7 @@ import {
   renderSnapshot,
 } from '../watch/index.mts';
 import type {Snapshotter} from '../watch/index.mts';
+import {log} from '../telemetry/index.mts';
 import {Scheduler} from './scheduler.mts';
 import type {WorkOrder} from './scheduler.mts';
 
@@ -65,7 +65,7 @@ export async function runServerTick(
   channel: ChannelWriter,
   env: NodeJS.ProcessEnv,
   state: TickState,
-  opts: {nowMs?: number; log?: Logger; snapshot?: Snapshotter} = {}
+  opts: {nowMs?: number; snapshot?: Snapshotter} = {}
 ): Promise<void> {
   if (state.retired) return;
   const now = nowIso();
@@ -86,7 +86,7 @@ export async function runServerTick(
         return;
       }
       if (result.ingesting.length > 0) {
-        opts.log?.debug('scheduling held while the graph is being built', {
+        log.debug('scheduling held while the graph is being built', {
           sources: result.ingesting.join(','),
         });
       }
@@ -118,7 +118,6 @@ export async function runServerTick(
   try {
     const {fired} = await pollWatches(env, {
       snapshot: opts.snapshot ?? githubSnapshot,
-      log: opts.log,
     });
     // A fired watch re-queued its item unless a live worker still holds it,
     // in which case the push below relays instead; a second pass dispatches
@@ -126,9 +125,7 @@ export async function runServerTick(
     // extra pass idempotent.
     if (fired.length > 0) await schedule();
   } catch (error) {
-    opts.log?.error('watch pass failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    log.errorException('watch pass failed', error);
   }
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the schedule() closure sets `state.retired`; the analyzer cannot see the write
   if (state.retired) return;
@@ -138,22 +135,18 @@ export async function runServerTick(
     if (nowMs >= state.adoptDueAtMs) {
       state.adoptDueAtMs = nowMs + 900_000;
       try {
-        const adopted = await adoptOrphans(env, {log: opts.log});
-        if (adopted > 0) opts.log?.info('adopted orphaned PRs', {adopted});
+        const adopted = await adoptOrphans(env);
+        if (adopted > 0) log.info('adopted orphaned PRs', {adopted});
       } catch (error) {
-        opts.log?.error('adoption sweep failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        log.errorException('adoption sweep failed', error);
       }
     }
     try {
-      await pushObservations(channel, env, state.registryId, now, opts.log);
+      await pushObservations(channel, env, state.registryId, now);
     } catch (error) {
       // A push failure must not cost this tick's already-claimed orders; the
       // rows stay undelivered and the next tick retries.
-      opts.log?.error('observation push failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      log.errorException('observation push failed', error);
     }
   }
 
@@ -171,8 +164,7 @@ export async function pushObservations(
   channel: ChannelWriter,
   env: NodeJS.ProcessEnv,
   session: string,
-  at: string,
-  log?: Logger
+  at: string
 ): Promise<void> {
   await withDatabase(undefined, env, async (db) => {
     const events = new PrEventStore(db);
@@ -257,10 +249,11 @@ export async function pushObservations(
         try {
           relay = await relayTarget(ref, event.node);
         } catch (error) {
-          log?.error('relay claim failed; delivering without an address', {
-            node: event.node,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          log.warnException(
+            'relay claim failed; delivering without an address',
+            error,
+            {node: event.node}
+          );
         }
         const meta = {
           ...event.meta,
@@ -278,10 +271,7 @@ export async function pushObservations(
         };
         channel.push(event.kind, meta, body);
       } catch (error) {
-        log?.error('event delivery failed', {
-          node: event.node,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        log.errorException('event delivery failed', error, {node: event.node});
       }
     }
   });

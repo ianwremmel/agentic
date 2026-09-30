@@ -64,15 +64,30 @@ A substate this table doesn't name is handled per consumer:
 | ticket comment     | `save_comment(issueId, body)`                                                                                  |
 | read comments      | `list_comments(issueId)` — match the alert sentinel; replies carry `parentId`                                  |
 | react              | `unsupported` — no reaction call in the Linear MCP server; use the text tokens                                 |
-| file ticket        | `save_issue(title, team, description)` — same team as the ticket unless the brief says otherwise               |
-| subtask            | `save_issue(title, team, parentId=<parent>)`                                                                   |
+| file ticket        | `save_issue(title, team, description, project, milestone, state=<available>)` — see Filing below               |
+| subtask            | `save_issue(title, team, parentId=<parent>, project, milestone, state=<available>)` — see Filing below         |
 | blocks edge        | `save_issue(id=<blocker>, blocks=[<blocked>])` (append-only)                                                   |
 | one-edge neighbors | `get_issue(id, includeRelations=true)` → `blockedBy` / `blocks`                                                |
 
+### Filing
+
+`file ticket`, `subtask`, and `file follow-up` set `state` to the target team's
+`available` substate (Todo) and take `team`, `project`, and `milestone` from
+this table.
+Omit `project` or `milestone` when its cell yields none. A brief that names
+a project but no milestone yields no milestone.
+
+| Operation      | `team`                                              | `project` and `milestone`                                               |
+| -------------- | --------------------------------------------------- | ----------------------------------------------------------------------- |
+| file ticket    | the acting ticket's, unless its brief names another | the pair the acting ticket's brief names, else the acting ticket's pair |
+| subtask        | the parent's                                        | the parent's                                                            |
+| file follow-up | the team of the member ticket nearest the gap       | the reviewed milestone and its project                                  |
+
 ## Quirks
 
-- Linear tickets are per-team: read the acting ticket's team before writing a
-  state or filing into it, and don't reuse another team's substate names.
+- Linear tickets are per-team: read the acting ticket's team (or the target
+  team from Filing) before writing a state or filing into it, and don't reuse
+  another team's substate names.
 - Linear archives completed work; an archived task's `Done`/`Canceled` status
   still counts toward its milestone, so `build-graph` must not `task rm` it.
 
@@ -89,7 +104,7 @@ project-scoped, not per-milestone, so the body must carry the milestone id
 | post review artifact   | `save_status_update(type="project", project, body, health)` — `onTrack` when the goal is achieved, `atRisk` otherwise                   |
 | update review artifact | `save_status_update(id, body, health)` — same update; the pending→outcome edit when human input resolved                                |
 | artifact thread        | `list_comments(statusUpdateId)` / `save_comment(statusUpdateId)`; one thread per update — reply via `parentId`; tag with `@displayName` |
-| file follow-up         | `save_issue(title, team, description, project, milestone)` — `milestone` takes a name or id; pick the team per Quirks                   |
+| file follow-up         | `save_issue(title, team, description, project, milestone, state=<available>)` — see Filing above                                        |
 
 Member DoD comments and canceled-member rationales are ticket reads — use the
 Operations bindings above (`fetch brief`, `read comments`).

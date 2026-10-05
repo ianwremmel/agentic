@@ -117,11 +117,15 @@ Per selected project:
 
 | Step         | Call                                                 | Take                                                |
 | ------------ | ---------------------------------------------------- | --------------------------------------------------- |
-| Project      | `list_projects` (`query`)                            | `id`, `name`                                        |
+| Project      | `list_projects` (`query`, `fields: [uuid, name]`)    | `uuid`, `name`                                      |
 | Milestones   | `list_milestones` (`project`)                        | `id`, `name`, `sortOrder`                           |
 | Tasks        | `list_issues` (`project`, `limit: 250`, `updatedAt`) | see the mapping below                               |
 | Dependencies | `get_issue` (`id`, `includeRelations: true`)         | `relations.blocks[].id`, `relations.blockedBy[].id` |
 
+- Use `uuid` as the project id, never `id` (the short identifier `P-CLC-27`).
+  Tickets' `projectId` is the UUID, so registering under `id` splits the
+  project in two. Orchestrate passes the same UUID to
+  `dispatch refresh --project`.
 - `list_issues` does not return relations. `get_issue` every task in the delta,
   in parallel batches.
 - Page on `hasNextPage` / `cursor` (that `cursor` is pagination, not the sync

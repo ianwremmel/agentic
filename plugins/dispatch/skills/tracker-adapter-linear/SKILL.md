@@ -117,11 +117,16 @@ Per selected project:
 
 | Step         | Call                                                 | Take                                                |
 | ------------ | ---------------------------------------------------- | --------------------------------------------------- |
-| Project      | `list_projects` (`query`)                            | `id`, `name`                                        |
+| Project      | `list_projects` (`query`, `fields: [uuid, name]`)    | `uuid` as the project id, `name`                    |
 | Milestones   | `list_milestones` (`project`)                        | `id`, `name`, `sortOrder`                           |
 | Tasks        | `list_issues` (`project`, `limit: 250`, `updatedAt`) | see the mapping below                               |
 | Dependencies | `get_issue` (`id`, `includeRelations: true`)         | `relations.blocks[].id`, `relations.blockedBy[].id` |
 
+- The project id is the `uuid`, never `id`. `list_projects`' `id` is the short
+  identifier (`P-CLC-27`), but every ticket's `projectId` is the UUID, so a
+  project registered under `id` owns none of its tickets and the graph splits
+  it into two projects. This is also the id orchestrate passes to
+  `dispatch refresh --project`.
 - `list_issues` does not return relations. `get_issue` every task in the delta,
   in parallel batches.
 - Page on `hasNextPage` / `cursor` (that `cursor` is pagination, not the sync

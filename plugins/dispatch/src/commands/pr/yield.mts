@@ -105,7 +105,6 @@ export class Command extends AbstractCommand {
         snapshot: githubSnapshot,
         session: caller,
         releaseClaimFor: caller,
-        log: ctx.log,
       });
 
       ctx.io.write(`yield ${parsed.id}\n`);

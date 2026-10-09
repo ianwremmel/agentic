@@ -2,12 +2,12 @@ import type {Database} from '../db/database.mts';
 import {DispatchError} from '../errors/index.mts';
 import {createLinearClient, hasLinearToken} from '../linear/index.mts';
 import type {LinearClient} from '../linear/index.mts';
-import type {Logger} from '../logger/index.mts';
 import type {
   FetchRequest,
   ScanPayload,
   TicketPayload,
 } from '../stores/index.mts';
+import {log} from '../telemetry/index.mts';
 import {
   LINEAR_SOURCE,
   ingestLinearScan,
@@ -30,7 +30,6 @@ export interface NativeAnswerInput {
   readonly db: Database;
   readonly request: FetchRequest;
   readonly env: NodeJS.ProcessEnv;
-  readonly log?: Logger | undefined;
   readonly signal?: AbortSignal | undefined;
   /** A client to read through; the server builds its own from the environment. */
   readonly client?: LinearClient;
@@ -81,12 +80,14 @@ export async function answerNatively(
     }
     return true;
   } catch (error) {
-    input.log?.error(
+    // `warn`, not `error`: returning false hands the instruction to an agent,
+    // which is a slower answer rather than no answer.
+    log.warnException(
       'native ingest failed; handing the instruction to an agent',
+      error,
       {
         source: request.source,
         kind: request.kind,
-        error: error instanceof Error ? error.message : String(error),
         // The hint is the half that says what to do about it — an unmapped
         // state names itself here and nowhere else, since the instruction the
         // agent then gets is the generic one.

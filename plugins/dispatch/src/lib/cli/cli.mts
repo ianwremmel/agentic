@@ -1,7 +1,6 @@
 import {parseArgs} from 'node:util';
 import type {Writable} from 'node:stream';
 
-import type {Logger} from '../logger/index.mts';
 import {parseOptions, assertEnv, resolveTransports} from '../command/index.mts';
 import type {AbstractCommand, CommandNode, Option} from '../command/index.mts';
 import {
@@ -14,7 +13,6 @@ import {
 export interface RunCliOptions {
   readonly argv: readonly string[];
   readonly tree: CommandNode;
-  readonly log: Logger;
   readonly env: NodeJS.ProcessEnv;
   readonly stdout: Writable;
   readonly stderr: Writable;
@@ -28,7 +26,7 @@ interface Walked {
 
 /** Parse argv against the command tree, run the matched command, return an exit code. */
 export async function runCli(options: RunCliOptions): Promise<number> {
-  const {argv, tree, log, env, stdout, stderr} = options;
+  const {argv, tree, env, stdout, stderr} = options;
   try {
     const walked = walk(tree, argv);
 
@@ -62,7 +60,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
         stdout.write(chunk);
       },
     };
-    await command.run(parsed, {log, env, io});
+    await command.run(parsed, {env, io});
     return 0;
   } catch (error) {
     if (error instanceof DispatchError) {

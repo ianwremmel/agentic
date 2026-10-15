@@ -217,6 +217,10 @@ describe('declared dependencies', () => {
     const lock = await read(join(PLUGIN_ROOT, 'npm-shrinkwrap.json'));
     const root = await read(join(REPO_ROOT, 'package-lock.json'));
 
+    // npm nests a workspace's dependency under the workspace's own
+    // node_modules when another package pins a different version at the root,
+    // and Node resolves that nested copy first.
+    const workspace = relative(REPO_ROOT, PLUGIN_ROOT).split(sep).join('/');
     const names = Object.keys(dependencies ?? {});
     assert.ok(names.length > 0, 'expected the plugin to declare a dependency');
     for (const name of names) {
@@ -227,7 +231,7 @@ describe('declared dependencies', () => {
       assert.ok(shipped, `${name} is declared but absent from the shrinkwrap`);
       assert.equal(
         shipped,
-        root.packages?.[at]?.version,
+        (root.packages?.[`${workspace}/${at}`] ?? root.packages?.[at])?.version,
         `${name} is locked at a different version than the workspace installs`
       );
     }

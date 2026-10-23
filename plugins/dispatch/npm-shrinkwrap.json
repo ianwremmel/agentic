@@ -1,15 +1,15 @@
 {
   "name": "@ianwremmel/dispatch",
-  "version": "0.38.5",
+  "version": "0.38.6",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@ianwremmel/dispatch",
-      "version": "0.38.5",
+      "version": "0.38.6",
       "license": "MIT",
       "dependencies": {
-        "@linear/sdk": "^95.0.0",
+        "@linear/sdk": "^98.0.0",
         "@opentelemetry/api": "^1.9.1",
         "@opentelemetry/api-logs": "^0.223.0",
         "@opentelemetry/core": "^2.11.0",
@@ -75,15 +75,15 @@
       }
     },
     "node_modules/@linear/sdk": {
-      "version": "95.0.0",
-      "resolved": "https://registry.npmjs.org/@linear/sdk/-/sdk-95.0.0.tgz",
-      "integrity": "sha512-lZsAJeqWdrWna3/qiv3Xc3pdNyB0TcwHraqEX8oudlUPQqcdnccWm+xCPK4RUB5G8XVGcsrV67VFIVmyiFymGw==",
+      "version": "98.0.0",
+      "resolved": "https://registry.npmjs.org/@linear/sdk/-/sdk-98.0.0.tgz",
+      "integrity": "sha512-DRakJJiGe4QE2tc49+XQVE0lyeR9CUHJTpCPsx5291LsmDaMvhP8+beCgXQQ7jET+OshHEm2BYtMx6EUt9ZR8Q==",
       "license": "MIT",
       "dependencies": {
         "@graphql-typed-document-node/core": "^3.2.0"
       },
       "engines": {
-        "node": ">=18.x"
+        "node": "^20.19.0 || >=22.12.0"
       }
     },
     "node_modules/@opentelemetry/api": {
@@ -433,6 +433,7 @@
       "version": "2.12.0",
       "resolved": "https://registry.npmjs.org/@opentelemetry/propagator-jaeger/-/propagator-jaeger-2.12.0.tgz",
       "integrity": "sha512-Kz2Vz+NILW7S1WtN4rV1wr76fMtT/RRWvAMFBc91uTIi2dDMXxrfBKNe2KH7yaCfFp1X0xfAuabzuFczvoPB6A==",
+      "deprecated": "Package no longer supported. See https://github.com/open-telemetry/opentelemetry-js/pull/7077",
       "license": "Apache-2.0",
       "dependencies": {
         "@opentelemetry/core": "2.12.0"
@@ -556,6 +557,7 @@
       "version": "2.12.0",
       "resolved": "https://registry.npmjs.org/@opentelemetry/sdk-trace-base/-/sdk-trace-base-2.12.0.tgz",
       "integrity": "sha512-JOERgZCxRM06FEJ5kEWxlSRChah6MmXDx3KwCruqEv/iEyLkTokCSemf2y1w8oIHtfrr8EVTpzebq/31vn2Cpg==",
+      "deprecated": "Use @opentelemetry/sdk-trace package",
       "license": "Apache-2.0",
       "dependencies": {
         "@opentelemetry/core": "2.12.0",
@@ -574,6 +576,7 @@
       "version": "2.12.0",
       "resolved": "https://registry.npmjs.org/@opentelemetry/sdk-trace-node/-/sdk-trace-node-2.12.0.tgz",
       "integrity": "sha512-9DufH1IlmQMoKAfot5y/FhTP1RnmhLb5K6eKmJO/bvzPjYwPAazoiAUbTZFdPbqxOXN0FEbhZx/e6SB1Og4jmg==",
+      "deprecated": "Use @opentelemetry/sdk-trace package",
       "license": "Apache-2.0",
       "dependencies": {
         "@opentelemetry/context-async-hooks": "2.12.0",

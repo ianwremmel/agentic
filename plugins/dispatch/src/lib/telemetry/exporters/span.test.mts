@@ -2,10 +2,7 @@ import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
 import {ROOT_CONTEXT, SpanStatusCode, trace} from '@opentelemetry/api';
-import {
-  BasicTracerProvider,
-  SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+import {TracerProvider, SimpleSpanProcessor} from '@opentelemetry/sdk-trace';
 
 import {capture, parseLine} from '../test-support.mts';
 import {createSpanExporter} from './span.mts';
@@ -13,13 +10,15 @@ import {createSpanExporter} from './span.mts';
 /** A real provider, so a field this exporter reads cannot change shape under it. */
 function createTracing(): {
   readLines: () => string[];
-  provider: BasicTracerProvider;
+  provider: TracerProvider;
 } {
   const {readLines, stream} = capture();
   return {
     readLines,
-    provider: new BasicTracerProvider({
-      spanProcessors: [new SimpleSpanProcessor(createSpanExporter(stream))],
+    provider: new TracerProvider({
+      spanProcessors: [
+        new SimpleSpanProcessor({exporter: createSpanExporter(stream)}),
+      ],
     }),
   };
 }

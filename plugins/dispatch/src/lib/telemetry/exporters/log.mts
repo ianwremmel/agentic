@@ -1,6 +1,6 @@
 import type {Writable} from 'node:stream';
 
-import {SeverityNumber} from '@opentelemetry/api-logs';
+import {SeverityNumber} from '@opentelemetry/api';
 import {hrTimeToTimeStamp} from '@opentelemetry/core';
 import type {ExportResult} from '@opentelemetry/core';
 import type {

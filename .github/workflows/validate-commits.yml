@@ -24,4 +24,4 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: ianwremmel/prevent-nopush-commits@8bf416b9675b3b781dd7426b549f2f03f9744d46 # v1.0.8
+      - uses: ianwremmel/prevent-nopush-commits@2165bb0c34198b524e24928ead4c887ac058ea4a # v2.0.0

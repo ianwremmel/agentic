@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: ianwremmel/prevent-fixup-commits@f52dc067662b1d71b4cfbb13e2ca2d1ea71bf612 # v1.0.8
+      - uses: ianwremmel/prevent-fixup-commits@6a764097202c8e5a67bc40ea01125b1eacdfb236 # v2.0.0
 
   prevent-nopush-commits:
     name: prevent-nopush-commits

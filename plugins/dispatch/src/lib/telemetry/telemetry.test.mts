@@ -3,8 +3,7 @@ import {execFile} from 'node:child_process';
 import {describe, it} from 'node:test';
 import {promisify} from 'node:util';
 
-import {metrics, trace} from '@opentelemetry/api';
-import {logs} from '@opentelemetry/api-logs';
+import {logs, metrics, trace} from '@opentelemetry/api';
 
 import {
   buildChildEnv,
@@ -129,8 +128,7 @@ describe('startTelemetry', () => {
         '--input-type=module',
         '-e',
         `const {startTelemetry} = await import(${JSON.stringify(INDEX)});
-         const {trace, metrics} = await import('@opentelemetry/api');
-         const {logs} = await import('@opentelemetry/api-logs');
+         const {logs, trace, metrics} = await import('@opentelemetry/api');
          const telemetry = await startTelemetry({stream: process.stderr});
          trace.getTracer('probe').startSpan('work').end();
          metrics.getMeter('probe').createCounter('orders').add(1);

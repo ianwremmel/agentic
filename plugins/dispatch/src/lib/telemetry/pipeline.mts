@@ -4,7 +4,7 @@ import type {Resource} from '@opentelemetry/resources';
 import {SimpleLogRecordProcessor} from '@opentelemetry/sdk-logs';
 import {PeriodicExportingMetricReader} from '@opentelemetry/sdk-metrics';
 import type {NodeSDKConfiguration} from '@opentelemetry/sdk-node';
-import {SimpleSpanProcessor} from '@opentelemetry/sdk-trace-base';
+import {SimpleSpanProcessor} from '@opentelemetry/sdk-trace';
 
 import {resolveDestination} from './destination.mts';
 import {createLogRecordExporter} from './exporters/log.mts';
@@ -53,7 +53,9 @@ export function buildPipeline(opts: {
     flushables.push(processor);
   }
   if (resolveDestination(env, 'traces') === 'stream') {
-    const processor = new SimpleSpanProcessor(createSpanExporter(stream));
+    const processor = new SimpleSpanProcessor({
+      exporter: createSpanExporter(stream),
+    });
     config.spanProcessors = [processor];
     flushables.push(processor);
   }
